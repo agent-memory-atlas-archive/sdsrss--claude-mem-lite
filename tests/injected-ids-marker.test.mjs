@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readInjectedMarker, mergeInjectedMarker, injectedIdsFileName } from '../lib/injected-ids.mjs';
+import { shouldSkipByDedup, MAX_SESSION_INJECTIONS } from '../scripts/prompt-search-utils.mjs';
 
 let dir, file;
 beforeEach(() => {
@@ -44,6 +45,9 @@ describe('readInjectedMarker — the M-6 same-session gate', () => {
     expect(readInjectedMarker(file, { sessionId: 'mine', maxAgeMs: W })).toEqual({
       ids: [],
       count: 0,
+      // B-5 added a second counter; the empty shape carries it for the same reason it
+      // carries `count` — a caller reading it must not see another session's budget.
+      upsCount: 0,
       fresh: false,
     });
   });
@@ -94,7 +98,10 @@ describe('mergeInjectedMarker — union vs replace', () => {
   it('replace writes newIds verbatim, preserving the raw-number/string mix', () => {
     seed({ ids: ['9'], ts: Date.now(), count: 4, session: 's' });
     mergeInjectedMarker(file, [10, 'P11'], { sessionId: 's', maxAgeMs: W, mode: 'replace' });
-    expect(onDisk().ids).toEqual([10, 'P11']); // NOT ['10','P11'] — see D#213
+    // Verbatim means the CALLER's ids, not the whole file: B-6 carries '9' forward rather
+    // than erasing another hook's seen-set. The typing claim is unchanged — 10 is still a
+    // number, which is what D#213 rests on, and the carried id is still a string.
+    expect(onDisk().ids).toEqual([10, 'P11', '9']); // NOT ['10','P11'] — see D#213
   });
 
   it("does not inherit another session's ids or count, in either mode", () => {
@@ -114,6 +121,98 @@ describe('mergeInjectedMarker — union vs replace', () => {
   it('omits `session` entirely when the caller has no session id (legacy shape)', () => {
     mergeInjectedMarker(file, [1], { maxAgeMs: W, mode: 'union' });
     expect(Object.keys(onDisk())).not.toContain('session');
+  });
+});
+
+// R12 B-5. `MAX_SESSION_INJECTIONS` is the UPS face's per-session injection budget, but it
+// was charged against `count`, which mergeInjectedMarker bumps on EVERY write regardless of
+// caller — and pre-tool-recall shares this file, writing once per triggered Edit/Read. So a
+// session that touched 15 lesson-bearing files spent the fyi face's whole budget without the
+// fyi face injecting anything. The trigger condition is "a heavy session", i.e. exactly when
+// recall is worth most.
+describe('shouldSkipByDedup — the injection cap is charged to the UPS face only (B-5)', () => {
+  const SID = 'sess-cap';
+  const merge = (mode, ids, opts = {}) =>
+    mergeInjectedMarker(file, ids, { sessionId: SID, maxAgeMs: 5 * 60 * 1000, mode, ...opts });
+
+  it("another hook's writes do not consume the cap", () => {
+    for (let i = 0; i < MAX_SESSION_INJECTIONS; i++) merge('union', [`E${i}`]);
+    expect(
+      JSON.parse(readFileSync(file, 'utf8')).count,
+      'premise: the shared counter must actually have reached the cap, or this proves nothing',
+    ).toBeGreaterThanOrEqual(MAX_SESSION_INJECTIONS);
+    expect(shouldSkipByDedup([9001, 9002], file, SID)).toBe(false);
+  });
+
+  it("the UPS face's own injections still hit the cap", () => {
+    for (let i = 0; i < MAX_SESSION_INJECTIONS; i++) merge('replace', [i], { bumpUpsCount: true });
+    expect(shouldSkipByDedup([9001, 9002], file, SID)).toBe(true);
+  });
+
+  // Complementary to the case above: without it, "delete the cap entirely" passes the
+  // first case and would look like a fix.
+  it('an expired marker releases the cap instead of holding it until the session id changes', () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ids: [1],
+        ts: Date.now() - 60 * 60 * 1000,
+        upsCount: MAX_SESSION_INJECTIONS,
+        count: MAX_SESSION_INJECTIONS,
+        session: SID,
+      }),
+    );
+    expect(shouldSkipByDedup([9001, 9002], file, SID)).toBe(false);
+  });
+});
+
+// R12 B-6. The UPS main leg writes `mode:'replace'`, and replace wrote `newIds` as the
+// WHOLE array — so one fyi injection erased every id pre-tool-recall had accumulated in the
+// window, and the PreToolUse face re-injected lessons it had already shown. The :1013
+// comment argues replace entirely on id TYPING (D#213) and never mentions that it also
+// clears another hook's state; the D# leg's comment acknowledges the clobber but scopes the
+// cost to its own ids.
+describe("mergeInjectedMarker — replace keeps the other hook's seen-set (B-6)", () => {
+  const SID = 'sess-b6';
+  const W = 5 * 60 * 1000;
+
+  it("does not erase another hook's ids", () => {
+    mergeInjectedMarker(file, ['101', 'E102', '103', 'E104'], { sessionId: SID, maxAgeMs: W, mode: 'union' });
+    mergeInjectedMarker(file, [55], { sessionId: SID, maxAgeMs: W, mode: 'replace' });
+    const { ids } = readInjectedMarker(file, { sessionId: SID, maxAgeMs: W });
+    expect(ids, 'the fyi injection wiped the PreToolUse seen-set').toContain('E102');
+    expect(ids).toContain('E104');
+    expect(ids).toContain(55);
+  });
+
+  // The pin the audit asked for alongside the fix. D#213 is inert precisely BECAUSE the
+  // exclude set is compared with `Set.has(<number from SQLite>)` and the carried ids are
+  // strings; the UPS leg's own ids are the one raw-number population, and stringifying
+  // them here would turn that exclude live — a measured behaviour change with its own
+  // ruler (lib/patha-exclude-meter.mjs) and its own decision, not a side effect of B-6.
+  it("still writes the UPS leg's own ids as RAW NUMBERS, leaving D#213 inert", () => {
+    mergeInjectedMarker(file, ['101', 'E102'], { sessionId: SID, maxAgeMs: W, mode: 'union' });
+    mergeInjectedMarker(file, [55, 'P7'], { sessionId: SID, maxAgeMs: W, mode: 'replace' });
+    const { ids } = readInjectedMarker(file, { sessionId: SID, maxAgeMs: W });
+    expect(ids, 'a raw number became a string — D#213 would flip from inert to live').toContain(55);
+    expect(
+      ids.filter((i) => typeof i === 'number'),
+      'the raw-number population changed size',
+    ).toEqual([55]);
+    expect(ids).toContain('P7');
+    // And everything carried over is a string, which is what keeps it inert.
+    for (const carried of ids.filter((i) => i !== 55 && i !== 'P7')) {
+      expect(typeof carried, `carried id ${carried} is not a string`).toBe('string');
+    }
+  });
+
+  it('a stale or foreign marker carries nothing over, exactly as before', () => {
+    writeFileSync(
+      file,
+      JSON.stringify({ ids: ['901', 'E902'], ts: Date.now() - 60 * 60 * 1000, session: SID }),
+    );
+    mergeInjectedMarker(file, [55], { sessionId: SID, maxAgeMs: W, mode: 'replace' });
+    expect(readInjectedMarker(file, { sessionId: SID, maxAgeMs: W }).ids).toEqual([55]);
   });
 });
 

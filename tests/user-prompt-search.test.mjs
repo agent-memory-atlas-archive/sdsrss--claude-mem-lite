@@ -1709,8 +1709,19 @@ describe('result-dedup cooldown', () => {
 
   it('skips when session injection limit reached', () => {
     const injectedFile = join(testDir, '.claude-mem-injected-limit');
-    writeFileSync(injectedFile, JSON.stringify({ ids: [99], ts: Date.now(), count: 15 }));
+    // `upsCount`, not `count`: R12 B-5 moved the cap onto a counter only this face
+    // charges, because the shared one is bumped by pre-tool-recall too.
+    writeFileSync(injectedFile, JSON.stringify({ ids: [99], ts: Date.now(), upsCount: 15 }));
     expect(shouldSkipByDedup([1, 2, 3], injectedFile)).toBe(true);
+  });
+
+  it('does not skip when the 15 writes came from another hook', () => {
+    // The B-5 defect, at this face's own call site: `count` at the ceiling with the UPS
+    // face never having injected. Complements the case above — together they say the cap
+    // still exists AND is charged to the right spender.
+    const injectedFile = join(testDir, '.claude-mem-injected-otherface');
+    writeFileSync(injectedFile, JSON.stringify({ ids: ['E7'], ts: Date.now(), count: 15 }));
+    expect(shouldSkipByDedup([1, 2, 3], injectedFile)).toBe(false);
   });
 
   it('dedups across hooks despite number-vs-string id types', () => {

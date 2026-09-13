@@ -1083,6 +1083,10 @@ async function main() {
           sessionId: hookData.session_id,
           maxAgeMs: DEDUP_STALE_MS,
           mode: 'replace',
+          // R12 B-5: this is the leg MAX_SESSION_INJECTIONS budgets, so it is the only
+          // one that charges against it. The shared `count` is bumped by every hook that
+          // touches this file and is no longer what the cap reads.
+          bumpUpsCount: true,
         });
       } catch {}
       // v26 P0: bump injection_count for obs-based emits only (prompt-corpus

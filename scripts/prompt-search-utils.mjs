@@ -225,10 +225,22 @@ export function shouldSkipByDedup(newIds, injectedFile, sessionId) {
   if (!newIds || newIds.length === 0) return true;
   try {
     const raw = readFileSync(injectedFile, 'utf8');
-    const { ids: prevIds, ts, count = 0, session } = JSON.parse(raw);
+    const { ids: prevIds, ts, upsCount = 0, session } = JSON.parse(raw);
     if (session && sessionId && session !== sessionId) return false;
-    if (count >= MAX_SESSION_INJECTIONS) return true;
+    // R12 B-5, two defects on these two lines, and they had to be fixed together.
+    //
+    // (1) The cap reads `upsCount`, not the shared `count`. `count` is bumped by every
+    // hook that writes this marker — pre-tool-recall does so once per triggered Edit/Read
+    // — so a session that touched 15 lesson-bearing files had already spent this face's
+    // whole budget before it injected anything. Markers written before this field existed
+    // read 0, which releases a cap that should never have been charged.
+    //
+    // (2) Freshness is judged FIRST. The cap used to sit above it, so once `count` hit the
+    // ceiling the marker suppressed injection even after it went stale — and nothing
+    // lowers it again, since the reset only happens on the next WRITE and the write never
+    // comes. The only escape was a new session id.
     if (!ts || Date.now() - ts > DEDUP_STALE_MS) return false;
+    if (upsCount >= MAX_SESSION_INJECTIONS) return true;
     if (!Array.isArray(prevIds) || prevIds.length === 0) return false;
     // Normalize both sides to strings before comparing: UPS writes obs ids as numbers
     // (rows.map(r => r.id)) while pre-tool-recall's mergeCrossHookInjected writes them as

@@ -122,11 +122,21 @@ describe('D#193 — the path-A exclude is inert against string ids (pinned, not 
     // this is the leg that lets a raw number into the marker at all.
     mergeInjectedMarker(file, [43, 'P44'], { sessionId: 's1', maxAgeMs: 60000, mode: 'replace' });
     const replaced = JSON.parse(readFileSync(file, 'utf8')).ids;
-    expect(replaced, 'the replace arm must write ids verbatim').toEqual([43, 'P44']);
+    // R12 B-6 made replace carry the OTHER hook's ids forward instead of erasing them, so
+    // the array is no longer just the caller's slice. The claim this case exists to pin is
+    // narrower and still exactly true: the CALLER's ids land verbatim (43 stays a number),
+    // which is the one population the exclude can match. Everything carried in is a
+    // string, so B-6 could not have widened the live set — asserted, not assumed, because
+    // "a coercion added in the lib" is precisely what this case must still catch.
+    expect(replaced.slice(0, 2), 'the replace arm must write the caller ids verbatim').toEqual([43, 'P44']);
+    for (const carried of replaced.slice(2)) {
+      expect(typeof carried, `carried id ${carried} is not a string — D#213 would be live`).toBe('string');
+    }
+    expect(replaced, 'the carried ids are not the ones the union arm wrote').toEqual([43, 'P44', '41', '42']);
 
     // the reader hands them back untouched — no Number(), no String().
     const back = readInjectedMarker(file, { sessionId: 's1', maxAgeMs: 60000 });
-    expect(back.ids, 'readInjectedMarker coerced something').toEqual([43, 'P44']);
+    expect(back.ids, 'readInjectedMarker coerced something').toEqual([43, 'P44', '41', '42']);
     rmSync(dir, { recursive: true, force: true });
 
     // hook.mjs's own half stays a source assertion: there is no seam to drive here, the

@@ -597,6 +597,41 @@ describe('Scenario 4: Error Detection in Bash — PostToolUse', () => {
     );
     expect(epFiles.length).toBeGreaterThan(0);
   });
+
+  // The WIRING half of the notebook_path fix. The unit case in tests/utils.test.mjs
+  // proves extractFilePaths returns the path; it cannot prove hook.mjs still hands
+  // this input to it, and "the function is right, nobody checks the caller" is a
+  // failure this repo has on record. Asserting on `entry.files` is what makes the
+  // chain hook.mjs -> extractFilePaths -> episode entry -> observation_files real.
+  it('NotebookEdit episode entry carries the notebook path in files', () => {
+    const payload = makeToolPayload(
+      'NotebookEdit',
+      {
+        notebook_path: '/tmp/src/analysis.ipynb',
+        cell_id: 'c1',
+        edit_mode: 'replace',
+        new_source: 'import pandas as pd',
+      },
+      'OK — edited notebook cell',
+    );
+    const { exitCode } = runHook('post-tool-use', { stdin: payload });
+    expect(exitCode).toBe(0);
+
+    const runtimeDir = join(tmpHome, '.claude-mem-lite', 'runtime');
+    const epFiles = readdirSync(runtimeDir).filter(
+      (f) => f.startsWith('ep-') && f.endsWith('.json') && !f.startsWith('ep-flush-'),
+    );
+    expect(epFiles.length, 'NotebookEdit produced no episode at all').toBeGreaterThan(0);
+
+    const episode = JSON.parse(readFileSync(join(runtimeDir, epFiles[0]), 'utf8'));
+    const entry = episode.entries.find((e) => e.tool === 'NotebookEdit');
+    expect(entry, 'the notebook edit was not recorded as an entry').toBeTruthy();
+    // The defect was precisely here: the entry existed and was marked significant
+    // (EDIT_TOOLS contains NotebookEdit) while `files` was empty, so the observation
+    // built from this episode could never get an observation_files edge.
+    expect(entry.isSignificant, 'premise: a non-significant entry would not reach capture').toBe(true);
+    expect(entry.files).toEqual(['/tmp/src/analysis.ipynb']);
+  });
 });
 
 describe('Scenario 5: Low-Value Tool Skip — PostToolUse Filtering', () => {
@@ -907,7 +942,11 @@ describe('Scenario 8: Deduplication — Repeated Injections', () => {
       JSON.stringify({
         ids: [99],
         ts: Date.now(),
-        count: 15, // MAX_SESSION_INJECTIONS = 15
+        // R12 B-5 moved the cap off the shared `count` (bumped by every hook that writes
+        // this marker) onto a counter only the UPS face charges. `count: 15` here used to
+        // mean "the cap is reached"; it now means "something wrote 15 times", which is
+        // exactly the state that must NOT suppress this face.
+        upsCount: 15, // MAX_SESSION_INJECTIONS = 15
       }),
     );
     expect(shouldSkipByDedup([10, 20, 30], tmpFile)).toBe(true);

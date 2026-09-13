@@ -497,6 +497,39 @@ export function cleanupClaudeMdLegacyBlock() {
 }
 
 /**
+ * How many locally-selected observations count as a thick enough pool to skip the
+ * cross-project fallback. Named because the number appeared three times: the guard
+ * that DECIDES to run the fallback query and the two sites that consume it.
+ */
+const MIN_LOCAL_OBS = 3;
+
+/**
+ * The rows to render: everything `selectWithTokenBudget` chose, topped up with any
+ * fallback rows it does not already cover.
+ *
+ * R12 A2 — this used to be `observations.length >= 3 ? observations : fallbackObs`,
+ * written inline at BOTH consumer sites. The two row sets come from different windows
+ * (obsPool's low-speed tier1 is 48h/imp>=1; the fallback query is 24h/imp>=1 OR
+ * 7d/imp>=2) and neither contains the other, so a whole-set switch could hand back
+ * FEWER rows than it was given — measured: 2 rows in the DB, both selected, and a
+ * 0-byte context block, while the same fixture at 3 rows emitted 391 bytes. Output
+ * was non-monotonic in corpus size, and the victims were exactly the thin/new projects
+ * the 60-day tier exists to serve.
+ *
+ * Top-up, not truncate-to-three: the union never renders fewer rows than the old
+ * expression did on any input (it only ever ADDS the selected rows back), which a
+ * "fill to 3" fix would not hold — at 0 selected rows the fallback query's own LIMIT 5
+ * already governs, and capping at 3 would have been a second, unrelated behaviour
+ * change. Growth is bounded: the union only runs below MIN_LOCAL_OBS, so the table
+ * gains at most two rows.
+ */
+function withFallbackTopUp(observations, fallbackObs) {
+  if (observations.length >= MIN_LOCAL_OBS) return observations;
+  const seen = new Set(observations.map((o) => o.id));
+  return [...observations, ...fallbackObs.filter((o) => !seen.has(o.id))];
+}
+
+/**
  * Assemble the full markdown body that goes inside the <claude-mem-context>
  * block emitted at session start. Same shape as the inline builder hook.mjs
  * used to compose directly; extracted so both the SessionStart hook AND the
@@ -536,7 +569,7 @@ export function buildSessionContextLines(
 
   // 2. Fallback: recent across all projects with tiered windows (when local pool is thin)
   let fallbackObs = [];
-  if (observations.length < 3) {
+  if (observations.length < MIN_LOCAL_OBS) {
     const fbOneDayAgo = now.getTime() - STALE_SESSION_MS;
     const fbSevenDaysAgo = now.getTime() - RELATED_OBS_WINDOW_MS;
     fallbackObs = db
@@ -663,8 +696,8 @@ export function buildSessionContextLines(
     // Slice FIRST, then sort: the slice is the selection (top 3 by value density) and must
     // stay that way; only the order they are printed in is corrected, same as the Recent
     // table below. Sorting before the slice would silently change WHICH three are injected.
-    const recentObs = (observations.length >= 3 ? observations : fallbackObs)
-      .slice(0, 3)
+    const recentObs = withFallbackTopUp(observations, fallbackObs)
+      .slice(0, MIN_LOCAL_OBS)
       .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
     if (recentObs.length > 0) {
       summaryLines.push('### Recent Activity');
@@ -784,7 +817,7 @@ export function buildSessionContextLines(
   // tests/hook-context.test.mjs). Tiebroken on id for the same reason D#9 gives — an
   // untiebroken tie flips direction, and two saves in one millisecond are common.
   const obsLines = [];
-  const obsToShow = [...(observations.length >= 3 ? observations : fallbackObs)].sort(
+  const obsToShow = [...withFallbackTopUp(observations, fallbackObs)].sort(
     (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id,
   );
   if (obsToShow.length > 0) {

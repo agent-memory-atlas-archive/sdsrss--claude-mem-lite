@@ -962,6 +962,78 @@ describe('Key Context section quotas (D#196)', () => {
     }
   });
 
+  // R12 A2. `selectWithTokenBudget` and `fallbackObs` use DIFFERENT windows (obsPool's
+  // low-speed tier1 is 48h/imp>=1; fallback is 24h/imp>=1 OR 7d/imp>=2), and the two
+  // consumer sites resolved that with `observations.length >= 3 ? observations :
+  // fallbackObs` — a whole-set SWITCH. The windows are not nested, so at 1-2 selected
+  // rows the selection was thrown away for a fallback set that can be EMPTY: strictly
+  // less output from strictly more corpus.
+  const HOURS = 3600 * 1000;
+  const thin = (n) =>
+    insertObs(db, {
+      sessionId: 'sess-q',
+      project: 'test',
+      type: 'discovery',
+      importance: 1,
+      title: `thin row ${n}`,
+      epochOffset: -36 * HOURS - n * 1000,
+    });
+
+  it('premise: a 36h/imp=1 row is inside the selection window and outside both fallback arms', () => {
+    // Without this the case below cannot tell "the switch discarded the rows" from
+    // "the fixture never selected anything in the first place".
+    thin(0);
+    thin(1);
+    const { observations } = selectWithTokenBudget(db, 'test', 2000);
+    expect(observations.length, 'fixture rows were not selected — the window moved').toBe(2);
+  });
+
+  it('keeps 1-2 selected rows instead of swapping them for an empty fallback', () => {
+    thin(0);
+    thin(1);
+    const out = buildSessionContextLines(db, 'test');
+    expect(out, 'two real observations produced an empty context block').not.toBe('');
+    expect(out).toContain('thin row 0');
+    expect(out).toContain('thin row 1');
+  });
+
+  it('injected row count does not shrink as the corpus grows from 2 rows to 3', () => {
+    // The defect was visible as non-monotonicity: n=2 rendered 0 rows and n=3 rendered 3.
+    // Asserting monotonicity rather than an exact count keeps this case alive if the
+    // windows are ever retuned.
+    thin(0);
+    thin(1);
+    const atTwo = buildSessionContextLines(db, 'test')
+      .split('\n')
+      .filter((l) => l.startsWith('| #')).length;
+    thin(2);
+    const atThree = buildSessionContextLines(db, 'test')
+      .split('\n')
+      .filter((l) => l.startsWith('| #')).length;
+    expect(atTwo, 'n=2 rendered no rows at all').toBeGreaterThan(0);
+    expect(atThree).toBeGreaterThanOrEqual(atTwo);
+  });
+
+  it('does not render a row twice when it is in both the selection and the fallback', () => {
+    // Hazard introduced BY the top-up, not present in the switch it replaced: the fallback
+    // query carries no project filter, so a fresh local row satisfies both sides. 2h/imp=1
+    // is inside obsPool tier1 AND inside the fallback's 24h/imp>=1 arm.
+    insertObs(db, {
+      sessionId: 'sess-q',
+      project: 'test',
+      type: 'discovery',
+      importance: 1,
+      title: 'row in both sets',
+      epochOffset: -2 * HOURS,
+    });
+    const out = buildSessionContextLines(db, 'test');
+    // Scope to the Recent TABLE. A row legitimately appears in both Key Context and the
+    // table, so counting the title across the whole block asserts on the wrong population
+    // and reds on correct output — the first draft of this case did exactly that.
+    const tableRows = out.split('\n').filter((l) => l.startsWith('| #') && l.includes('row in both sets'));
+    expect(tableRows.length, 'the same observation was rendered twice in the Recent table').toBe(1);
+  });
+
   it('premise: the sections render at all in this fixture', () => {
     // Without this the three cases below cannot distinguish "the quota is wrong" from
     // "the quiet gate ate the whole block", which is the failure mode that made the

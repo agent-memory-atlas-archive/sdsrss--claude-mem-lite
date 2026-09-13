@@ -2,6 +2,67 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.8.3 — a managed block that could eat the prose around it, and a search that dead-ended on a repairable fault
+
+**Upgrade note.** No schema change, no migration, nothing to do. Two behaviour changes
+worth knowing:
+
+- **`adopt` can no longer delete text around a damaged managed block.** If your project's
+  `CLAUDE.md` has an unpaired `<!-- claude-mem-lite:begin … -->` or `:end` sentinel — a hand
+  edit, a merge resolution, an editor that trimmed a line — earlier versions could match
+  from that orphan across your own prose to the next `:end` and replace the whole span. Your
+  text is now safe, but **an orphan already in your file is left in place on purpose**: where
+  the block it opened was meant to end is not knowable, so `unadopt` now reports it and names
+  the file instead of guessing a range to delete. Search your `CLAUDE.md` for
+  `claude-mem-lite:begin` and `claude-mem-lite:end`; if the counts differ, delete the odd one
+  out and the text it was wrapping by hand.
+- **`unadopt` gained a third outcome, `partial`.** It used to answer `absent` after deleting
+  the detail doc and state sidecar and leaving a block behind. Scripts that test for the
+  literal string `removed` are unaffected; scripts that treat "not removed" as "nothing
+  happened" should now distinguish `partial`.
+
+### Fixed
+
+1. **An unpaired sentinel let the managed-block regex span arbitrary user text, and `adopt`
+   deleted it.** The block is found by one non-greedy regex over the whole file, and
+   `[\s\S]*?` will happily cross a second `begin` marker. Delete the `:end` line by hand and
+   the next adopt appends a second block below whatever you have written since; the adopt
+   after that matches from the orphaned begin, lazily, to the only remaining `:end` — now
+   past your text and past the second begin — and replaces all of it. Measured: a
+   "## Deployment runbook" section appended after adoption was gone after two further
+   adopts, silently, both runs reporting success. Four damage shapes measured over 40
+   iterations each: two never return to one well-formed block, one converges at iteration 3
+   by destroying user text, one was already fine. The body may no longer contain another
+   sentinel of the same slug, so a match is always exactly one block.
+
+2. **`unadopt` reported success over a file it had not cleaned.** With one sentinel missing
+   the pair regex matched nothing, so `removeManaged` returned `absent` — while having
+   already deleted the detail doc and the state sidecar and left ~1.3 KB of managed steering
+   text in `CLAUDE.md`, which is then loaded into every session. It now reports three
+   outcomes and names what is left. Residue is reported only where the plugin can prove it
+   wrote — a well-formed block, the detail doc, or the state sidecar — because an unpaired
+   sentinel is text, and a project that merely documents the marker in prose has one.
+
+3. **A damaged FTS5 index dead-ended `search` and `mem_search` with no way forward.** The
+   classifier and the lossless repair both already existed, but were wired only at database
+   OPEN time; damage inside the index opens fine and throws at the first `MATCH`. Both faces
+   passed SQLite's own sentence through with no next step, while `recent` / `recall` /
+   `browse` / `context` / `stats` kept answering — which reads as "search found nothing"
+   rather than "search is broken". Both now name the fix: `claude-mem-lite fts-check
+   rebuild`, which re-derives every index from its content table without touching a stored
+   row. `doctor` already did this unprompted.
+
+### Notes
+
+- The `SQLITE_NOMEM` shape of index damage deliberately gets no remedy. Measured over 100
+  trials per mode: damaging the FTS structure record yields 98/100 `SQLITE_CORRUPT_VTAB` and
+  2/100 `SQLITE_NOMEM`; leaf-only damage yields 100/100 `SQLITE_CORRUPT_VTAB`. The
+  classifier is shared with the file-corruption path, so admitting `SQLITE_NOMEM` would
+  answer a real out-of-memory with a full index rebuild.
+- Two pre-ship reviewers on disjoint lenses: 0 P1 / 4 P2 / 2 P3 from the defect lens, all
+  four P2s repaired before the tag; 33 claims re-measured by the claims lens, 5 false, all
+  corrected in the commit bodies before anything was pushed. Reports in `docs/audits/`.
+
 ## v6.8.2 — five shared-state fixes, and the pre-ship review that found what four of them broke
 
 **Upgrade note.** No schema change. Two behaviour changes worth knowing:

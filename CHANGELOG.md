@@ -2,6 +2,65 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.8.2 — five shared-state fixes, and the pre-ship review that found what four of them broke
+
+**Upgrade note.** No schema change. Two behaviour changes worth knowing:
+
+- **File paths are now redacted before they are stored.** `observation_files.filename`,
+  `observations.files_modified` / `files_read`, `events.file_paths` and `deferred_work.files`
+  used to hold the raw path while the title derived from that same path was scrubbed. New
+  writes are scrubbed element-wise; **existing rows are not rewritten**, so a store that
+  already recorded a credential-bearing path still holds it until a later backfill. On the
+  maintainer's store that is 3 values out of 2,340.
+- **A lesson about a file whose NAME is itself a credential** (`/repo/ghp_….mjs`) and which
+  was recorded before this release is no longer reachable by that raw name, because the query
+  key is now derived the same way the stored one is. A credential in a *directory* segment is
+  unaffected — 4 of 5 measured shapes still reach their old rows.
+
+### Fixed
+
+1. **SessionStart emitted nothing at all when a project had one or two observations.**
+   The selection query and the cross-project fallback use windows that do not contain each
+   other, and both consumer sites switched between them wholesale, so at 1-2 selected rows the
+   selection was discarded for a set that can be empty. Measured: two real observations, both
+   selected, 0 bytes of context; three rows emitted 241. Output was non-monotonic in corpus
+   size, and the projects it hit are the thin and new ones the 60-day tier exists for. The
+   fallback now tops the selection up instead of replacing it.
+
+2. **Path columns stored raw credentials.** Five columns held paths, one call site followed
+   the element-wise pre-scrub the code prescribes, and four did not — then pre-ship review
+   found a sixth column nobody had counted (`deferred_work.files`, reachable through
+   `mem_defer` and `defer add --files`). All six scrub now, and the READER derives its key the
+   same way, so the writer and the recall path cannot drift apart.
+
+3. **The path scrub ate filenames.** Eight credential patterns have a value class that does
+   not exclude `/`, so `/repo/token=<secret>/notes.mjs` was stored as `/repo/token=***` —
+   filename destroyed at write time, and every file under that directory collapsed onto one
+   recall key, returning another file's lessons. Scrubbing is per path segment now.
+
+4. **A notebook edit built no file edge.** The PostToolUse path extractor knew three spellings
+   of the edited path and not `NotebookEdit`'s, while the significance test did know it — so a
+   notebook edit was captured, marked important, and left unreachable to every file-keyed
+   recall.
+
+5. **One hook spent another hook's injection budget.** The per-session injection cap was
+   charged against a counter that every hook bumps, so a session that touched fifteen
+   lesson-bearing files exhausted the prompt face's budget before it injected anything. The
+   cap also outlived its own window, because it was judged before freshness and the reset only
+   happens on a write that never comes. The budget is now charged to, and timed by, the face
+   that owns it — including the deferred-item leg, which read the cap without paying into it.
+
+6. **One prompt erased the other hook's memory of what it had shown.** The prompt face wrote
+   its dedup marker wholesale, discarding everything the PreToolUse face had accumulated, so
+   that face re-injected lessons it had already shown. It now replaces its own slice. The
+   marker is also capped at 32 ids: replacing it wholesale was the only thing that ever shrank
+   it, and without a cap the set grew for the life of the session (measured 520 ids), which
+   starves the very face it exists to dedup.
+
+7. **A tuned default was documented as its pre-v2.41 value** in two comments and two test
+   names, and neither test asserted the number it was named after. They recover the multiplier
+   by ratio now, which reads 0.4000 exactly.
+
 ## v6.8.1 — corrections to what v6.8.0 claimed, and a property test that asserted a falsehood
 
 No behaviour change. v6.8.0's code was right; three things it SAID were not, and one test was

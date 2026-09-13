@@ -893,10 +893,34 @@ describe('v2.41: MEM_CROSS_PROJECT_BOOST env override', () => {
     db?.close();
   });
 
-  it('default 0.7 penalty applied when env unset', () => {
-    delete process.env.MEM_CROSS_PROJECT_BOOST;
+  // R12 A6 found "default 0.7" in two comments that v2.41 left behind when it moved the
+  // knob to 0.4. These two case NAMES were the third and fourth copy — and neither
+  // asserted the number they were named after (`length >= 1` and `not.toThrow()` hold for
+  // any value, 0.7 included), so nothing in the suite could tell the two apart.
+  //
+  // Recovering the factor rather than guessing a threshold: the two fixture rows are held
+  // fixed and only the env var moves, so the cross-project row's score divided by its own
+  // score at boost=1.0 IS the multiplier. Measured 0.4000 and 0.7000 exactly on this
+  // fixture, which is what makes an equality assertion legitimate here.
+  const crossScoreAt = (value) => {
+    if (value === null) delete process.env.MEM_CROSS_PROJECT_BOOST;
+    else process.env.MEM_CROSS_PROJECT_BOOST = value;
     const results = searchRelevantMemories(db, 'dispatch routing policy', 'main-proj', []);
-    expect(results.length).toBeGreaterThanOrEqual(1);
+    const row = results.find((r) => r.project === 'other-proj');
+    expect(row, 'the cross-project row fell out of the result set — the fixture moved').toBeTruthy();
+    return row.score;
+  };
+
+  it('the default cross-project multiplier is 0.4, and it is the unset behaviour', () => {
+    const atOne = crossScoreAt('1.0');
+    const atDefault = crossScoreAt(null);
+    expect(
+      atOne,
+      'premise: the unpenalised score must be non-zero for a ratio to mean anything',
+    ).toBeGreaterThan(0);
+    expect(atDefault / atOne).toBeCloseTo(0.4, 6);
+    // And it is not 0.7 — the number the comments and these case names used to claim.
+    expect(atDefault / atOne).not.toBeCloseTo(0.7, 2);
   });
 
   it('MEM_CROSS_PROJECT_BOOST=1.0 disables the cross-project penalty', () => {
@@ -907,10 +931,10 @@ describe('v2.41: MEM_CROSS_PROJECT_BOOST env override', () => {
     expect(results.some((r) => r.project === 'other-proj')).toBe(true);
   });
 
-  it('invalid env value falls back to default 0.7', () => {
-    process.env.MEM_CROSS_PROJECT_BOOST = 'not-a-number';
-    // Must not throw; behavior matches unset
-    expect(() => searchRelevantMemories(db, 'dispatch routing policy', 'main-proj', [])).not.toThrow();
+  it('invalid env value falls back to the default, not merely to "does not throw"', () => {
+    const atDefault = crossScoreAt(null);
+    const atGarbage = crossScoreAt('not-a-number');
+    expect(atGarbage).toBe(atDefault);
   });
 
   it('out-of-range env value (>1) falls back to default', () => {

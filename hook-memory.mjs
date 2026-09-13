@@ -435,12 +435,11 @@ export function searchRelevantMemories(
       debugCatch(e, 'crossProjectSearch');
     }
 
-    // Merge and score: same-project full weight, cross-project (default 0.7x).
-    // v2.41: cross-project penalty is env-overridable via MEM_CROSS_PROJECT_BOOST
-    // (0..1). Default 0.7 — tuned for typical multi-project installs where
-    // transferable decisions/discoveries are a minority of matches. Set to 1.0
-    // for single-project users (no effective penalty); set lower to tighten
-    // same-project focus in noisy cross-project environments.
+    // Merge and score: same-project full weight, cross-project penalised by
+    // getCrossProjectBoost(). R12 A6 — this block used to restate that knob's default as
+    // 0.7 twice over, which v2.41 changed to 0.4 while updating only the comment at the
+    // function. The value and its rationale live at getCrossProjectBoost() and nowhere
+    // else; a second copy of a tuned number is a second answer to "what is the baseline".
     //
     // OR-fallback results get 0.4x penalty — they matched individual words, not the full intent
     // v26 P0: noise_penalty (from SQL) shrinks high-inject/low-cite rows.

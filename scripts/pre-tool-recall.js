@@ -27,6 +27,7 @@ import {
   jsonArrayLikeNeedle,
   toolEditPath,
 } from '../lib/file-edge-match.mjs';
+import { scrubFilePath } from '../lib/scrub-record.mjs';
 import { fileIntelFor } from '../lib/file-intel.mjs';
 import { shouldWarnReread, buildRereadWarning, readFileMeta } from '../lib/reread-guard.mjs';
 import { recordMetric } from '../lib/metrics.mjs';
@@ -538,7 +539,14 @@ try {
     // needs the same key, and host-native `basename` gave it the whole path for a
     // Windows-shaped payload. Fixing the observations leg alone would have left this
     // hook recalling lessons but no events.
-    const fname = basenameAnySep(filePath);
+    // D#44: the KEY derivation is scrubbed; `filePath` itself is NOT reused for
+    // this, because the same variable is still handed to readFileMeta and friends
+    // to stat a real file on disk — a globally scrubbed path would point nowhere.
+    // events.file_paths is now written pre-scrubbed (lib/activity.mjs), and the
+    // observations leg below scrubs inside fileMatchParams, so both legs of this
+    // hook keep deriving the same key — which is what the note above requires.
+    const keyPath = scrubFilePath(filePath);
+    const fname = basenameAnySep(keyPath);
     // Needle for the events leg's JSON-array column — see jsonArrayLikeNeedle for
     // why the JSON escape has to run before the LIKE one. The observations leg
     // below matches a plain column and gets its params from fileMatchParams.
@@ -652,7 +660,7 @@ try {
     // patterns match both basename and full-path entries. JSON quoting
     // (`"<name>"`) prevents partial-match false positives like "foo.mjs"
     // matching "myfoo.mjs".
-    const fullPathNeedle = jsonArrayLikeNeedle(filePath);
+    const fullPathNeedle = jsonArrayLikeNeedle(keyPath);
     // v2.34.6: Read also tightens the events query — only rows with a non-empty
     // body (= lesson equivalent). Edit path keeps a wider net, but P0 (D#78)
     // closes the parallel-path drift vs the observations query: a bodyless row

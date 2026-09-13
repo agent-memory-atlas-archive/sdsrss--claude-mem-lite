@@ -4,9 +4,21 @@ import { scrubRecord } from '../lib/scrub-record.mjs';
 import { scrubSecrets } from '../secret-scrub.mjs';
 import { stripPrivate } from '../lib/private-strip.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
+import { saveEvent } from '../lib/activity.mjs';
+import { recallByFile } from '../lib/recall-core.mjs';
 
 const SECRET = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const POISONED = `error from upstream: token=${SECRET} not found`;
+
+// D#44 fixtures. The two SHAPES are not interchangeable and the pair is the point:
+//   DIR_PATH  — credential in a directory segment; scrubbing leaves the basename
+//               alone, so the LIKE arms of fileMatchParams still match either way.
+//               A test using only this shape passes with the reader left unscrubbed.
+//   BASE_PATH — credential in the BASENAME; scrubbing rewrites the very token
+//               arms 2-4 bind. This is the only shape that can see a writer/reader
+//               asymmetry, which is why the recall case below uses it.
+const DIR_PATH = `/tmp/${SECRET}/alpha.mjs`;
+const BASE_PATH = `/repo/ghp_${'a'.repeat(36)}.mjs`;
 
 describe('scrubSecrets — category gaps closed (audit MED-6)', () => {
   it('scrubs non-AKIA AWS access-key prefixes (ASIA/AROA/AIDA)', () => {
@@ -258,6 +270,116 @@ describe('end-to-end leak check via in-memory DB', () => {
     for (const k of ['title', 'narrative', 'text', 'concepts', 'facts', 'lesson_learned']) {
       expect(row[k], `${k} leaked`).not.toContain(SECRET);
     }
+  });
+});
+
+// D#44: lib/scrub-record.mjs excludes JSON-array / path columns from
+// TEXT_FIELDS_BY_TABLE on purpose (scrubbing a stringified array can rewrite
+// quoted values and break JSON.parse) and prescribes the remedy in its header:
+// "Pre-scrub each element upstream of the JSON.stringify call instead."
+// hook-handoff.mjs:296 (session_handoffs.key_files) is the one call site that
+// did. These four columns are the ones that did not, asserted through the
+// SHIPPING writers rather than a test replica — __insertObservationForTest
+// exists because an earlier leak test asserted on a hand-spelled copy of the
+// write point and drifted from it.
+describe('path columns — element-level pre-scrub (D#44)', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  it('mem_save: observations.files_modified and the observation_files edge are both scrubbed', () => {
+    const res = saveObservation(db, {
+      content: 'a change worth keeping, with enough body to clear the noise gate',
+      project: 'p1',
+      type: 'bugfix',
+      importance: 2,
+      files: [DIR_PATH],
+      lesson_learned: 'the junction row is the recall key',
+    });
+    expect(res.kind, 'fixture did not save at all').toBe('saved');
+
+    const row = db.prepare('SELECT files_modified FROM observations WHERE id = ?').get(res.id);
+    expect(row.files_modified, 'files_modified leaked the raw path').not.toContain(SECRET);
+    expect(JSON.parse(row.files_modified), 'the column stopped being a parseable array').toEqual([
+      scrubSecrets(DIR_PATH),
+    ]);
+
+    const edge = db.prepare('SELECT filename FROM observation_files WHERE obs_id = ?').get(res.id);
+    expect(edge.filename, 'observation_files.filename leaked the raw path').not.toContain(SECRET);
+    expect(edge.filename).toBe(scrubSecrets(DIR_PATH));
+  });
+
+  it('saveEvent: events.file_paths is scrubbed per element and stays parseable', () => {
+    const id = saveEvent(db, {
+      project: 'p1',
+      event_type: 'bugfix',
+      title: 'an event',
+      body: 'a body',
+      file_paths: [DIR_PATH, '/repo/clean.mjs'],
+    });
+    const row = db.prepare('SELECT file_paths FROM events WHERE id = ?').get(id);
+    expect(row.file_paths, 'events.file_paths leaked the raw path').not.toContain(SECRET);
+    expect(JSON.parse(row.file_paths), 'the column stopped being a parseable array').toEqual([
+      scrubSecrets(DIR_PATH),
+      '/repo/clean.mjs',
+    ]);
+  });
+
+  it('hook-llm auto-capture: files_modified, files_read and the edge are all scrubbed', async () => {
+    const hookLlm = await import('../hook-llm.mjs');
+    const id = hookLlm.saveObservation(
+      {
+        type: 'bugfix',
+        title: 'a substantive title that clears the noise gates',
+        narrative: 'a narrative with enough body to survive the low-yield gate',
+        importance: 2,
+        lessonLearned: 'auto-capture writes the same two path sinks',
+        files: [DIR_PATH],
+        filesRead: [BASE_PATH],
+      },
+      'p1',
+      's-llm',
+      db,
+    );
+    expect(id, 'fixture was dropped by a noise gate before it could be asserted on').toBeTruthy();
+
+    const row = db.prepare('SELECT files_modified, files_read FROM observations WHERE id = ?').get(id);
+    expect(row.files_modified, 'files_modified leaked').not.toContain(SECRET);
+    expect(row.files_read, 'files_read leaked').toContain('***');
+    expect(JSON.parse(row.files_modified)).toEqual([scrubSecrets(DIR_PATH)]);
+    expect(JSON.parse(row.files_read)).toEqual([scrubSecrets(BASE_PATH)]);
+
+    const edge = db.prepare('SELECT filename FROM observation_files WHERE obs_id = ?').get(id);
+    expect(edge.filename, 'the auto-capture edge leaked').toBe(scrubSecrets(DIR_PATH));
+  });
+
+  // The reader half. Writers alone leave the stored key and the query key derived
+  // by two different rules; this is the shape that can tell them apart, because
+  // scrubbing BASE_PATH rewrites its basename and therefore every arm of
+  // fileMatchParams. On the maintainer's corpus 0 of 2340 stored path values have
+  // a credential anywhere, so nothing here is observable from the live DB — that
+  // is a snapshot of one corpus, not a property of the code.
+  it('recallByFile still finds a row whose stored path was scrubbed in the BASENAME', () => {
+    const res = saveObservation(db, {
+      content: 'a lesson about a file whose name is credential-shaped',
+      project: 'p1',
+      type: 'bugfix',
+      importance: 2,
+      files: [BASE_PATH],
+      lesson_learned: 'the edge filename is also the recall key',
+    });
+    expect(res.kind).toBe('saved');
+    expect(
+      db.prepare('SELECT filename FROM observation_files WHERE obs_id = ?').get(res.id).filename,
+      'premise: the stored key must actually have been rewritten, or this case proves nothing',
+    ).toBe(scrubSecrets(BASE_PATH));
+
+    const { rows } = recallByFile(db, BASE_PATH, { limit: 10, includeNoise: true });
+    expect(
+      rows.map((r) => r.id),
+      'a raw query path no longer reaches its own scrubbed edge',
+    ).toContain(res.id);
   });
 });
 

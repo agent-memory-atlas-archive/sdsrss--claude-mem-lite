@@ -24,7 +24,7 @@ import {
 } from './utils.mjs';
 import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
-import { scrubRecord } from './lib/scrub-record.mjs';
+import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
 import {
   insertObservationRow,
   insertObservationFiles,
@@ -356,6 +356,13 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
       search_aliases: obs.searchAliases || null,
     });
 
+    // D#44: derive the scrubbed path arrays ONCE. `obs.files` feeds two sinks —
+    // the files_modified JSON column and the observation_files junction below —
+    // and the junction value is also the recall key, so a per-sink scrub is how
+    // the stored key and the indexed column drift apart.
+    const safeFiles = scrubFilePaths(obs.files || []);
+    const safeFilesRead = scrubFilePaths(obs.filesRead || []);
+
     // Atomic: observation INSERT + observation_files in one transaction.
     // Column list single-sourced in lib/observation-write (shared with manual mem_save).
     const savedId = db.transaction(() => {
@@ -369,8 +376,8 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
         narrative: safe.narrative,
         concepts: safe.concepts,
         facts: safe.facts,
-        files_read: JSON.stringify(obs.filesRead || []),
-        files_modified: JSON.stringify(obs.files || []),
+        files_read: JSON.stringify(safeFilesRead),
+        files_modified: JSON.stringify(safeFiles),
         importance: obs.importance ?? 1,
         minhash_sig: minhashSig,
         lesson_learned: safe.lesson_learned,
@@ -384,7 +391,7 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
         scope: normalizeScope(obs.scope),
       });
 
-      insertObservationFiles(db, id, obs.files);
+      insertObservationFiles(db, id, safeFiles);
 
       return id;
     })();

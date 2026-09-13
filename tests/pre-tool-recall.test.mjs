@@ -11,6 +11,7 @@ import {
   makeFixtureTracker,
 } from './test-helpers.mjs';
 import { initSchema } from '../schema.mjs';
+import { scrubSecrets } from '../secret-scrub.mjs';
 import Database from 'better-sqlite3';
 import { tmpdir } from 'os';
 
@@ -2546,6 +2547,30 @@ describe('pre-tool-recall', () => {
       }
       return out;
     }
+
+    // D#44. The events leg matches `events.file_paths` with its own needle rather
+    // than fileMatchClause, so scrubbing the writer (lib/activity.mjs) without
+    // scrubbing THIS key derivation would leave the hook's two legs deriving
+    // different keys from one path — which the note above `keyPath` forbids.
+    // FAILS IF: scripts/pre-tool-recall.js derives its needles from the raw path.
+    // The credential sits in the BASENAME on purpose: a directory-segment secret
+    // leaves the basename needle intact and this case would pass unscrubbed.
+    it('recalls an event stored under a scrubbed path when the edit names the raw one', async () => {
+      const rawPath = join(projectDir, `ghp_${'a'.repeat(36)}.mjs`);
+      seedEvent([scrubSecrets(rawPath)], 'this file is named after a token and still has a lesson');
+
+      const { stdout } = await runWithEnv({
+        tool_name: 'Edit',
+        tool_input: { file_path: rawPath, old_string: 'a', new_string: 'b' },
+      });
+
+      expect(stdout, 'the events leg returned nothing at all').not.toBe('');
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain('this file is named after a token and still has a lesson');
+      expect(ctx, 'the hook echoed the raw credential back into model context').not.toContain(
+        `ghp_${'a'.repeat(36)}`,
+      );
+    });
 
     // B-2 ①. FAILS IF: the parser reads only `tool_input.file_path`.
     it('recalls for a NotebookEdit, which carries notebook_path and no file_path', async () => {

@@ -123,10 +123,16 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
     );
     await importJsonl(db, file, { project: 'proj' });
     await importJsonl(db, file, { project: 'proj' });
-    const edges = db
-      .prepare('SELECT COUNT(*) AS n FROM observation_files WHERE filename = ?')
-      .get(SCRUBBED_PATH);
-    expect(edges.n, 'one edit produced more than one file edge').toBe(1);
+    // D#44 moved the stored key: the junction used to hold the RAW path while the
+    // title derived from it was scrubbed, and this assertion pinned that asymmetry
+    // by querying the raw spelling. The case is about DUPLICATE edges, so it now
+    // counts rows for the observation and states the stored spelling separately —
+    // a literal in the WHERE clause made a leak look like a passing dedup test.
+    const total = db.prepare('SELECT COUNT(*) AS n FROM observation_files').get().n;
+    expect(total, 'one edit produced more than one file edge').toBe(1);
+    const stored = db.prepare('SELECT filename FROM observation_files').get().filename;
+    expect(stored, 'the junction still stores the raw path').toBe(scrubSecrets(SCRUBBED_PATH));
+    expect(stored).not.toContain('sk-ant-api03-abcdefghijklmnop');
   });
 });
 

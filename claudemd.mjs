@@ -59,8 +59,50 @@ function escapeRe(s) {
 // are `\r?\n` (not bare `\n`) so a CLAUDE.md re-saved with Windows CRLF endings
 // still matches — otherwise the block read as "absent" and a fresh LF copy got
 // appended every SessionStart, growing the file without bound (review C1/H2).
+// The body may not contain ANOTHER sentinel of the same slug. `[\s\S]*?` could, and that is
+// not a tidiness point — it is how a match stopped being one block. Drop the `:end` line by
+// hand (a merge resolution, an editor, another tool) and the next adopt appends a second
+// block below whatever the user has written since; the adopt after THAT matched from the
+// orphaned begin, lazily, to the only `:end` in the file — which now sits past the user's
+// text and past the second begin — so `raw.replace(m[0], section)` deleted all of it.
+// Measured 2026-09-13: a "## Deployment runbook" section appended after adoption was gone
+// after two further adopts, silently, with both runs reporting success.
+//
+// The tempered token below cannot span a sentinel, so the engine backtracks to the
+// WELL-FORMED pair and the orphan is simply left alone — which is the right answer for a
+// file we do not own: where the orphaned body ends is genuinely unknowable, so removeManaged
+// reports it (action 'partial') rather than guessing a span to delete.
+//
+// Safe by construction for legitimate blocks: the shipped body carries the slug twice and
+// never as a sentinel (measured: 1304 bytes — 1296 UTF-16 units, the body has em dashes —
+// with zero `:begin` / `:end` occurrences), and the
+// separators stay `\r?\n` for the CRLF reason below.
 function blockBody(esc) {
-  return `<!-- ${esc}:begin (v\\d+) -->\\r?\\n([\\s\\S]*?)\\r?\\n<!-- ${esc}:end -->`;
+  const sentinel = `<!-- ${esc}:(?:begin|end)`;
+  return `<!-- ${esc}:begin (v\\d+) -->\\r?\\n((?:(?!${sentinel})[\\s\\S])*?)\\r?\\n<!-- ${esc}:end -->`;
+}
+
+// Any sentinel LINE of our slug, paired or not. The pair regex above is deliberately blind to
+// an unpaired one; this is what lets residue reporting see what it cannot safely remove.
+function sentinelLineRegexG(slug) {
+  return new RegExp(`<!-- ${escapeRe(slug)}:(?:begin|end)\\b[^>]*-->`, 'g');
+}
+
+/**
+ * Sentinel lines of this slug left in `raw` that no well-formed block accounts for.
+ * Zero on a healthy file (every sentinel belongs to a matched pair) and on a clean one.
+ * @param {string} raw
+ * @param {string} slug
+ * @returns {number}
+ */
+function orphanSentinelCount(raw, slug) {
+  const total = (raw.match(sentinelLineRegexG(slug)) || []).length;
+  let paired = 0;
+  raw.replace(blockRegexG(slug), (whole) => {
+    paired += (whole.match(sentinelLineRegexG(slug)) || []).length;
+    return whole;
+  });
+  return total - paired;
 }
 function blockRegex(slug) {
   return new RegExp(blockBody(escapeRe(slug)));
@@ -137,12 +179,23 @@ export function isAdopted(cwd, slug) {
  * removed it. removeManaged cleans all three pieces, so sweep on any of them.
  */
 export function hasResidue(cwd, slug) {
-  return (
-    readBlock(cwd, slug).body !== null ||
-    existsSync(detailDocPath(cwd, slug)) ||
-    existsSync(stateFilePath(cwd, slug))
-  );
+  const blk = readBlock(cwd, slug);
+  return blk.body !== null || existsSync(detailDocPath(cwd, slug)) || existsSync(stateFilePath(cwd, slug));
 }
+
+// An unpaired sentinel is deliberately NOT in the list above (pre-ship review P2-3). A first
+// cut added it, reasoning that the sweep should see what the pair regex cannot. But
+// orphanSentinelCount counts sentinel-shaped TEXT, and a project the plugin never touched can
+// mention the marker in prose — documenting it, pasting half an example, a changelog line.
+// That one mention let `unadopt --all` into a stranger's project, where removeManaged
+// unconditionally deletes the detail doc and state sidecar and rmdir's an empty `.claude/`,
+// then printed "remove those lines by hand" at the user's own paragraph — and never
+// converged, because the mention is still there on the next sweep.
+//
+// The three entries above are all things the PLUGIN WROTE; a sentinel in prose is not. And
+// the sweep gains nothing by entering: removeManaged cannot clean an orphan anyway, by
+// design. The orphan is reported by removeManaged when unadopt genuinely runs — which is the
+// real failure case, where the doc and sidecar are still present and do bring it in.
 
 /**
  * Whether the installed block/doc has drifted from the shipped content — i.e.
@@ -232,11 +285,25 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
  * Remove our managed block from CLAUDE.md (preserving all other content) and
  * delete the detail doc + state sidecar. Best-effort removes an emptied
  * .claude/ directory.
- * @returns {{action: 'removed'|'absent'}}
+ *
+ * THREE outcomes, not two — the same rule lib/db-unusable.mjs states about backups: "there
+ * is nothing to do" and "I could not finish" must not print in the same voice, because a
+ * green-sounding line ends the reader's search. `absent` used to cover both: with one
+ * sentinel line missing, the pair regex matched nothing, so this returned 'absent' — while
+ * having already deleted the detail doc and the state sidecar and left ~1.3 KB of managed
+ * steering text in the user's CLAUDE.md, which it is then loaded from on every session.
+ * `partial` is that case, and `residue` names what is left so the caller can say so.
+ *
+ * Deliberately does NOT delete an orphaned sentinel's body: where it ends is unknowable
+ * (that is the defect, not a detail), and guessing a span in a file we do not own is how the
+ * adopt side came to delete a user's runbook. Report, do not repair.
+ *
+ * @returns {{action: 'removed'|'partial'|'absent', residue?: string}}
  */
 export function removeManaged(cwd, slug) {
   const p = claudeMdPath(cwd);
   let action = 'absent';
+  let orphans = 0;
   if (existsSync(p)) {
     let raw = readFileSync(p, 'utf8');
     // H2: loop so ALL same-slug blocks are removed, not just the first (a
@@ -283,8 +350,17 @@ export function removeManaged(cwd, slug) {
         atomicWrite(p, raw);
       }
     }
+    // Counted on what is left AFTER the loop, so a healthy file (every sentinel consumed by
+    // a matched pair) reports zero and only a genuinely unpaired line survives the count.
+    orphans = orphanSentinelCount(raw, slug);
   }
+  // Captured BEFORE the deletions below, because they are what it asks about: is there any
+  // evidence the plugin ever wrote in this project? An unpaired sentinel is NOT such
+  // evidence — it is text, and a project that merely documents the marker in prose has one
+  // (pre-ship review P2-3). Reporting residue there means telling a stranger to delete their
+  // own paragraph, on a project this tool has never touched.
   const dp = detailDocPath(cwd, slug);
+  const wasOurs = action === 'removed' || existsSync(dp) || existsSync(stateFilePath(cwd, slug));
   if (existsSync(dp))
     try {
       unlinkSync(dp);
@@ -300,6 +376,18 @@ export function removeManaged(cwd, slug) {
   } catch {
     /* best-effort */
   }
+  // `action` answers ONE question — what happened to the block — and `residue` is an
+  // independent fact that rides alongside it. A first cut let an orphan override 'removed'
+  // too, on the reasoning that both are "unfinished". Pre-ship review P2-1: unadoptAll's
+  // else-branch prints "cleaned partial residue (detail doc/state, no block)" and counts
+  // `partial++`, so a sweep that DID remove a block reported "no block" and tallied zero
+  // removals. Two facts, two fields.
+  const residue =
+    orphans > 0 && wasOurs
+      ? `${orphans} unpaired \`${slug}\` sentinel line(s) remain in ${claudeMdPath(cwd)} — the block they opened has no matching end marker, so its extent cannot be determined safely. Remove those lines and the text they wrap by hand.`
+      : null;
+  if (action === 'removed') return residue ? { action, residue } : { action };
+  if (residue) return { action: 'partial', residue };
   return { action };
 }
 

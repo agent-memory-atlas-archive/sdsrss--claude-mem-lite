@@ -425,6 +425,13 @@ function unadoptAll(args) {
       log(`[unadopt --all] ${dir} → cleaned partial residue (detail doc/state, no block)`);
       partial++;
     }
+    // OUTSIDE the branch, because residue is orthogonal to what happened to the block: a
+    // project can have its block removed AND still carry an unpaired sentinel. An orphan is
+    // the one kind of residue the sweep cannot finish — its block has no end marker, so its
+    // extent is unknowable — and the two lines above would otherwise imply the project is
+    // clean. Inside the else-branch it was also unreachable for the 'removed' case, which is
+    // how the print survived a mutation with the whole suite green (pre-ship review P2-2).
+    if (r.residue) log(`  ⚠ ${r.residue}`);
   }
 
   // 2. Legacy memory-dir cleanup across every memdir (foreign-content guarded).
@@ -481,4 +488,8 @@ export function cmdUnadopt(args = []) {
   const mig = migrateLegacyMemoryDir(cwd, PLUGIN_SLUG, { force });
   const migNote = mig.action === 'removed' ? ' (+cleaned legacy memdir)' : '';
   log(`[unadopt] ${cwd} → ${r.action}${migNote}`);
+  // 'partial' is the outcome that used to print as 'absent': the sidecar files are gone but
+  // an unpaired sentinel still holds steering text in the user's CLAUDE.md, and only they can
+  // decide where that text ends. Silence here is what let it survive every sweep.
+  if (r.residue) log(`  ⚠ ${r.residue}`);
 }

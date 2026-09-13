@@ -5,6 +5,7 @@
 import { homedir } from 'os';
 import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
+import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
 import { truncate, typeIcon, inferProject, scrubSecrets, COMPRESSED_PENDING_PURGE } from './utils.mjs';
 import { resolveProject } from './project-utils.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
@@ -3847,6 +3848,12 @@ export async function run(argv) {
     // agent runs the CLI, the model's context — got a raw Node stack trace. Print the
     // message, keep the stack behind CLAUDE_MEM_DEBUG for whoever is actually debugging.
     process.stderr.write(`[mem] ${cmd || 'command'} failed: ${(e && e.message) || e}\n`);
+    // A damaged FTS5 index reaches here as SQLITE_CORRUPT_VTAB from the first MATCH.
+    // `fts-check` and `doctor` touch the index too — and both already explain themselves —
+    // so `search` is the one command that DEAD-ENDS on SQLite's sentence, while `recent` /
+    // `recall` / `browse` / `context` / `stats` never read the index and keep working.
+    // The remedy is lossless (see FTS_CORRUPTION_REMEDY); the exit code stays 1.
+    if (isFtsCorruptionError(e)) process.stderr.write(`[mem] ${FTS_CORRUPTION_REMEDY}\n`);
     if (process.env.CLAUDE_MEM_DEBUG) process.stderr.write(`${(e && e.stack) || ''}\n`);
     process.exitCode = 1;
   } finally {

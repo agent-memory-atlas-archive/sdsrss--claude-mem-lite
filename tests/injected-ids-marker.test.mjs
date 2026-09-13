@@ -16,7 +16,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readInjectedMarker, mergeInjectedMarker, injectedIdsFileName } from '../lib/injected-ids.mjs';
+import {
+  readInjectedMarker,
+  mergeInjectedMarker,
+  injectedIdsFileName,
+  MAX_MARKER_IDS,
+} from '../lib/injected-ids.mjs';
 import { shouldSkipByDedup, MAX_SESSION_INJECTIONS } from '../scripts/prompt-search-utils.mjs';
 
 let dir, file;
@@ -45,9 +50,11 @@ describe('readInjectedMarker — the M-6 same-session gate', () => {
     expect(readInjectedMarker(file, { sessionId: 'mine', maxAgeMs: W })).toEqual({
       ids: [],
       count: 0,
-      // B-5 added a second counter; the empty shape carries it for the same reason it
-      // carries `count` — a caller reading it must not see another session's budget.
+      // B-5 added a second counter and the pre-ship review added its clock; the empty
+      // shape carries both for the same reason it carries `count` — a caller reading it
+      // must not see another session's budget, nor the clock keeping it alive.
       upsCount: 0,
+      upsTs: 0,
       fresh: false,
     });
   });
@@ -213,6 +220,99 @@ describe("mergeInjectedMarker — replace keeps the other hook's seen-set (B-6)"
     );
     mergeInjectedMarker(file, [55], { sessionId: SID, maxAgeMs: W, mode: 'replace' });
     expect(readInjectedMarker(file, { sessionId: SID, maxAgeMs: W }).ids).toEqual([55]);
+  });
+});
+
+// Pre-ship defect review of v6.8.2, P1. B-6 stopped `replace` from erasing the file — and
+// `replace` was the ONLY thing that ever shrank it. `union` has always accumulated, and
+// `ts` is rewritten on every write, so the staleness gate never fires in a session where
+// any hook writes within the window. Measured before the cap: 520 ids after 40 rounds,
+// linear and unbounded. The consequence is written down at scripts/pre-tool-recall.js:100-105
+// — the dedup slack caps at 5, so a large seen-set starves the face it is meant to dedup.
+// Pre-ship defect review of v6.8.2, P3. B-5 moved the counter to the spender but left the
+// CLOCK shared: readInjectedMarker zeroes upsCount once the single `ts` is stale, and every
+// writer refreshes `ts`. So a tool-heavy session still extends the fyi face's budget — by
+// keeping it alive rather than by incrementing it. Same coupling, opposite mechanism.
+describe('shouldSkipByDedup — the UPS budget runs on its own clock (pre-ship P3)', () => {
+  const SID = 'sess-clock';
+  const W = 5 * 60 * 1000;
+
+  it('an idle UPS face releases its budget even while another hook keeps writing', () => {
+    // 15 UPS emissions, the last one well outside the window, with another hook writing
+    // recently enough to keep the shared `ts` fresh.
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ids: ['E1'],
+        ts: Date.now(), // the OTHER hook wrote just now
+        upsCount: MAX_SESSION_INJECTIONS,
+        upsTs: Date.now() - 8 * 60 * 1000, // the UPS face last injected 8 minutes ago
+        count: 40,
+        session: SID,
+      }),
+    );
+    expect(shouldSkipByDedup([9001, 9002], file, SID)).toBe(false);
+  });
+
+  it('still caps a UPS face that is actively injecting', () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ids: ['E1'],
+        ts: Date.now(),
+        upsCount: MAX_SESSION_INJECTIONS,
+        upsTs: Date.now(),
+        count: 40,
+        session: SID,
+      }),
+    );
+    expect(shouldSkipByDedup([9001, 9002], file, SID)).toBe(true);
+  });
+
+  it('carries upsTs across another hook’s write and stamps it on its own', () => {
+    mergeInjectedMarker(file, [1], { sessionId: SID, maxAgeMs: W, mode: 'replace', bumpUpsCount: true });
+    const stamped = JSON.parse(readFileSync(file, 'utf8')).upsTs;
+    expect(stamped, 'the UPS write left no clock of its own').toBeGreaterThan(0);
+    mergeInjectedMarker(file, ['E9'], { sessionId: SID, maxAgeMs: W, mode: 'union' });
+    expect(
+      JSON.parse(readFileSync(file, 'utf8')).upsTs,
+      "another hook's write moved the UPS face's clock",
+    ).toBe(stamped);
+  });
+});
+
+describe('mergeInjectedMarker — the id list is bounded (pre-ship P1)', () => {
+  const SID = 'sess-bound';
+  const W = 5 * 60 * 1000;
+
+  it('stays bounded across a long session of interleaved writes', () => {
+    for (let round = 0; round < 40; round++) {
+      for (let k = 0; k < 5; k++) {
+        mergeInjectedMarker(file, [`E${round}_${k}`], { sessionId: SID, maxAgeMs: W, mode: 'union' });
+      }
+      mergeInjectedMarker(file, [round * 100], {
+        sessionId: SID,
+        maxAgeMs: W,
+        mode: 'replace',
+        bumpUpsCount: true,
+      });
+    }
+    const { ids } = readInjectedMarker(file, { sessionId: SID, maxAgeMs: W });
+    expect(ids.length, 'the marker grew without bound').toBeLessThanOrEqual(MAX_MARKER_IDS);
+  });
+
+  it('keeps the most recent ids and drops the oldest, in both arms', () => {
+    for (let i = 0; i < MAX_MARKER_IDS + 10; i++) {
+      mergeInjectedMarker(file, [`E${i}`], { sessionId: SID, maxAgeMs: W, mode: 'union' });
+    }
+    let ids = readInjectedMarker(file, { sessionId: SID, maxAgeMs: W }).ids;
+    expect(ids, 'union dropped the newest instead of the oldest').toContain(`E${MAX_MARKER_IDS + 9}`);
+    expect(ids, 'union kept an id past the cap').not.toContain('E0');
+
+    mergeInjectedMarker(file, [7, 'P8'], { sessionId: SID, maxAgeMs: W, mode: 'replace' });
+    ids = readInjectedMarker(file, { sessionId: SID, maxAgeMs: W }).ids;
+    expect(ids.length).toBeLessThanOrEqual(MAX_MARKER_IDS);
+    expect(ids.slice(0, 2), "replace dropped the caller's own ids").toEqual([7, 'P8']);
   });
 });
 

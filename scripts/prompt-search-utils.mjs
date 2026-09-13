@@ -225,7 +225,7 @@ export function shouldSkipByDedup(newIds, injectedFile, sessionId) {
   if (!newIds || newIds.length === 0) return true;
   try {
     const raw = readFileSync(injectedFile, 'utf8');
-    const { ids: prevIds, ts, upsCount = 0, session } = JSON.parse(raw);
+    const { ids: prevIds, ts, upsCount = 0, upsTs = 0, session } = JSON.parse(raw);
     if (session && sessionId && session !== sessionId) return false;
     // R12 B-5, two defects on these two lines, and they had to be fixed together.
     //
@@ -239,8 +239,13 @@ export function shouldSkipByDedup(newIds, injectedFile, sessionId) {
     // ceiling the marker suppressed injection even after it went stale — and nothing
     // lowers it again, since the reset only happens on the next WRITE and the write never
     // comes. The only escape was a new session id.
+    // (3) The cap is judged on `upsTs`, the UPS face's OWN clock. `ts` moves on every
+    // writer's write, so judging the budget against it let another hook's activity keep a
+    // spent budget alive indefinitely — the same spender/charged mismatch as (1), arriving
+    // through the clock instead of the counter. A marker with no `upsTs` (anything written
+    // before this field existed) reads 0 and never caps, matching upsCount's default.
+    if (upsTs && Date.now() - upsTs <= DEDUP_STALE_MS && upsCount >= MAX_SESSION_INJECTIONS) return true;
     if (!ts || Date.now() - ts > DEDUP_STALE_MS) return false;
-    if (upsCount >= MAX_SESSION_INJECTIONS) return true;
     if (!Array.isArray(prevIds) || prevIds.length === 0) return false;
     // Normalize both sides to strings before comparing: UPS writes obs ids as numbers
     // (rows.map(r => r.id)) while pre-tool-recall's mergeCrossHookInjected writes them as

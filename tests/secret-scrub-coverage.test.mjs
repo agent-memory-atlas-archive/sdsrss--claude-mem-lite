@@ -5,7 +5,10 @@ import { scrubSecrets } from '../secret-scrub.mjs';
 import { stripPrivate } from '../lib/private-strip.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
 import { saveEvent } from '../lib/activity.mjs';
+import { insertDeferred } from '../lib/deferred-work.mjs';
 import { recallByFile } from '../lib/recall-core.mjs';
+import { scrubFilePath } from '../lib/scrub-record.mjs';
+import { basenameAnySep, fileMatchClause, fileMatchParams } from '../lib/file-edge-match.mjs';
 
 const SECRET = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const POISONED = `error from upstream: token=${SECRET} not found`;
@@ -282,6 +285,115 @@ describe('end-to-end leak check via in-memory DB', () => {
 // SHIPPING writers rather than a test replica — __insertObservationForTest
 // exists because an earlier leak test asserted on a hand-spelled copy of the
 // write point and drifted from it.
+// Pre-ship defect review of v6.8.2. Eight SECRET_PATTERNS use a value class that does
+// NOT exclude `/` (secret-scrub.mjs:33/74/78/83/98 `[^\s,;'"}\]]{6,}`, :109 `[^\s'"]{6,}`,
+// :259, :260). Correct on prose; on a PATH the match eats the separator and everything
+// after it, so `/repo/token=…/notes.mjs` was stored as `/repo/token=***` — the filename
+// destroyed at write time, irreversibly, and two different files under one such directory
+// collapsing to a single recall key.
+describe('scrubFilePath — a credential in one segment cannot eat the rest of the path', () => {
+  // The KV family, which is the one that truncates. The prefix-anchored family
+  // (`key-<32hex>`, `npm_…`, `ghp_…`) never did, because its value class has no `/`.
+  const KV_SHAPES = [
+    '/repo/api_key=sk_live_AbCdEf0123456789AbCd/notes.mjs',
+    '/repo/token=AbCdEf0123456789/notes.mjs',
+    '/home/u/build/password=hunter2correct/out.js',
+    'C:\\proj\\secret=AbCdEf0123456789\\out.js',
+  ];
+
+  it('keeps the basename when the credential is in a DIRECTORY segment', () => {
+    for (const p of KV_SHAPES) {
+      const out = scrubFilePath(p);
+      expect(out, `${p} still carries its credential`).not.toMatch(/=(?:sk_live_|AbCdEf|hunter2)/);
+      expect(basenameAnySep(out), `${p} lost its basename`).toBe(basenameAnySep(p));
+    }
+  });
+
+  it('keeps the segment COUNT, so two files in one directory stay distinct', () => {
+    const a = scrubFilePath('/repo/api_key=sk_live_AbCdEf0123456789AbCd/alpha.mjs');
+    const b = scrubFilePath('/repo/api_key=sk_live_AbCdEf0123456789AbCd/beta.mjs');
+    expect(a).not.toBe(b);
+    expect(a.split('/').length).toBe(4);
+  });
+
+  it('still redacts a credential that IS the basename', () => {
+    const out = scrubFilePath(`/repo/ghp_${'a'.repeat(36)}.mjs`);
+    expect(out).toBe('/repo/***.mjs');
+  });
+
+  it('leaves an ordinary path byte-identical, on either separator', () => {
+    expect(scrubFilePath('/repo/lib/file-edge-match.mjs')).toBe('/repo/lib/file-edge-match.mjs');
+    expect(scrubFilePath('C:\\proj\\src\\hook-memory.mjs')).toBe('C:\\proj\\src\\hook-memory.mjs');
+    expect(scrubFilePath('relative/path/x.mjs')).toBe('relative/path/x.mjs');
+    expect(scrubFilePath('bare.mjs')).toBe('bare.mjs');
+  });
+
+  // The other half of the pre-ship review's finding: the READER moved and the stored rows
+  // did not, so a pre-6.8.2 raw row and a raw on-disk query could stop deriving the same
+  // key. Segment-wise scrubbing is what keeps that to one shape instead of all of them.
+  it('a pre-6.8.2 raw row is still reachable unless its BASENAME is the credential', () => {
+    const db = createTestDb();
+    const shapes = [
+      ['dir-segment KV', '/repo/api_key=sk_live_AbCdEf0123456789AbCd/notes.mjs', true],
+      ['dir-segment prefix', `/repo/ghp_${'a'.repeat(36)}/notes.mjs`, true],
+      ['password= in a dir', '/home/u/build/password=hunter2correct/out.js', true],
+      ['ordinary path', '/repo/lib/file-edge-match.mjs', true],
+      ['basename credential', `/repo/ghp_${'a'.repeat(36)}.mjs`, false],
+    ];
+    // Stored RAW, exactly as every row written before this release is. FKs off: this case
+    // is about the match predicate, so the junction rows need no parent observations.
+    db.pragma('foreign_keys = OFF');
+    const ins = db.prepare('INSERT INTO observation_files (obs_id, filename) VALUES (?, ?)');
+    shapes.forEach(([, raw], i) => ins.run(i + 1, raw));
+    const q = db.prepare(`SELECT obs_id FROM observation_files WHERE ${fileMatchClause('')}`);
+    shapes.forEach(([label, raw, expected], i) => {
+      const hit = q.all(...fileMatchParams(raw)).some((r) => r.obs_id === i + 1);
+      expect(hit, `${label} (${raw}) reachability changed`).toBe(expected);
+    });
+    db.close();
+  });
+
+  it('is total: a non-string becomes the empty string rather than throwing', () => {
+    expect(scrubFilePath(undefined)).toBe('');
+    expect(scrubFilePath(null)).toBe('');
+    expect(scrubFilePath(42)).toBe('42');
+  });
+});
+
+// The SIXTH path column, found by the claims lens: `deferred_work.files` is agent-writable
+// on two live faces (MCP `mem_defer(files=…)`, CLI `defer add --files a.mjs,b.mjs`) and
+// insertDeferred stringified it raw beside a title scrubRecord had already cleaned — the
+// exact asymmetry this round is named after. lib/scrub-record.mjs's own header prescribes
+// the remedy for this column by name, which is the round's own thesis: a prescription in a
+// comment is not a mechanism.
+describe('deferred_work.files — the sixth path column', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  it('scrubs each element and leaves the column parseable', () => {
+    const { id } = insertDeferred(db, {
+      project: 'p1',
+      title: 'rotate token before release',
+      priority: 2,
+      detail: 'the detail',
+      files: [DIR_PATH, '/repo/clean.mjs'],
+    });
+    const row = db.prepare('SELECT files FROM deferred_work WHERE id = ?').get(id);
+    expect(row.files, 'deferred_work.files leaked the raw path').not.toContain(SECRET);
+    expect(JSON.parse(row.files), 'the column stopped being a parseable array').toEqual([
+      scrubFilePath(DIR_PATH),
+      '/repo/clean.mjs',
+    ]);
+  });
+
+  it('leaves a null files column null rather than turning it into []', () => {
+    const { id } = insertDeferred(db, { project: 'p1', title: 'no files here', priority: 2 });
+    expect(db.prepare('SELECT files FROM deferred_work WHERE id = ?').get(id).files).toBeNull();
+  });
+});
+
 describe('path columns — element-level pre-scrub (D#44)', () => {
   let db;
   beforeEach(() => {

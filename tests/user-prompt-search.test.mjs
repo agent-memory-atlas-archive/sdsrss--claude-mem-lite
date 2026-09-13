@@ -1711,7 +1711,12 @@ describe('result-dedup cooldown', () => {
     const injectedFile = join(testDir, '.claude-mem-injected-limit');
     // `upsCount`, not `count`: R12 B-5 moved the cap onto a counter only this face
     // charges, because the shared one is bumped by pre-tool-recall too.
-    writeFileSync(injectedFile, JSON.stringify({ ids: [99], ts: Date.now(), upsCount: 15 }));
+    // `upsCount` + `upsTs`, not `count`: the cap is charged to this face and judged on
+    // this face's own clock.
+    writeFileSync(
+      injectedFile,
+      JSON.stringify({ ids: [99], ts: Date.now(), upsCount: 15, upsTs: Date.now() }),
+    );
     expect(shouldSkipByDedup([1, 2, 3], injectedFile)).toBe(true);
   });
 
@@ -1882,6 +1887,7 @@ describe('user-prompt-search T3: BM25 threshold + prompt-length gate', () => {
 // approval prompts still get it.
 import * as psu from '../scripts/prompt-search-utils.mjs';
 import { insertDeferred, dropDeferred } from '../lib/deferred-work.mjs';
+import { injectedIdsFileName } from '../lib/injected-ids.mjs';
 
 describe('extractDeferredRefs (unit)', () => {
   it('extracts D#N ids, case-insensitive, deduped', () => {
@@ -1938,6 +1944,24 @@ describe('D#N deferred-detail injection (subprocess)', () => {
     expect(stdout).toContain('D#1');
     expect(stdout).toContain('env precheck step design');
     expect(stdout).toContain(DETAIL);
+  });
+
+  // Pre-ship defect review of v6.8.2, P3. This leg is GATED by shouldSkipByDedup, which
+  // reads MAX_SESSION_INJECTIONS. Before B-5 it also charged that gate, because the cap was
+  // the shared `count` this write bumps. Moving the cap to `upsCount` left the gated
+  // population {main leg, D#N leg} larger than the charged one {main leg} — a gate half
+  // wired to its own meter. FAILS IF the D#N write drops `bumpUpsCount`.
+  it('charges the injection cap it is gated by', async () => {
+    const { stdout } = await runScript({
+      prompt: 'D#1 批准，进 writing-plans，按定稿设计继续推进',
+      session_id: 'sess-defer-cap',
+    });
+    expect(stdout, 'premise: the deferred leg did not inject, so nothing could be charged').toContain(DETAIL);
+    const marker = join(testDir, 'runtime', injectedIdsFileName('test--project', 'sess-defer-cap'));
+    expect(existsSync(marker), 'the deferred leg wrote no marker at all').toBe(true);
+    const payload = JSON.parse(readFileSync(marker, 'utf8'));
+    expect(payload.upsCount, 'the deferred leg read the cap without charging it').toBeGreaterThanOrEqual(1);
+    expect(payload.upsTs, 'charged without stamping the clock the cap is judged on').toBeGreaterThan(0);
   });
 
   it('fires even below the normal prompt-length gate (deterministic path precedes shouldSkip)', async () => {

@@ -511,17 +511,28 @@ const MIN_LOCAL_OBS = 3;
  * written inline at BOTH consumer sites. The two row sets come from different windows
  * (obsPool's low-speed tier1 is 48h/imp>=1; the fallback query is 24h/imp>=1 OR
  * 7d/imp>=2) and neither contains the other, so a whole-set switch could hand back
- * FEWER rows than it was given — measured: 2 rows in the DB, both selected, and a
- * 0-byte context block, while the same fixture at 3 rows emitted 391 bytes. Output
- * was non-monotonic in corpus size, and the victims were exactly the thin/new projects
- * the 60-day tier exists to serve.
+ * FEWER rows than it was given — measured on tests/hook-context.test.mjs's own `thin(n)`
+ * fixture: 2 rows in the DB, both selected, and a 0-byte context block, against 241 bytes
+ * and 3 table rows at n=3. Output was non-monotonic in corpus size, and the victims were
+ * exactly the thin/new projects the 60-day tier exists to serve. (An earlier revision of
+ * this line said 391 bytes, carried over from the audit's own differently-seeded fixture
+ * rather than measured here.)
  *
  * Top-up, not truncate-to-three: the union never renders fewer rows than the old
- * expression did on any input (it only ever ADDS the selected rows back), which a
- * "fill to 3" fix would not hold — at 0 selected rows the fallback query's own LIMIT 5
- * already governs, and capping at 3 would have been a second, unrelated behaviour
- * change. Growth is bounded: the union only runs below MIN_LOCAL_OBS, so the table
- * gains at most two rows.
+ * expression did on any input, which a "fill to 3" fix would not hold — at 0 selected rows
+ * the fallback query's own LIMIT 5 already governs, and capping at 3 would have been a
+ * second, unrelated behaviour change. Growth is bounded: the union only runs below
+ * MIN_LOCAL_OBS, so the table gains at most two rows.
+ *
+ * The COUNT never shrinks; the composition can, and that is a ranking decision rather than
+ * an accident. At the uncapped table site this only adds. At the `.slice(0, MIN_LOCAL_OBS)`
+ * site the selected rows are PREPENDED, so with 1 local row and 3+ fallback rows the third
+ * fallback title is evicted — still three rows, one of them now local. Exhaustive
+ * enumeration over 42,436 ordered input pairs: 0 cases render fewer rows, 3,000 evict a
+ * fallback row that way, max gain 2. Preferring the project's own rows over cross-project
+ * ones inside a fixed window is the intended order, and saying so is the point: a new
+ * population entering a limit-bounded window without a stated ranking is this repo's
+ * recorded failure shape.
  */
 function withFallbackTopUp(observations, fallbackObs) {
   if (observations.length >= MIN_LOCAL_OBS) return observations;

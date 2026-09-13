@@ -798,6 +798,12 @@ async function main() {
             sessionId: hookData.session_id,
             maxAgeMs: DEDUP_STALE_MS,
             mode: 'union',
+            // This leg is GATED by shouldSkipByDedup, so it has to charge the cap it reads.
+            // Before B-5 it did, because the cap was the shared `count` this write bumps;
+            // moving the cap to `upsCount` left the gated population {main leg, D#N leg}
+            // larger than the charged population {main leg}. Same spender/charged mismatch
+            // B-5 fixed, on the sibling call site.
+            bumpUpsCount: true,
           });
         } catch {}
       }

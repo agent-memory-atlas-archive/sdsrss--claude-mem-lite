@@ -947,6 +947,9 @@ describe('Scenario 8: Deduplication — Repeated Injections', () => {
         // mean "the cap is reached"; it now means "something wrote 15 times", which is
         // exactly the state that must NOT suppress this face.
         upsCount: 15, // MAX_SESSION_INJECTIONS = 15
+        // And its own clock: the cap is judged on `upsTs`, so that a tool-heavy session
+        // cannot keep a spent budget alive by refreshing the shared `ts`.
+        upsTs: Date.now(),
       }),
     );
     expect(shouldSkipByDedup([10, 20, 30], tmpFile)).toBe(true);

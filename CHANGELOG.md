@@ -31,8 +31,9 @@ worth knowing:
    past your text and past the second begin — and replaces all of it. Measured: a
    "## Deployment runbook" section appended after adoption was gone after two further
    adopts, silently, both runs reporting success. Four damage shapes measured over 40
-   iterations each: two never return to one well-formed block, one converges at iteration 3
-   by destroying user text, one was already fine. The body may no longer contain another
+   iterations each, counting adopts after the damage: two never return to one well-formed
+   block, one converges on the SECOND such adopt by destroying user text, one was already
+   fine. The body may no longer contain another
    sentinel of the same slug, so a match is always exactly one block.
 
 2. **`unadopt` reported success over a file it had not cleaned.** With one sentinel missing

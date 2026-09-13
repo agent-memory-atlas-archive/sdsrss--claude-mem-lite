@@ -14,8 +14,9 @@
 //   [4] adopt  -> the regex matches begin1 …lazily… end2, which SPANS the
 //       user's text and begin2, and `raw.replace(m[0], section)` deletes it  STEP ONE: 0
 //
-// Four damage shapes measured. Two never return to one well-formed block, one converges at
-// iteration 3 by DESTROYING the user's text, and one was already fine:
+// Four damage shapes measured over 40 adopt iterations each, counting adopts AFTER the
+// damage. Two never return to one well-formed block, one converges on the SECOND such adopt
+// by DESTROYING the user's text, and one was already fine:
 //   end deleted        unadopt "absent" | adopt begin=2/end=1 | 2nd adopt DELETES user text
 //   begin deleted      unadopt "absent" | adopt begin=1/end=2 | never converges
 //   version tag broken unadopt "absent" | adopt begin=2/end=2 | never converges, block twice

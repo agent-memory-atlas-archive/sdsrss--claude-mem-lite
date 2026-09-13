@@ -893,6 +893,30 @@ describe('extractFilePaths', () => {
     expect(extractFilePaths({ filePath: '/src/baz.py' })).toEqual(['/src/baz.py']);
   });
 
+  // The fourth site of R12 B-2, found by the entity sweep its own "next round"
+  // note prescribed — that note named post-tool-recall.js and import-jsonl.mjs,
+  // and both were already fixed. This one it did not name.
+  //
+  // hooks.json matches PostToolUse on `Edit|Write|NotebookEdit`, and hook.mjs
+  // feeds that input straight to this function, whose result becomes the episode
+  // entry's `files` and from there the observation_files edges. `EDIT_TOOLS`
+  // already contains NotebookEdit, so the entry was recorded as SIGNIFICANT with
+  // an empty file list: a captured notebook edit that no file-keyed recall can
+  // reach. This function already knew three spellings and missed the fourth.
+  it('extracts notebook_path, the spelling NotebookEdit uses and Edit/Write never do', () => {
+    expect(
+      extractFilePaths({ notebook_path: '/src/nb.ipynb', cell_id: 'c1', new_source: 'import pandas' }),
+    ).toEqual(['/src/nb.ipynb']);
+  });
+
+  it('prefers file_path over notebook_path when a payload somehow carries both', () => {
+    // toolEditPath's documented precedence (`file_path ?? notebook_path`) — pinned
+    // here so this call site cannot drift from the home that owns the rule.
+    expect(extractFilePaths({ file_path: '/src/a.mjs', notebook_path: '/src/b.ipynb' })).toEqual([
+      '/src/a.mjs',
+    ]);
+  });
+
   it('extracts paths from Bash commands', () => {
     const result = extractFilePaths({ command: 'cat /etc/hosts && ls /home/user/project' });
     expect(result).toContain('/etc/hosts');

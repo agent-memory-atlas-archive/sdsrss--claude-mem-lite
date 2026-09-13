@@ -2,6 +2,13 @@
 // Extracted from utils.mjs for focused responsibility
 
 import { basename } from 'path';
+// One import into a module that had exactly one, and it buys the single home for
+// the file_path/notebook_path rule (lib/file-edge-match.mjs's own header: "a second
+// copy is exactly what produced R12 B-1"). No cycle: file-edge-match reaches only
+// project-utils + scrub-record -> secret-scrub -> private-strip, none of which
+// import this file. Cold-start scripts are unaffected — scripts/pre-tool-recall.js
+// deliberately imports nothing from the utils.mjs barrel that re-exports this.
+import { toolEditPath } from './lib/file-edge-match.mjs';
 
 // Read/search commands whose output legitimately contains "error"-like keywords without
 // being a failure. Matched against the PRIMARY command (see isReadOnlyCommand).
@@ -441,7 +448,16 @@ export function extractFilePaths(input) {
   // Direct fields (Edit/Write file_path) are kept unconditionally — an explicit edit to a
   // /tmp path is real work the user chose to make, unlike a /tmp path that merely appears as
   // a transient argument inside a Bash command (excluded as noise in the command branch below).
-  if (input.file_path) paths.push(input.file_path);
+  //
+  // `toolEditPath`, not a fourth hand-spelling of the same rule: this function knew
+  // file_path/path/filePath and not `notebook_path`, while hooks.json matches PostToolUse
+  // on `Edit|Write|NotebookEdit` and EDIT_TOOLS already counts NotebookEdit as significant.
+  // A notebook edit therefore produced a captured, significant episode entry carrying NO
+  // files, so the observation built from it got no observation_files edge and no file-keyed
+  // recall could reach it. Same root cause as R12 B-2; the fourth site, and the one its
+  // own follow-up note did not name.
+  const editedPath = toolEditPath(input);
+  if (editedPath) paths.push(editedPath);
   if (input.path) paths.push(input.path);
   if (input.filePath) paths.push(input.filePath);
   if (input.command) {

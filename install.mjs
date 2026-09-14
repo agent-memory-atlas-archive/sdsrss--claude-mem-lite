@@ -70,7 +70,7 @@ import {
   nativeBindingRepairHint,
   isNativeBindingError,
 } from './lib/binding-probe.mjs';
-import { detectInstallShape, probeRuntimeRoots } from './lib/install-shape.mjs';
+import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
@@ -2366,6 +2366,17 @@ async function doctor() {
   // was ever deployed there, so every entry reads as "missing" and this reported
   // `⚠ Managed files: 121 missing` + an issue on a correct install — prescribing
   // a repair against a path that does not exist.
+  // ...and a THIRD state under the same `!shape.managed`: nothing was ever deployed here.
+  // Both checks below otherwise prescribe `repair`, which re-syncs an install from the signed
+  // release and runs from `<INSTALL_DIR>/cli.mjs` — one of the very entry points whose absence
+  // produced the verdict, so on this shape it hands the reader a command that cannot start.
+  // Damaged (some entry points survive) and never-deployed (none do) are different populations
+  // with opposite commands, the same conflation the plugin-only branch above fixed once already.
+  // `some` vs `every` is the whole discriminator, and both live on one list in
+  // lib/install-shape.mjs so they cannot drift apart. Declared out here because the hook-script
+  // check needs it too and a `const` inside the try below is not in scope there.
+  const noCodeInstall = !shape.managed && !shape.activePluginVersion && !hasAnyManagedCode(INSTALL_DIR);
+  const installRemedy = `node ${join(PROJECT_DIR, 'install.mjs')} install`;
   try {
     const skipDrift = !shape.managed && !!shape.activePluginVersion;
     const { checkDevDrift } = await import('./lib/doctor-drift.mjs');
@@ -2436,9 +2447,13 @@ async function doctor() {
       // self-updater is `self-update`. Naming the wrong one sent the user to a
       // usage error at the exact moment their install was incomplete.
       issueWarn(
-        `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
-          `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
-          `(or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`,
+        noCodeInstall
+          ? `Managed files: no claude-mem-lite code is deployed in ${INSTALL_DIR} (${r.missingCount} ` +
+              `file(s) absent, none present) — this is a data directory with no install behind it, not ` +
+              `a damaged one. Fix: ${installRemedy}`
+          : `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
+              `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
+              `(or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`,
       );
     }
     // Complete copy install: no message — drift is a dev-install concern.
@@ -2462,7 +2477,11 @@ async function doctor() {
     // missing files, and install.mjs is the one entry that cannot survive that —
     // its static imports resolve before its first statement. cli.mjs has no static
     // local imports and catches the failure (D#26). Same route, same command.
-    const scriptRemedy = `claude-mem-lite self-update (or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`;
+    // Never-deployed gets the install command instead, for the reason spelled out at
+    // `noCodeInstall` above: the `repair` route runs from an entry point that is itself absent.
+    const scriptRemedy = noCodeInstall
+      ? installRemedy
+      : `claude-mem-lite self-update (or: node ${join(INSTALL_DIR, 'cli.mjs')} repair)`;
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
     } else if (!h.present) {

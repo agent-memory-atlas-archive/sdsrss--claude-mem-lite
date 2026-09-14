@@ -13,11 +13,16 @@ import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // The pinned-but-uncited threshold, from the module that OWNS the rule (`demotePinned` and
-// its forecast both read it there). Imported rather than restated: two hand-typed copies of
-// this number is how the v3.76.0 scan-vs-execute drift happened one file over. The edge is
-// cheap — `lib/maintain-core.mjs` pulls only `utils.mjs`, `lib/dedup-constants.mjs` and
-// `lib/inject-search-core.mjs`, two of which this module already imports, and none of them
-// reaches a native dependency or back to this file.
+// its forecast both read it there). Imported rather than restated: a second hand-typed copy
+// of this number is exactly what produced the `inj>=8` report-string drift in server.mjs.
+// (The v3.76.0 scan-vs-execute drift was a different constant — two copies of the FLOOR,
+// `importance > 1`; do not cite it for this one.) The edge is cheap: `lib/maintain-core.mjs`
+// has five direct imports — `utils.mjs`, `lib/dedup-constants.mjs`,
+// `lib/inject-search-core.mjs`, `lib/time-constants.mjs` and `lib/db-backup.mjs` — three of
+// which this module already imports directly, and the 16-file closure resolves to nothing
+// but node builtins (`fs`, `path`, `child_process`, `node:os`, `node:path`) — no
+// third-party package, so no native dependency, and no edge back to this file (the three
+// "search-scoring" strings in that graph are all comments).
 import { PINNED_INJ_THRESHOLD } from './lib/maintain-core.mjs';
 // ─── MCP Server Instructions Builder ───────────────────────────────────────
 // Phase A (v2.31.3+): when quiet=true, drops WHEN-TO-USE proactive-trigger and
@@ -311,18 +316,23 @@ export function expandQueryByConcepts(db, ftsQuery, project) {
  * (access_count >= 2) but still have default importance (1).
  * Called after incrementing access_count in mem_get.
  *
- * THE THIRD PROMOTER. `lib/maintain-core.mjs`'s DEFAULT_MAINTAIN_OPS docblock records that
- * `boostAccessed` and `demotePinned` are opponents, and that the automatic path "promoted
- * and never demoted" until the two were ordered demote-last — measured there at 148/148
- * rows sitting back at importance>=3 after citation-decay had demoted them. That fix
- * ordered the ops INSIDE a maintenance run. This function is a promoter OUTSIDE one: it
- * fires from `fetchObsDetail`, so every `get` / `mem_get` is another chance to hand the row
- * straight back, which is the same sentence that docblock uses for the bug it closed.
+ * A PROMOTER OUTSIDE THE MAINTENANCE RUN. `lib/maintain-core.mjs`'s DEFAULT_MAINTAIN_OPS
+ * docblock records `boostAccessed` and `demotePinned` as opponents, and names TWO separate
+ * defects it closed — keep them apart: the automatic path promoted and never demoted
+ * because `demote_pinned` was in nobody's default set and hook.mjs did not import it, while
+ * the two faces that DID wire the op ran it in opposite orders. The 148/148 figure quoted
+ * there is rows sitting back at importance>=3 that were BOOST-ELIGIBLE, not rows this op
+ * would have moved — CHANGELOG.md narrows the reachable-by-demotePinned count to 7.
+ *
+ * Both of those fixes act INSIDE a maintenance run. This function fires from
+ * `fetchObsDetail`, so it is a promoter neither a default-set nor an ordering fix can reach:
+ * every `get` / `mem_get` was another chance to hand the row straight back — the same
+ * sentence that docblock uses for the bug it closed.
  *
  * Reproduced end-to-end before this clause: `maintain execute --ops demote_pinned` floors a
- * pinned-but-uncited row 2 -> 1, and ONE subsequent `get` returns it to 2. So the op that
- * CLAUDE.md lists in the default maintain set had an effect any read reverted, on its own
- * target population.
+ * pinned-but-uncited row 2 -> 1, and ONE subsequent `get` returned it to 2. So an op in the
+ * default maintain set (`lib/maintain-core.mjs` DEFAULT_MAINTAIN_OPS) had an effect any read
+ * reverted, on its own target population.
  *
  * Population, stated rather than implied (doctrine rule 3): on the maintainer's DB sampled
  * 2026-09-14T20:14:16Z, 67 live rows, 3 pinned-but-uncited, and 0 of those had reached
@@ -334,10 +344,27 @@ export function expandQueryByConcepts(db, ftsQuery, project) {
  * `claude-mem-lite update N --importance 1` writes, and that demotion is reverted by the
  * next read exactly the same way — worse, INSPECTING the row is what pushes access_count to
  * 2 in the first place. Separating "1 because nobody set it" from "1 because a human said
- * so" needs a marker this schema does not have, and `demoted_at` is not it: that column is
- * the citation-decay loop's, stamped on uncited-streak rollover and cleared on citation
- * (lib/citation-tracker.mjs:1593,1621), so writing it here would evict rows from the pool
- * keyed on its emptiness. Left as a design decision rather than patched around.
+ * so" needs a marker this schema does not have, and `demoted_at` is not it — for a reason
+ * the first draft of this paragraph got wrong, so it is stated precisely: nothing keys on
+ * `demoted_at IS NULL` (the sole non-test reader, `mem-cli.mjs`'s decay-queue report, keys
+ * on IS NOT NULL), so a write here would not evict anything — it would ADD the row to that
+ * report, and `applyCitationDecay` CLEARS the column on the row's first citation, silently
+ * discarding a human's demotion. Wrong owner, wrong lifetime. Left as a design decision
+ * rather than patched around.
+ *
+ * THE EXCLUSION IS demotePinned's FLOOR, NOT ITS TRIGGER. `PINNED_FLOOR_SQL` in
+ * lib/maintain-core.mjs is `CASE WHEN <no lesson> THEN 1 ELSE 2 END`, so a LESSON-BEARING
+ * pinned row is floored at 2 and boosting it 1 -> 2 lands it exactly on that floor. The
+ * first cut of this clause copied the trigger (`inj >= N AND cited = 0`) without the floor
+ * and stranded those rows at 1, below the bound maintain-core declares for them — and 16 of
+ * the 17 rows that op would have moved on the maintainer's DB were lesson-bearing. The
+ * predicate below must keep selecting exactly the rows demotePinned would floor to 1.
+ *
+ * The no-lesson clause is COPIED rather than imported: `NO_LESSON_SQL` and `PINNED_FLOOR_SQL`
+ * are module-private in maintain-core by an explicit decision recorded there ("exporting by
+ * habit is how the knip baseline drifts"), and five verbatim copies already live in that
+ * file. The prose stays out here in the docblock rather than inside the SQL string, because
+ * a backtick in a template literal ends it — that cost one parse error on this very edit.
  *
  * @param {object} db better-sqlite3 database handle
  * @param {number[]} ids Array of observation IDs to check
@@ -351,9 +378,11 @@ export function autoBoostIfNeeded(db, ids) {
     WHERE id IN (${placeholders})
       AND COALESCE(importance, 1) = 1
       AND COALESCE(access_count, 0) >= 2
+      -- Exactly the rows demotePinned would floor to 1 (see the docblock above).
       AND NOT (
         COALESCE(injection_count, 0) >= ${PINNED_INJ_THRESHOLD}
         AND COALESCE(cited_count, 0) = 0
+        AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
       )
   `,
   ).run(...ids);

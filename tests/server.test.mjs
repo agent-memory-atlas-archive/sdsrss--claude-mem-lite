@@ -1600,6 +1600,52 @@ describe('auto-boost on access', () => {
     expect(row.importance).toBe(1);
   });
 
+  it('holds at the threshold itself, not one above it', () => {
+    // Both arms around this one used PINNED_INJ_THRESHOLD + 1, so `>=` -> `>` mutated GREEN
+    // across the whole suite — injection_count == the threshold was untested, and it is
+    // exactly the value demotePinned acts on (`>= PINNED_INJ_THRESHOLD`). Found by the
+    // pre-ship defect lens.
+    insertSession(db, { id: 'sess-boundary', project: 'test' });
+    const result = insertObs(db, {
+      sessionId: 'sess-boundary',
+      title: 'injected exactly at the threshold, never cited',
+      importance: 1,
+      accessCount: 5,
+    });
+    const id = Number(result.lastInsertRowid);
+    db.prepare('UPDATE observations SET injection_count = ?, cited_count = 0 WHERE id = ?').run(
+      PINNED_INJ_THRESHOLD,
+      id,
+    );
+
+    autoBoostIfNeeded(db, [id]);
+
+    expect(db.prepare('SELECT importance FROM observations WHERE id = ?').get(id).importance).toBe(1);
+  });
+
+  it('still boosts a LESSON-BEARING pinned row, whose demotePinned floor is 2', () => {
+    // `PINNED_FLOOR_SQL` is `CASE WHEN <no lesson> THEN 1 ELSE 2 END`, so a lesson-bearing
+    // pinned row is floored at 2 — blocking its boost would strand it at 1, BELOW the bound
+    // maintain-core declares for it. The first cut of the exclusion copied demotePinned's
+    // trigger without its floor and did exactly that; 16 of the 17 rows that op would have
+    // moved on the maintainer's DB were lesson-bearing.
+    insertSession(db, { id: 'sess-lesson-pinned', project: 'test' });
+    const result = insertObs(db, {
+      sessionId: 'sess-lesson-pinned',
+      title: 'pinned and uncited, but it teaches something',
+      importance: 1,
+      accessCount: 5,
+    });
+    const id = Number(result.lastInsertRowid);
+    db.prepare(
+      'UPDATE observations SET injection_count = ?, cited_count = 0, lesson_learned = ? WHERE id = ?',
+    ).run(PINNED_INJ_THRESHOLD + 1, 'FTS5 triggers fire on ANY column UPDATE', id);
+
+    autoBoostIfNeeded(db, [id]);
+
+    expect(db.prepare('SELECT importance FROM observations WHERE id = ?').get(id).importance).toBe(2);
+  });
+
   it('still boosts a heavily-injected row that HAS been cited', () => {
     // The paired arm: the guard keys on "injected a lot AND never cited", so a cited row must
     // stay boostable. Without this, narrowing the exclusion to `injection_count >= N` alone —

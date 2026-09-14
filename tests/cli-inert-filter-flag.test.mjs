@@ -154,6 +154,22 @@ describe('a selection flag the command never reads is reported', () => {
     expect(r.stderr, `stderr was:\n${r.stderr}`).toMatch(/--all/);
   });
 
+  it('stays quiet for a command that parses its own raw argv', () => {
+    // The false alarm this batch shipped and then fixed. `unadopt --all` is documented in
+    // adopt-cli.mjs's own header and implemented by unadoptAll(), but adopt/unadopt receive
+    // the raw `cmdArgs` array and never touch the object parseArgs returns — so read-tracking
+    // cannot see the flag being consumed and reported a working flag as ignored. Blindness
+    // must present as silence. Same class as `prompts-limit`, which FILTER_FLAGS excludes by
+    // name; this is the per-COMMAND half of that rule.
+    const r = cli(['unadopt', '--all', '--dry-run']);
+    expect(r.stderr, `stderr was:\n${r.stderr}`).not.toMatch(/ignored|UNFILTERED/);
+  });
+
+  it('stays quiet for doctor, which selects its mode off raw argv', () => {
+    const r = cli(['doctor', '--metrics']);
+    expect(r.stderr, `stderr was:\n${r.stderr}`).not.toMatch(/ignored|UNFILTERED/);
+  });
+
   it('stays quiet for an inclusion toggle the command DOES read', () => {
     // Control for the case above, on the same flag family: search consumes --include-noise.
     const r = cli(['search', 'row', '--include-noise']);

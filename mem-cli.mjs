@@ -3612,6 +3612,15 @@ import { cmdActivity } from './cli/activity.mjs';
 import { DAY_MS } from './lib/time-constants.mjs';
 // ─── Main Entry Point ────────────────────────────────────────────────────────
 
+/**
+ * Commands that read their own raw argv instead of the object parseArgs returns, so the
+ * inert-flag notice below has no way to observe a flag being consumed and must stay quiet.
+ * `adopt` / `unadopt` hand `cmdArgs` straight to adopt-cli.mjs; `doctor` selects its mode
+ * with `args.includes('--x')`. Adding a command here is the per-command twin of leaving a
+ * flag out of FILTER_FLAGS.
+ */
+const ARGV_PARSED_COMMANDS = new Set(['adopt', 'unadopt', 'doctor']);
+
 export async function run(argv) {
   // The inert-selection-flag notice is emitted HERE rather than inside the dispatcher because
   // `runDispatch` returns from a dozen places (adopt / unadopt / memdir-audit before the DB is
@@ -3622,13 +3631,22 @@ export async function run(argv) {
   try {
     return await runDispatch(argv);
   } finally {
+    // Silent for commands that never hand their flags to parseArgs. `adopt` / `unadopt` pass
+    // raw `cmdArgs` straight to adopt-cli.mjs, which reads the array itself, and `doctor`
+    // selects its mode with `args.includes('--x')` — so read-tracking cannot see a flag being
+    // consumed there and would call a documented, working flag inert. `unadopt --all` is
+    // exactly that: adopt-cli.mjs's own header documents it and `unadoptAll()` implements it,
+    // and the first version of this notice reported it as ignored. Same class as
+    // `prompts-limit`, which FILTER_FLAGS excludes by name for the same reason — this is the
+    // per-COMMAND half of that rule. Blindness must present as silence, never as a warning.
+    const argvParsed = ARGV_PARSED_COMMANDS.has(argv[0]);
     // Only when the command SUCCEEDED. The notice is about an answer that is wider than the
     // one asked for; a command that failed has no answer for it to qualify, and saying "the
     // results above are UNFILTERED" under an error message describes results that do not
     // exist. Found by sweeping correct usage for false alarms: `activity search --limit 3`
     // (no query) fails its own usage check BEFORE anything reads `flags.limit`, so the flag
     // is genuinely unread and the notice was genuinely wrong. The error IS the feedback there.
-    const inert = process.exitCode ? [] : inertFilterFlags();
+    const inert = process.exitCode || argvParsed ? [] : inertFilterFlags();
     // stderr only: stdout is a data channel (`search --json | jq`, and commands/mem.md pipes
     // these outputs into model context), so the notice must not enter it. Exit code untouched —
     // the command did run, and its answer is real, just wider than the user asked for.

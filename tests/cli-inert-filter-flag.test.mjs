@@ -97,6 +97,16 @@ describe('FILTER_FLAGS is a subset of the catalogued flags', () => {
     expect(FILTER_FLAGS.size).toBeGreaterThan(5);
   });
 
+  it('covers the inclusion toggles, whose harm runs the other way', () => {
+    // These widen or narrow the SET rather than filter within it, and an ignored
+    // `--include-noise` hands back FEWER rows than the user asked for. "I searched and it was
+    // not there" is the worst answer a memory tool can give, so silence costs more here than
+    // on a narrowing filter, not less.
+    for (const f of ['include-noise', 'include-compressed', 'deep', 'no-deep', 'or', 'rerank', 'all']) {
+      expect(FILTER_FLAGS.has(f), `${f} is not covered`).toBe(true);
+    }
+  });
+
   it('excludes flags that are read off raw argv instead of the flags object', () => {
     // `doctor --benchmark --prompts-limit N` is parsed straight out of process.argv in
     // cli/doctor.mjs and never touches a flags object, so read-tracking cannot see it being
@@ -132,6 +142,23 @@ describe('a selection flag the command never reads is reported', () => {
   it('citation-stats --project warns', () => {
     const r = cli(['citation-stats', '--project', 'no-such-project']);
     expect(r.stderr, `stderr was:\n${r.stderr}`).toMatch(/--project/);
+  });
+
+  it('reports an inclusion toggle the command does not read', () => {
+    // `--all` is real, and belongs to `memdir-audit` (_resolveMemdirsForAudit). `defer list`
+    // never reads it, so a user asking for the full deferred list silently gets the default
+    // page. Found by the correct-usage sweep for this batch — the sweep line was the mistake,
+    // not the product, and the warning it produced was right.
+    const r = cli(['defer', 'list', '--all']);
+    expect(r.status, `defer list should succeed:\n${r.stderr}`).toBe(0);
+    expect(r.stderr, `stderr was:\n${r.stderr}`).toMatch(/--all/);
+  });
+
+  it('stays quiet for an inclusion toggle the command DOES read', () => {
+    // Control for the case above, on the same flag family: search consumes --include-noise.
+    const r = cli(['search', 'row', '--include-noise']);
+    expect(r.status, `search should succeed:\n${r.stderr}`).toBe(0);
+    expect(r.stderr, `stderr was:\n${r.stderr}`).not.toMatch(/had no effect|unfiltered/i);
   });
 
   it('names every inert flag, not just the first', () => {

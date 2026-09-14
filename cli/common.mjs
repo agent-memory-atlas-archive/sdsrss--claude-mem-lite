@@ -126,6 +126,19 @@ export const FILTER_FLAGS = new Set([
   'sort',
   'days',
   'age-days',
+  // Inclusion toggles, added after the same correct-usage sweep the first batch passed. They
+  // widen or narrow the SET rather than filter within it, and the harm runs the other way:
+  // an ignored `--include-noise` hands back FEWER rows than asked for, and "I searched and it
+  // was not there" is the worst answer a memory tool can give. Held back at first only
+  // because booleans are read inside branches and were the likelier false-alarm shape; the
+  // exit-code gate below turned out to cover that class, and the sweep reads zero.
+  'all',
+  'include-noise',
+  'include-compressed',
+  'deep',
+  'no-deep',
+  'or',
+  'rerank',
 ]);
 
 let suppliedFlags = new Set();

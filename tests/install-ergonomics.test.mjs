@@ -442,9 +442,17 @@ describe('doctor surfaces orphan hooks (v2.79)', () => {
 // The fixture pins PATH to one EMPTY directory rather than filtering the inherited one: the
 // check's whole question is "does this bare name resolve", and a maintainer with a global
 // `npm i -g claude-mem-lite` would otherwise land in the ✓ branch and make every assertion
-// below vacuous on exactly one machine. Nothing else in `status` needs PATH — the `claude`
-// and `npm` lookups it also makes are already inside try/catch and degrade to their own ⚠.
+// below vacuous on exactly one machine. The only other command `status` shells out to is
+// `claude` (for `mcp list`), already inside a try/catch that degrades to its own ⚠.
+//
+// PATH is controllable; `/usr/local/bin` is not. `CLI_BIN_DIRS[1]` is absolute, so a machine
+// that really has `/usr/local/bin/claude-mem-lite` would push the "no symlink anywhere" arms
+// into the linked branch and fail them for a reason that is not a regression. Rather than
+// leave that as a silent machine-dependency — the pre-ship reviewer found these two arms
+// passing here only by accident of this host — each such arm asserts the premise first, so
+// the failure says WHICH assumption broke instead of pointing at the code under test.
 describe('status distinguishes "no symlink" from "symlink off PATH"', () => {
+  const GLOBAL_BIN_CLI = '/usr/local/bin/claude-mem-lite';
   function runStatus(home) {
     const emptyBin = join(home, 'empty-bin');
     mkdirSync(emptyBin, { recursive: true });
@@ -482,6 +490,9 @@ describe('status distinguishes "no symlink" from "symlink off PATH"', () => {
   });
 
   it('keeps the reinstall remedy when no symlink exists anywhere', () => {
+    // Premise, not decoration: this arm is only about the empty case if BOTH bin dirs are
+    // empty, and only one of them is under the sandboxed HOME.
+    expect(existsSync(GLOBAL_BIN_CLI)).toBe(false);
     const home = makeTmpDir();
     try {
       const output = runStatus(home);
@@ -492,7 +503,60 @@ describe('status distinguishes "no symlink" from "symlink off PATH"', () => {
     }
   });
 
+  it('reports the failure itself, not PATH, when the command is on PATH but fails', () => {
+    // The non-ENOENT branch. It had zero coverage on its first cut — rewriting it to push
+    // 'ok' left the whole suite at baseline — yet it is reachable: a shim that exits
+    // non-zero is the same shape as the live case, a CLI whose native binding will not
+    // load. What this pins is the BRANCH CHOICE: neither PATH remedy may appear. The
+    // child's stderr assertion rides along because `e.message` already carries it
+    // ("Command failed: <cmd>\n<stderr>" under stdio:'pipe') — measured, after a redundant
+    // `e.stderr` suffix was written on a review finding and then withdrawn.
+    const home = makeTmpDir();
+    try {
+      const shimDir = join(home, 'shim');
+      mkdirSync(shimDir, { recursive: true });
+      const shim = join(shimDir, 'claude-mem-lite');
+      writeFileSync(shim, '#!/bin/sh\necho "native binding did not load" >&2\nexit 1\n');
+      execFileSync('chmod', ['+x', shim]);
+
+      const output = execFileSync(process.execPath, [INSTALL_PATH, 'status'], {
+        encoding: 'utf8',
+        env: envWithoutPluginRoot({
+          HOME: home,
+          PATH: shimDir,
+          CLAUDE_MEM_DIR: join(home, '.claude-mem-lite'),
+          MEM_NO_AUTO_ADOPT: '1',
+        }),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      expect(output).toContain('on PATH but "claude-mem-lite --help" failed');
+      expect(output).toContain('native binding did not load');
+      expect(output).not.toContain('is not on PATH — add it');
+      expect(output).not.toContain('run install again to create symlink');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a DIRECTORY of that name as absent, not as an off-PATH install', () => {
+    // `existsSync` is true for a directory, which would make status print "installed at …
+    // add it to PATH" about something that can never be executed — the same
+    // cannot-converge advice the whole split exists to remove, one shape over.
+    expect(existsSync(GLOBAL_BIN_CLI)).toBe(false);
+    const home = makeTmpDir();
+    try {
+      mkdirSync(join(home, '.local', 'bin', 'claude-mem-lite'), { recursive: true });
+      const output = runStatus(home);
+      expect(output).toContain('run install again to create symlink');
+      expect(output).not.toContain('is not on PATH — add it');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('treats a DANGLING symlink as absent, not as an off-PATH install', () => {
+    expect(existsSync(GLOBAL_BIN_CLI)).toBe(false);
     // existsSync follows the link, so a link whose target was deleted reads as missing —
     // which is the answer we want: that is the installer's problem, not PATH's. Measured
     // rather than assumed; the branch is one `existsSync` away from claiming a deleted

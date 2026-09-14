@@ -1677,20 +1677,42 @@ async function status() {
   // symlink question applies to. Anything else means the command WAS found and then failed
   // or timed out (a broken native binding is the live example), where naming PATH is a
   // second wrong answer — report what actually happened instead.
+  // `linked` is a NEW field on this check, and `--json` republishes every extra key
+  // (`const { level, key, message, ...extra }` below), so it is part of that face's output,
+  // not an internal detail. Nothing in this repo reads it; external consumers of
+  // `status --json` now see `linked: <path>|null`.
   try {
     execFileSync('claude-mem-lite', ['--help'], { encoding: 'utf8', timeout: 5000, stdio: 'pipe' });
     push('ok', 'cli', 'CLI: claude-mem-lite command available', { available: true });
   } catch (e) {
     if (e && e.code !== 'ENOENT') {
+      // `e.message` already CARRIES the child's stderr — with stdio:'pipe' Node formats it
+      // as "Command failed: <cmd>\n<stderr>", so the live example (a broken native binding,
+      // whose `nativeBindingRepairHint` line is on stderr) reaches the user unaided.
+      // Measured, because pre-ship review asserted the opposite and a redundant `e.stderr`
+      // suffix was written and then withdrawn: printing both duplicates the text.
+      // Note `e.code` is UNDEFINED for a non-zero exit — only a spawn failure sets ENOENT —
+      // so `!== 'ENOENT'` is what routes this branch, not a truthiness check on the code.
       push('warn', 'cli', `CLI: on PATH but "claude-mem-lite --help" failed — ${e.message}`, {
         available: false,
         linked: null,
       });
     } else {
-      // existsSync FOLLOWS the link, so a dangling one reads as absent — which is the
-      // answer we want: a link pointing at a deleted install is the installer's problem,
-      // not PATH's, and falls through to the reinstall remedy.
-      const binDir = CLI_BIN_DIRS.find((d) => existsSync(join(d, 'claude-mem-lite')));
+      // Two properties of `existsSync` matter here and they pull in opposite directions:
+      //   - it FOLLOWS the link, so a DANGLING one reads as absent. That is the answer we
+      //     want: a link pointing at a deleted install is the installer's problem, not
+      //     PATH's, and falls through to the reinstall remedy.
+      //   - it is also true for a DIRECTORY of that name, which would make us print
+      //     "installed at … add it to PATH" about something that can never be executed —
+      //     the exact non-converging advice this block exists to stop. Hence isFile().
+      const isLinkedCli = (d) => {
+        try {
+          return statSync(join(d, 'claude-mem-lite')).isFile();
+        } catch {
+          return false; // ENOENT (absent or dangling), EACCES on the dir, anything else
+        }
+      };
+      const binDir = CLI_BIN_DIRS.find(isLinkedCli);
       if (binDir) {
         push(
           'warn',

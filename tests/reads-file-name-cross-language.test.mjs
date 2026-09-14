@@ -29,9 +29,12 @@
 // rounds. Both shipped languages are named explicitly here rather than swept.
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveDataDir, resolveRuntimeDir } from '../lib/resolve-data-dir.mjs';
 
 // D#207: join(), never new URL('../x.mjs', import.meta.url).
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -89,6 +92,65 @@ describe('the reads-file name means the same thing in bash and in Node', () => {
         'spellings are the whole contract: when they diverge the reader goes silent AND the ' +
         'written file is never collected. Change both, or neither.',
     ).toEqual({ prefix: bash.prefix, suffix: bash.suffix });
+  });
+
+  // The NAME is only half the contract. A guard that pinned the name alone passed while the
+  // two sides disagreed about the DIRECTORY — which is the same defect in a different
+  // coordinate, and produces exactly the two harms quoted at the top of this file. So the
+  // directory is checked behaviourally: run the real bash hook, then ask the Node resolver
+  // where it would look. No restatement of the rule sits between the two.
+  describe('and the two sides put it in the same DIRECTORY', () => {
+    /** Runs the shipped bash prefilter on a Read event; returns where the file landed. */
+    function writeAndLocate(extraEnv) {
+      const root = mkdtempSync(join(tmpdir(), 'reads-dir-'));
+      try {
+        const home = join(root, 'home');
+        const data = join(root, 'data');
+        const proj = join(root, 'proj');
+        for (const d of [home, data, proj]) mkdirSync(d, { recursive: true });
+        const env = { ...process.env };
+        for (const k of Object.keys(env)) if (/^CLAUDE_MEM_/.test(k)) delete env[k];
+        const full = { ...env, HOME: home, CLAUDE_MEM_DIR: data, CLAUDE_PROJECT_DIR: proj, ...extraEnv };
+        const r = spawnSync('bash', [join(REPO, 'scripts/post-tool-use.sh')], {
+          input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '/x/y/z.mjs' } }),
+          env: full,
+          encoding: 'utf8',
+          timeout: 30000,
+        });
+        expect(r.status, `prefilter exited ${r.status}: ${r.stderr}`).toBe(0);
+        // Where Node would look, asked of the resolver the hooks themselves use.
+        const nodeDir = resolveRuntimeDir(resolveDataDir(full.CLAUDE_MEM_DIR), full);
+        const wrote = (dir) =>
+          existsSync(dir) ? readdirSync(dir).filter((f) => f.startsWith('reads-')) : [];
+        return { nodeDir, inNodeDir: wrote(nodeDir), inDataRuntime: wrote(join(data, 'runtime')) };
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+
+    it('premise: with no override the prefilter really does write a reads- file', () => {
+      // Without this the override case below could pass by the hook writing nothing at all.
+      const r = writeAndLocate({});
+      expect(r.inNodeDir, 'the bash prefilter wrote no reads- file on the default path').toHaveLength(1);
+    });
+
+    it('honours CLAUDE_MEM_RUNTIME_DIR, which is the directory Node reads', () => {
+      const rt = mkdtempSync(join(tmpdir(), 'reads-rt-'));
+      try {
+        const r = writeAndLocate({ CLAUDE_MEM_RUNTIME_DIR: rt });
+        expect(r.nodeDir).toBe(rt); // the resolver, not my restatement of it
+        expect(
+          r.inNodeDir,
+          `bash wrote to ${r.inDataRuntime.length ? join('<data>', 'runtime') : 'nowhere'} while ` +
+            `hook.mjs reads ${r.nodeDir}. resolveRuntimeDir() honours CLAUDE_MEM_RUNTIME_DIR and ` +
+            'the bash side must mirror it: otherwise every Read is dropped from the episode AND ' +
+            "the file lands outside the reaper's directory, so it grows forever.",
+        ).toHaveLength(1);
+        expect(r.inDataRuntime, 'the file was also written to the un-overridden default').toHaveLength(0);
+      } finally {
+        rmSync(rt, { recursive: true, force: true });
+      }
+    });
   });
 
   it('the reaper matches what the writer produces', () => {

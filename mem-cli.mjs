@@ -283,12 +283,13 @@ async function cmdSearch(db, args, { llm } = {}) {
   // Haiku call + N hybrid searches; observations-only. NOT the passive path — this
   // is the explicit "search harder" lever for vocabulary-mismatch recall misses.
   // --deep forces deep; --no-deep forces normal; neither = unset (env/default decide).
-  const explicitDeep =
-    flags.deep === true || flags.deep === 'true'
-      ? true
-      : flags['no-deep'] === true || flags['no-deep'] === 'true'
-        ? false
-        : undefined;
+  // Both are read before the precedence contest, deliberately. The ternary short-circuited,
+  // so `search --deep --no-deep` never touched `flags['no-deep']` and the inert-flag notice
+  // called it a flag `search` "does not filter on" with "results above are UNFILTERED" — both
+  // false. A flag that LOST a precedence contest was read; it just did not win.
+  const wantsDeep = flags.deep === true || flags.deep === 'true';
+  const wantsNoDeep = flags['no-deep'] === true || flags['no-deep'] === 'true';
+  const explicitDeep = wantsDeep ? true : wantsNoDeep ? false : undefined;
   const deepMode = resolveDeepMode(explicitDeep, { surface: 'cli' });
 
   // --rerank: opt-in LLM rerank of the fused top-20 (option C, deep-search.mjs).

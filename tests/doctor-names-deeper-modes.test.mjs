@@ -81,6 +81,19 @@ describe('plain doctor tells the user the deeper modes exist', () => {
     ).toBeNull();
   });
 
+  it('prints the modes as a list, not as something a shell would run', () => {
+    // The first draft printed `claude-mem-lite doctor --benchmark | --metrics |
+    // --session-audit`. A line shaped like a command gets copy-pasted, and `|` is a pipe:
+    //     $ claude-mem-lite doctor --benchmark | --metrics | --session-audit
+    //     bash: --metrics: command not found
+    // Which is the defect 32c8923 fixed one commit earlier in this same branch — a remedy
+    // naming something that cannot run — coming back in a different spelling.
+    const r = runDoctor();
+    const line = r.stdout.split('\n').find((l) => l.includes('Deeper checks'));
+    expect(line, `no "Deeper checks" line in:\n${r.stdout}`).toBeTruthy();
+    expect(line, `this line is shell-pipe shaped: ${line}`).not.toMatch(/\|/);
+  });
+
   it('still exits non-zero when there are real issues', () => {
     // The pointer is a line of prose; it must not touch the exit-code contract that
     // `claude-mem-lite doctor || alert` depends on.

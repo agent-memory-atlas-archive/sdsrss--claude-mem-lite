@@ -2704,7 +2704,11 @@ async function doctor() {
     // install with bad retrieval read "All checks passed!" and ended there. Derived from
     // DOCTOR_DB_MODES so it cannot become a second list to forget. Text only: the exit-code
     // contract `claude-mem-lite doctor || alert` depends on is untouched.
-    console.log(`  Deeper checks (database layer): claude-mem-lite doctor ${doctorDbModeHint()}\n`);
+    // Phrased as prose, not as `doctor a | b | c`: a line that looks like a command gets
+    // copy-pasted, and `|` is a shell pipe. See doctorDbModeHint()'s note.
+    console.log(
+      `  Deeper checks (database layer): run \`claude-mem-lite doctor\` with ${doctorDbModeHint()}\n`,
+    );
   }
   // Diagnostic-tool exit-code contract: any ✗-level finding must propagate non-zero
   // so CI / wrapper scripts (`claude-mem-lite doctor || alert`) actually trip. Keeps

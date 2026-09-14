@@ -177,6 +177,16 @@ describe('a selection flag the command never reads is reported', () => {
     expect(r2.stderr, `optimize --scope warned:\n${r2.stderr}`).not.toMatch(/were? ignored/);
   });
 
+  it('stays quiet for a flag that LOST a precedence contest', () => {
+    // `--deep` and `--no-deep` are both real `search` flags and `--deep` wins. The resolution
+    // was a ternary, so the winning arm short-circuited before `flags['no-deep']` was ever
+    // touched, and read-tracking concluded nobody read it. The notice then said `search`
+    // "does not filter on" --no-deep and that the results were UNFILTERED — both false.
+    // Losing a contest is not the same as not being read.
+    const r = cli(['search', 'row', '--deep', '--no-deep']);
+    expect(r.stderr, `search --deep --no-deep warned:\n${r.stderr}`).not.toMatch(/was ignored/);
+  });
+
   it('stays quiet for doctor, which selects its mode off raw argv', () => {
     const r = cli(['doctor', '--metrics']);
     expect(r.stderr, `stderr was:\n${r.stderr}`).not.toMatch(/ignored|UNFILTERED/);

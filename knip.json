@@ -19,6 +19,7 @@
     "benchmark/keyctx-pool-replay.mjs",
     "benchmark/patha-exclude-report.mjs",
     "benchmark/deep-search-holdout.mjs",
+    "benchmark/hook-latency.mjs",
     "scripts/*.mjs",
     "scripts/*.js",
     "tests/**/*.test.mjs"

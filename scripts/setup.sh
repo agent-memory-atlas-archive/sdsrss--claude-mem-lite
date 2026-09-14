@@ -13,7 +13,51 @@ else
   ROOT="$CLAUDE_PLUGIN_ROOT"
 fi
 
-DATA_DIR="$HOME/.claude-mem-lite"
+# The same three locations lib/data-paths.mjs defines, under the same names. This script
+# carried ONE variable for all three, and under CLAUDE_MEM_DIR that variable is the CODE
+# dir — so every question about the DATABASE was asked of a directory holding none. This
+# repo has now had that confusion three times (v6.3.0, the same fix reintroduced with the
+# halves swapped, and here), which is why the names are spelled out rather than inferred.
+#
+#   CODE_DIR    — ALWAYS homedir. settings.json and the MCP registration bake absolute
+#                 paths to server.mjs / hook.mjs under it, so it must not follow the
+#                 relocation env var. Owns node_modules and the run-once install markers.
+#   DB_DIR      — follows CLAUDE_MEM_DIR. Owns claude-mem-lite.db and its sidecars.
+#   RUNTIME_DIR — follows CLAUDE_MEM_RUNTIME_DIR, else DB_DIR/runtime. Owns state a hook
+#                 writes and another component reads back (see .deps-broken below).
+#
+# ASK the shared resolver rather than re-deriving its rules (absolute-only, "undefined" /
+# "null" rejected) in a second language. lib/resolve-data-dir.mjs is a leaf module — node:
+# builtins only — so it still loads with node_modules missing, which is the state the
+# .deps-broken flag exists to describe. Gated on an override actually being set: with
+# neither var the resolver returns exactly these defaults, and SessionStart should not pay a
+# node spawn to be told that. A resolver that is missing (truncated tree) or that throws
+# (invalid override) leaves the defaults in place; the Node side rejects a bad value loudly
+# enough on its own, and aborting here would fail the user's session start.
+CODE_DIR="$HOME/.claude-mem-lite"
+DB_DIR="$CODE_DIR"
+RUNTIME_DIR="$CODE_DIR/runtime"
+if [[ -n "${CLAUDE_MEM_DIR:-}" || -n "${CLAUDE_MEM_RUNTIME_DIR:-}" ]] && [[ -f "$ROOT/lib/resolve-data-dir.mjs" ]]; then
+  # shellcheck disable=SC2016  # node script single-quoted on purpose; path passed via env, not shell expansion
+  _resolved="$(RESOLVER_MOD="$ROOT/lib/resolve-data-dir.mjs" node -e '
+    const { pathToFileURL } = require("node:url");
+    import(pathToFileURL(process.env.RESOLVER_MOD).href)
+      .then((m) => {
+        const db = m.resolveDataDir(process.env.CLAUDE_MEM_DIR);
+        process.stdout.write(`${db}\n${m.resolveRuntimeDir(db)}\n`);
+      })
+      .catch(() => process.exit(1));
+  ' 2>/dev/null)" || _resolved=""
+  _db="$(printf '%s\n' "$_resolved" | sed -n 1p)"
+  _rt="$(printf '%s\n' "$_resolved" | sed -n 2p)"
+  # Both or neither: a half-applied override is the split this whole block exists to close.
+  if [[ -n "$_db" && -n "$_rt" ]]; then
+    DB_DIR="$_db"
+    RUNTIME_DIR="$_rt"
+  fi
+  unset _resolved _db _rt
+fi
+
 OLD_UNHIDDEN_DIR="$HOME/claude-mem-lite"
 
 # Colors
@@ -36,23 +80,38 @@ log_warn() { echo -e "${YELLOW}⚠${NC} $*" >&2; }
 log_err()  { echo -e "${RED}✗${NC} $*" >&2; }
 
 # 1. Migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
-if [[ -d "$OLD_UNHIDDEN_DIR" && ! -d "$DATA_DIR" ]]; then
-  mv "$OLD_UNHIDDEN_DIR" "$DATA_DIR"
+#    CODE_DIR, not DB_DIR, and deliberately: the pre-v0.5 unhidden directory held the
+#    INSTALL — server.mjs, hook.mjs, package.json — and CODE_DIR is the one location that
+#    must never follow the relocation env var. Moving it into a relocated DB_DIR would
+#    strand every absolute path settings.json and the MCP registration baked.
+if [[ -d "$OLD_UNHIDDEN_DIR" && ! -d "$CODE_DIR" ]]; then
+  mv "$OLD_UNHIDDEN_DIR" "$CODE_DIR"
   log_ok "Migrated ~/claude-mem-lite/ → ~/.claude-mem-lite/"
 fi
 
-# 2. Ensure data directory exists (runtime created after migration check)
-mkdir -p "$DATA_DIR"
-log_ok "Data directory: $DATA_DIR"
+# 2. Ensure both locations exist (runtime created after migration check)
+mkdir -p "$CODE_DIR"
+mkdir -p "$DB_DIR"
+if [[ "$DB_DIR" == "$CODE_DIR" ]]; then
+  log_ok "Data directory: $DB_DIR"
+else
+  log_ok "Data directory: $DB_DIR (code: $CODE_DIR)"
+fi
 
 # 3. Legacy ~/.claude-mem/ DB is schema-v16 (no memory_session_id) with no migration bridge to
 #    the current schema — activating it FATALs on first launch ("no such column: memory_session_id")
 #    and the "! -f claude-mem-lite.db" guard would re-copy it every time the user deletes the broken
 #    DB (recovery loop). Mirror install.mjs migrateLegacyClaudeMemData: back it up (don't activate)
 #    and let a fresh DB be created. Source ~/.claude-mem/ is left intact.
+#
+#    DB_DIR, because that guard is the whole convergence argument: it closes when the product
+#    creates claude-mem-lite.db, and the product creates it in DB_DIR. Asked of CODE_DIR under
+#    a relocation it never closed — nothing ever writes a database THERE — so this block
+#    copied the legacy database again on every single SessionStart, without bound. Measured
+#    2026-09-14: control arm stable at 1 backup across three runs, relocated arm 1 → 3.
 OLD_DIR="$HOME/.claude-mem"
-if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DATA_DIR/claude-mem-lite.db" && ! -f "$DATA_DIR/claude-mem.db" ]]; then
-  BACKUP="$DATA_DIR/claude-mem-lite.db.legacy-backup-$(date +%s)"
+if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" && ! -f "$DB_DIR/claude-mem.db" ]]; then
+  BACKUP="$DB_DIR/claude-mem-lite.db.legacy-backup-$(date +%s)"
   if cp "$OLD_DIR/claude-mem.db" "$BACKUP" 2>/dev/null; then
     log_info "Legacy ~/.claude-mem/ DB is schema-incompatible; backed up to $(basename "$BACKUP") (a fresh DB will be created). Old ~/.claude-mem/ preserved."
   else
@@ -60,16 +119,20 @@ if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DATA_DIR/claude-mem-lite.db" && ! -f
   fi
 fi
 
-# 4. Rename claude-mem.db → claude-mem-lite.db in same directory
-if [[ -f "$DATA_DIR/claude-mem.db" && ! -f "$DATA_DIR/claude-mem-lite.db" ]]; then
-  mv "$DATA_DIR/claude-mem.db" "$DATA_DIR/claude-mem-lite.db"
-  mv "$DATA_DIR/claude-mem.db-wal" "$DATA_DIR/claude-mem-lite.db-wal" 2>/dev/null || true
-  mv "$DATA_DIR/claude-mem.db-shm" "$DATA_DIR/claude-mem-lite.db-shm" 2>/dev/null || true
+# 4. Rename claude-mem.db → claude-mem-lite.db in same directory (DB_DIR: a relocated user's
+#    pre-rename database sits there, and asking CODE_DIR left it unrenamed and unopened).
+if [[ -f "$DB_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" ]]; then
+  mv "$DB_DIR/claude-mem.db" "$DB_DIR/claude-mem-lite.db"
+  mv "$DB_DIR/claude-mem.db-wal" "$DB_DIR/claude-mem-lite.db-wal" 2>/dev/null || true
+  mv "$DB_DIR/claude-mem.db-shm" "$DB_DIR/claude-mem-lite.db-shm" 2>/dev/null || true
   log_ok "Database renamed: claude-mem.db → claude-mem-lite.db"
 fi
 
-# 5. Ensure runtime directory exists (after migration to not mask migration check)
-mkdir -p "$DATA_DIR/runtime"
+# 5. Ensure runtime directories exist (after migration to not mask migration check).
+#    Both: RUNTIME_DIR carries the cross-component flag below, while CODE_DIR/runtime keeps
+#    the two run-once install markers at the bottom of this file.
+mkdir -p "$RUNTIME_DIR"
+mkdir -p "$CODE_DIR/runtime"
 
 # 6. Ensure native dependencies available for hooks (ESM import needs node_modules in resolution chain)
 #    Plugin cache doesn't include node_modules — symlink from data dir or npm install on first run
@@ -84,42 +147,22 @@ mkdir -p "$DATA_DIR/runtime"
 #
 # ...and that contract is a two-directory agreement, not a filename. hook.mjs renders the
 # flag from `join(RUNTIME_DIR, '.deps-broken')`, where RUNTIME_DIR is
-# `resolveRuntimeDir(resolveDataDir(CLAUDE_MEM_DIR))` (hook-shared.mjs). Hardcoding
-# "$DATA_DIR/runtime" here meant that under CLAUDE_MEM_DIR / CLAUDE_MEM_RUNTIME_DIR the
-# writer and the reader named two different directories, so the one surface that says
-# "your hooks are degraded" rendered nothing on exactly the installs that had relocated.
-# Measured 2026-09-14: flag planted where this script wrote it → banner 0 times; planted
-# where hook.mjs reads → 1. Same SPLIT shape lib/resolve-data-dir.mjs documents; it
-# survived because tests/runtime-dir-single-home.test.mjs sweeps `walkShipped`, which is
-# every shipped .mjs/.js — a bash hook is structurally outside that population.
+# `resolveRuntimeDir(resolveDataDir(CLAUDE_MEM_DIR))` (hook-shared.mjs). Hardcoding a
+# homedir path here meant that under CLAUDE_MEM_DIR / CLAUDE_MEM_RUNTIME_DIR the writer and
+# the reader named two different directories, so the one surface that says "your hooks are
+# degraded" rendered nothing on exactly the installs that had relocated. Measured
+# 2026-09-14: flag planted where this script wrote it → banner 0 times; planted where
+# hook.mjs reads → 1. Same SPLIT shape lib/resolve-data-dir.mjs documents; it survived
+# because tests/runtime-dir-single-home.test.mjs sweeps `walkShipped`, which is every
+# shipped .mjs/.js — a bash hook is structurally outside that population. RUNTIME_DIR is
+# resolved once at the top of this file.
 #
-# ASK the shared resolver instead of re-deriving its rules (absolute-only, "undefined" /
-# "null" rejected) in a second language. lib/resolve-data-dir.mjs is a leaf module —
-# node: builtins only — so it still loads in the broken-dependency state this flag
-# describes. Gated on an override actually being set: with neither var the resolver
-# returns "$DATA_DIR/runtime" by definition, and SessionStart should not pay a node spawn
-# to be told that. A resolver that is missing (truncated tree) or that throws (invalid
-# override) falls back to today's path; the Node side rejects a bad value loudly enough.
-#
-# ONLY this marker moves. `.mcp-dedup-v2.78` and `.residue-warned-v2.55` below are one-shot
-# state about THIS MACHINE's install — a ~/.claude.json edit and a settings.json warning,
-# not state a hook hands to another component. Read lib/resolve-data-dir.mjs's MOVES/STAYS
-# list before relocating either: moving a run-once marker re-runs what it gated.
-RUNTIME_DIR="$DATA_DIR/runtime"
-if [[ -n "${CLAUDE_MEM_DIR:-}" || -n "${CLAUDE_MEM_RUNTIME_DIR:-}" ]] && [[ -f "$ROOT/lib/resolve-data-dir.mjs" ]]; then
-  # shellcheck disable=SC2016  # node script single-quoted on purpose; path passed via env, not shell expansion
-  _resolved="$(RESOLVER_MOD="$ROOT/lib/resolve-data-dir.mjs" node -e '
-    const { pathToFileURL } = require("node:url");
-    import(pathToFileURL(process.env.RESOLVER_MOD).href)
-      .then((m) => process.stdout.write(m.resolveRuntimeDir(m.resolveDataDir(process.env.CLAUDE_MEM_DIR))))
-      .catch(() => process.exit(1));
-  ' 2>/dev/null)" || _resolved=""
-  [[ -n "$_resolved" ]] && RUNTIME_DIR="$_resolved"
-  unset _resolved
-fi
-
+# ONLY this marker follows the override. `.mcp-dedup-v2.78` and `.residue-warned-v2.55`
+# below are one-shot state about THIS MACHINE's install — a ~/.claude.json edit and a
+# settings.json warning, not state a hook hands to another component — so they stay under
+# CODE_DIR. Read lib/resolve-data-dir.mjs's MOVES/STAYS list before relocating either:
+# moving a run-once marker re-runs what it gated.
 DEPS_FLAG="$RUNTIME_DIR/.deps-broken"
-mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 
 mark_deps_broken() {
   local reason="$1"
@@ -149,9 +192,11 @@ mark_deps_ok() {
 
 if [[ ! -d "$ROOT/node_modules/better-sqlite3" ]]; then
   # Fast path: symlink from data dir (instant, no network needed)
-  if [[ -d "$DATA_DIR/node_modules/better-sqlite3" ]]; then
-    if ln -sfn "$DATA_DIR/node_modules" "$ROOT/node_modules" 2>/dev/null; then
-      log_ok "Dependencies linked from $DATA_DIR"
+  # CODE_DIR: node_modules belongs to the install, not to the data, and must not follow
+  # CLAUDE_MEM_DIR — install.mjs writes it under the homedir install location.
+  if [[ -d "$CODE_DIR/node_modules/better-sqlite3" ]]; then
+    if ln -sfn "$CODE_DIR/node_modules" "$ROOT/node_modules" 2>/dev/null; then
+      log_ok "Dependencies linked from $CODE_DIR"
     fi
   fi
   # Slow path: npm install (first-time only, ~10-20s for native addon)
@@ -256,7 +301,9 @@ fi
 #    pre-v2.79.1 — extra node spawn + JSON parse on every SessionStart for a
 #    near-always no-op). Bump MCP_MIGRATION name to re-run cleanup in future
 #    versions; same shape as the .deps-broken self-heal pattern.
-MCP_MIGRATION="$DATA_DIR/runtime/.mcp-dedup-v2.78"
+# CODE_DIR/runtime, not RUNTIME_DIR: this marker gates a one-shot edit of ~/.claude.json,
+# which is machine state, not per-data-dir state. Relocating it would re-run that edit.
+MCP_MIGRATION="$CODE_DIR/runtime/.mcp-dedup-v2.78"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$MCP_MIGRATION" ]]; then
   # shellcheck disable=SC2016  # node script single-quoted on purpose; CLAUDE_JSON passed via env, not shell expansion
   CLAUDE_JSON="$HOME/.claude.json" node -e '
@@ -335,7 +382,9 @@ fi
 #    will run every hook twice (direct settings.json hooks AND plugin hooks)
 #    until they run `claude-mem-lite uninstall` to clear the settings.json
 #    entries. /plugin uninstall does not touch settings.json.
-RESIDUE_MARKER="$DATA_DIR/runtime/.residue-warned-v2.55"
+# CODE_DIR/runtime, same reason: the residue it warns about is stale hook entries in
+# ~/.claude/settings.json — one machine, one warning, regardless of where the data lives.
+RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
   SETTINGS="$HOME/.claude/settings.json"
   if [[ -f "$SETTINGS" ]]; then

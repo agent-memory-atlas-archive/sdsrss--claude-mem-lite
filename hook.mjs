@@ -288,8 +288,13 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
           if (db) {
             try {
               for (const sub of planEpisodeFlush(ep)) saveEpisodeImmediate(sub, db);
+              // episodeFile(), not a second spelling of `ep-<project>.json`: this is a
+              // DESTRUCTIVE step on the buffer the salvage just persisted, and a path that
+              // drifts from the accessor deletes nothing while reporting success — the next
+              // fire then salvages the same entries again. Every other flush path
+              // (PostToolUse, Stop, SessionStart) already unlinks through the accessor.
               try {
-                unlinkSync(join(RUNTIME_DIR, `ep-${inferProject()}.json`));
+                unlinkSync(episodeFile());
               } catch {}
             } finally {
               try {

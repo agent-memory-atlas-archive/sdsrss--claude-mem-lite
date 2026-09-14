@@ -18,12 +18,21 @@ import { inferProject, EDIT_TOOLS } from './utils.mjs';
 import { RUNTIME_DIR } from './hook-shared.mjs';
 
 /**
- * Read episode file without locking (for signal handlers only).
+ * Read the episode buffer WITHOUT holding the lock: the dying-process salvage in hook.mjs's
+ * signal handler, and the snapshot Stop / SessionStart take before they flush.
+ *
+ * Same body as `readEpisode` on purpose — the two names record which locking contract the
+ * CALLER is under, and neither function takes a lock itself. What must not differ is the
+ * PATH, so both go through `episodeFile()`. This one used to re-spell it inline, which put
+ * the buffer's name in three places (here, `episodeFile`, and the signal handler's unlink)
+ * and left the salvage path — the one that runs while the process is dying, and the hardest
+ * to notice when it is wrong — as the only one not reading the accessor.
+ *
  * @returns {object|null} Parsed episode or null on failure
  */
 export function readEpisodeRaw() {
   try {
-    return JSON.parse(readFileSync(join(RUNTIME_DIR, `ep-${inferProject()}.json`), 'utf8'));
+    return JSON.parse(readFileSync(episodeFile(), 'utf8'));
   } catch {
     return null;
   }

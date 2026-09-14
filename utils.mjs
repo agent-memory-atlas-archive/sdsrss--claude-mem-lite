@@ -9,34 +9,31 @@ import { buildLowSignalRegex } from './lib/low-signal-patterns.mjs';
 import { scrubSecrets as _scrubSecrets } from './secret-scrub.mjs';
 
 // ─── Re-exports from extracted modules ──────────────────────────────────────
-// Backward compatibility: all consumers import from utils.mjs
-
+// Backward compatibility: consumers that predate the extraction import from utils.mjs.
+//
+// The barrel carries what in-tree code actually imports THROUGH it, and nothing else.
+// "Backward compatible" here means compatible with this repo's own call sites: there is no
+// `main`/`exports` in package.json, so nothing outside the tree can import this module, and
+// a re-export with no importer is not a compatibility guarantee — it is a name knip has to
+// keep reporting. Eleven were dropped 2026-09-14 after both knip (whose entry set includes
+// tests, so a test-only consumer would have kept them) and a per-name import scan covering
+// named, namespace, dynamic and re-export forms agreed nothing imports them from here.
+// Each one is still exported by its own leaf module, where its real callers import it.
+// Same disposal the `extractResponseFromError` docblock records for the same reason.
 export {
   DECAY_HALF_LIFE_BY_TYPE,
   DEFAULT_DECAY_HALF_LIFE_MS,
   OBS_BM25,
   SESS_BM25,
   EVT_BM25,
-  TYPE_DECAY_CASE,
   TYPE_QUALITY_CASE,
   OBS_FTS_COLUMNS,
   notLowSignalTitleClause,
   noisePenaltyClause,
 } from './scoring-sql.mjs';
-export {
-  cjkBigrams,
-  extractCjkSynonymTokens,
-  extractCjkLikePatterns,
-  SYNONYM_MAP,
-  expandToken,
-  sanitizeFtsQuery,
-  ftsQueryTokens,
-  relaxFtsQueryToOr,
-  FTS_STOP_WORDS,
-  CJK_COMPOUNDS,
-} from './nlp.mjs';
-export { inferProject, resolveProject, _resetProjectCache } from './project-utils.mjs';
-export { scrubSecrets, SECRET_PATTERNS } from './secret-scrub.mjs';
+export { cjkBigrams, sanitizeFtsQuery, ftsQueryTokens, relaxFtsQueryToOr } from './nlp.mjs';
+export { inferProject } from './project-utils.mjs';
+export { scrubSecrets } from './secret-scrub.mjs';
 export { stripPrivate } from './lib/private-strip.mjs';
 export {
   truncate,
@@ -52,7 +49,6 @@ export { computeMinHash, estimateJaccardFromMinHash, jaccardSimilarity } from '.
 export {
   detectBashSignificance,
   extractErrorKeywords,
-  planErrorRecall,
   extractFilePaths,
   stripTestSuffix,
 } from './bash-utils.mjs';

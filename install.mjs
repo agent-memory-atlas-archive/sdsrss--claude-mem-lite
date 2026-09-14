@@ -55,6 +55,7 @@ const HOOK_PATH = join(INSTALL_DIR, 'hook.mjs');
 // P2-7: both constants and the predicate come from lib/plugin-key.mjs, which hook.mjs also
 // imports — this pair used to be typed out in each.
 import { MARKETPLACE_KEY, PLUGIN_KEY, PLUGIN_NAME, isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
+import { doctorDbModeHint } from './lib/doctor-modes.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 import {
@@ -2690,7 +2691,13 @@ async function doctor() {
       ),
     );
   } else {
-    console.log(`\n  ${buildDoctorSummary(issues, warnings)}\n`);
+    console.log(`\n  ${buildDoctorSummary(issues, warnings)}`);
+    // This run checked the INSTALL. The DB-layer modes are a different implementation reached
+    // through the same command name, and nothing else told the user they exist -- a healthy
+    // install with bad retrieval read "All checks passed!" and ended there. Derived from
+    // DOCTOR_DB_MODES so it cannot become a second list to forget. Text only: the exit-code
+    // contract `claude-mem-lite doctor || alert` depends on is untouched.
+    console.log(`  Deeper checks (database layer): claude-mem-lite doctor ${doctorDbModeHint()}\n`);
   }
   // Diagnostic-tool exit-code contract: any ✗-level finding must propagate non-zero
   // so CI / wrapper scripts (`claude-mem-lite doctor || alert`) actually trip. Keeps

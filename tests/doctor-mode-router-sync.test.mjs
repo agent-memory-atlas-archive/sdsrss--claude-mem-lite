@@ -26,6 +26,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DOCTOR_DB_MODES } from '../lib/doctor-modes.mjs';
 
 // D#207: join(), never new URL('../x.mjs', import.meta.url).
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,12 +42,15 @@ function implementedModes() {
   return out;
 }
 
-/** Flags cli.mjs's router forwards to mem-cli's doctor. */
+/**
+ * Flags cli.mjs's router forwards to mem-cli's doctor.
+ *
+ * Read from lib/doctor-modes.mjs, which the router derives its condition from, rather than
+ * from the condition's text. The separate case below asserts the router actually uses it --
+ * without that, this guard would pin a constant nothing consults.
+ */
 function routedModes() {
-  const src = readFileSync(join(REPO, 'cli.mjs'), 'utf8');
-  const line = src.split('\n').find((l) => l.includes("a === '--") && l.includes('.some('));
-  if (!line) return new Set();
-  return new Set([...line.matchAll(/a === '--([a-z-]+)'/g)].map((m) => m[1]));
+  return new Set(DOCTOR_DB_MODES);
 }
 
 describe('the doctor router and the DB-layer modes describe the same set', () => {
@@ -71,6 +75,15 @@ describe('the doctor router and the DB-layer modes describe the same set', () =>
         "install.mjs's health check instead; a routed flag with no mode reaches a handler that " +
         'falls through. Update cli.mjs:132-146 and cli/doctor.mjs together.',
     ).toEqual(impl);
+  });
+
+  it('the router condition is built from the constant, not from its own list', () => {
+    // Otherwise routedModes() describes something the router does not consult, and the two
+    // could disagree silently -- the exact failure this file exists for, one level up.
+    const src = readFileSync(join(REPO, 'cli.mjs'), 'utf8');
+    const router = src.split('\n').find((l) => l.includes('.some(') && l.includes('argv.slice(3)'));
+    expect(router, 'no doctor router condition found in cli.mjs').toBeTruthy();
+    expect(router).toContain('DOCTOR_DB_MODES');
   });
 
   it('--json stays with install.mjs and is never routed', () => {

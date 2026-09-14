@@ -91,6 +91,7 @@
     "lib/hook-telemetry.mjs",
     "lib/resolve-data-dir.mjs",
     "lib/data-paths.mjs",
+    "lib/doctor-modes.mjs",
     "lib/export-columns.mjs",
     "lib/file-intel.mjs",
     "lib/reread-guard.mjs",

@@ -81,6 +81,28 @@ function fileFromError(e) {
   return quoted ? quoted[1] : null;
 }
 
+/**
+ * Is this `doctor` invocation one of the DB-layer modes?
+ *
+ * DYNAMIC on purpose. A static import here would put lib/doctor-modes.mjs in the LAUNCHER's
+ * load graph, and a missing file there kills cli.mjs before any of its own error handling
+ * exists — the user gets a raw ERR_MODULE_NOT_FOUND instead of "this install is incomplete,
+ * run repair". tests/doctor-startup-closure.test.mjs caught exactly that when the import was
+ * static. Same rule as "a recovery path must not import the thing it recovers", applied to
+ * the entry point: nothing the launcher needs before it can speak may be a hard edge.
+ * install.mjs may import it statically — that failure is caught by loadInstaller() below.
+ */
+async function isDoctorDbMode() {
+  try {
+    const { DOCTOR_DB_MODES } = await import('./lib/doctor-modes.mjs');
+    return process.argv.slice(3).some((a) => DOCTOR_DB_MODES.some((m) => a === `--${m}`));
+  } catch {
+    // Unreadable module → treat as the plain install health check, which is the branch that
+    // can still explain a broken install.
+    return false;
+  }
+}
+
 async function loadInstaller() {
   let mod;
   try {
@@ -129,10 +151,7 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
 } else if (cmd === '--help' || cmd === '-h') {
   const { run } = await import('./mem-cli.mjs');
   await run(['help']);
-} else if (
-  cmd === 'doctor' &&
-  process.argv.slice(3).some((a) => a === '--benchmark' || a === '--metrics' || a === '--session-audit')
-) {
+} else if (cmd === 'doctor' && (await isDoctorDbMode())) {
   // Per #8217: the DB-layer doctor modes (--benchmark / --metrics / --session-audit,
   // each implemented in cli/doctor.mjs) route to mem-cli. Everything else — plain
   // `doctor`, `doctor --` (POSIX end-of-options), and `doctor --json` — stays with

@@ -44,6 +44,15 @@ const MEM_RUNTIME_DIR = resolveRuntimeDir(MEM_DATA_DIR);
 const DB_PATH = join(MEM_DATA_DIR, 'claude-mem-lite.db');
 const OLD_DATA_DIR = join(homedir(), '.claude-mem');
 
+// The two directories `createCliSymlink` can land the `claude-mem-lite` command in, in the
+// order it tries them. Uninstall already swept exactly this pair as an inline literal, and
+// `status` now has to ask the same question ("is the command installed somewhere, just not
+// on PATH?"), so the list is named once rather than typed a third time. `createCliSymlink`
+// itself is deliberately NOT rewritten to iterate it: its shape is primary-then-fallback
+// with different remedies per branch, and flattening that into a loop is a refactor wearing
+// a constant's clothes.
+const CLI_BIN_DIRS = [join(homedir(), '.local', 'bin'), '/usr/local/bin'];
+
 // Detect ephemeral context (npx) — files won't persist after exit
 const IS_NPX =
   process.env.npm_command === 'exec' || PROJECT_DIR.includes('_npx') || PROJECT_DIR.includes('.npm/_');
@@ -1271,7 +1280,7 @@ async function uninstall() {
   if (!removedAny) warn('MCP server not found or already removed');
 
   // 1b. Remove CLI symlink
-  for (const binDir of [join(homedir(), '.local', 'bin'), '/usr/local/bin']) {
+  for (const binDir of CLI_BIN_DIRS) {
     const cliLink = join(binDir, 'claude-mem-lite');
     // No try/catch: clearLinkPath swallows a permissions failure and returns false, so the
     // wrapper this used to have was unreachable once the existsSync gate moved inside it.
@@ -1654,14 +1663,48 @@ async function status() {
     push('warn', 'database', 'Database: not found', { exists: false });
   }
 
-  // CLI
+  // CLI.
+  //
+  // The probe resolves a BARE name, so a failure conflates three different worlds and the
+  // old single remedy ("run install again to create symlink") was correct in only one of
+  // them. On the common one — `createCliSymlink` put a working link in ~/.local/bin, a
+  // directory a non-login shell frequently does not have on PATH — the advice sends the
+  // user to re-run an installer that will create the very symlink that already exists,
+  // report ✓, and leave `status` saying the same thing. Advice that cannot converge is
+  // worse than the silence it replaced.
+  //
+  // Split on `err.code`: ENOENT is "the name did not resolve" and is the only world the
+  // symlink question applies to. Anything else means the command WAS found and then failed
+  // or timed out (a broken native binding is the live example), where naming PATH is a
+  // second wrong answer — report what actually happened instead.
   try {
     execFileSync('claude-mem-lite', ['--help'], { encoding: 'utf8', timeout: 5000, stdio: 'pipe' });
     push('ok', 'cli', 'CLI: claude-mem-lite command available', { available: true });
-  } catch {
-    push('warn', 'cli', 'CLI: command not on PATH — run install again to create symlink', {
-      available: false,
-    });
+  } catch (e) {
+    if (e && e.code !== 'ENOENT') {
+      push('warn', 'cli', `CLI: on PATH but "claude-mem-lite --help" failed — ${e.message}`, {
+        available: false,
+        linked: null,
+      });
+    } else {
+      // existsSync FOLLOWS the link, so a dangling one reads as absent — which is the
+      // answer we want: a link pointing at a deleted install is the installer's problem,
+      // not PATH's, and falls through to the reinstall remedy.
+      const binDir = CLI_BIN_DIRS.find((d) => existsSync(join(d, 'claude-mem-lite')));
+      if (binDir) {
+        push(
+          'warn',
+          'cli',
+          `CLI: installed at ${join(binDir, 'claude-mem-lite')} but ${binDir} is not on PATH — add it: export PATH="${binDir}:$PATH"`,
+          { available: false, linked: join(binDir, 'claude-mem-lite') },
+        );
+      } else {
+        push('warn', 'cli', 'CLI: command not on PATH — run install again to create symlink', {
+          available: false,
+          linked: null,
+        });
+      }
+    }
   }
 
   // Old system

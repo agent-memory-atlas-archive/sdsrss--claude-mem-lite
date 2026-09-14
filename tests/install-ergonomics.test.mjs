@@ -430,3 +430,84 @@ describe('doctor surfaces orphan hooks (v2.79)', () => {
     }
   });
 });
+
+// `status`'s CLI check probes a BARE name, so one failure covers three different worlds and
+// the single remedy it used to print ("run install again to create symlink") was right in
+// only one of them. On the common one — `createCliSymlink` puts a working link in
+// ~/.local/bin, which a non-login shell frequently does not have on PATH — it told the user
+// to re-run an installer that would create the symlink that already exists, report ✓, and
+// leave `status` printing the same line. Advice that cannot converge is worse than the
+// silence it replaced.
+//
+// The fixture pins PATH to one EMPTY directory rather than filtering the inherited one: the
+// check's whole question is "does this bare name resolve", and a maintainer with a global
+// `npm i -g claude-mem-lite` would otherwise land in the ✓ branch and make every assertion
+// below vacuous on exactly one machine. Nothing else in `status` needs PATH — the `claude`
+// and `npm` lookups it also makes are already inside try/catch and degrade to their own ⚠.
+describe('status distinguishes "no symlink" from "symlink off PATH"', () => {
+  function runStatus(home) {
+    const emptyBin = join(home, 'empty-bin');
+    mkdirSync(emptyBin, { recursive: true });
+    try {
+      return execFileSync(process.execPath, [INSTALL_PATH, 'status'], {
+        encoding: 'utf8',
+        env: envWithoutPluginRoot({
+          HOME: home,
+          PATH: emptyBin,
+          CLAUDE_MEM_DIR: join(home, '.claude-mem-lite'),
+          MEM_NO_AUTO_ADOPT: '1',
+        }),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      return (e.stdout || '') + (e.stderr || '');
+    }
+  }
+
+  it('names the directory to add when the symlink exists but is not on PATH', () => {
+    const home = makeTmpDir();
+    try {
+      const binDir = join(home, '.local', 'bin');
+      mkdirSync(binDir, { recursive: true });
+      symlinkSync(resolve('cli.mjs'), join(binDir, 'claude-mem-lite'));
+
+      const output = runStatus(home);
+      expect(output).toContain(`installed at ${join(binDir, 'claude-mem-lite')}`);
+      expect(output).toContain(`export PATH="${binDir}:$PATH"`);
+      // The reinstall remedy is the WRONG answer here; its absence is the fix.
+      expect(output).not.toContain('run install again to create symlink');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the reinstall remedy when no symlink exists anywhere', () => {
+    const home = makeTmpDir();
+    try {
+      const output = runStatus(home);
+      expect(output).toContain('run install again to create symlink');
+      expect(output).not.toContain('is not on PATH — add it');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a DANGLING symlink as absent, not as an off-PATH install', () => {
+    // existsSync follows the link, so a link whose target was deleted reads as missing —
+    // which is the answer we want: that is the installer's problem, not PATH's. Measured
+    // rather than assumed; the branch is one `existsSync` away from claiming a deleted
+    // install is merely unreachable.
+    const home = makeTmpDir();
+    try {
+      const binDir = join(home, '.local', 'bin');
+      mkdirSync(binDir, { recursive: true });
+      symlinkSync(join(home, 'deleted-install', 'cli.mjs'), join(binDir, 'claude-mem-lite'));
+
+      const output = runStatus(home);
+      expect(output).toContain('run install again to create symlink');
+      expect(output).not.toContain('is not on PATH — add it');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

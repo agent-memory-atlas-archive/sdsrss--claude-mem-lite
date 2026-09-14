@@ -7,6 +7,7 @@ import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 import { handleRecentForTest } from '../server.mjs';
 import { initSchema, CURRENT_SCHEMA_VERSION } from '../schema.mjs';
 import { reRankWithContext, autoBoostIfNeeded, runIdleCleanup } from '../search-scoring.mjs';
+import { PINNED_INJ_THRESHOLD } from '../lib/maintain-core.mjs';
 
 // ─── Dedup Migration ────────────────────────────────────────────────────────
 
@@ -1565,6 +1566,59 @@ describe('auto-boost on access', () => {
     const id = Number(result.lastInsertRowid);
     db.prepare('UPDATE observations SET access_count = access_count + 1 WHERE id = ?').run(id);
     autoBoostIfNeeded(db, [id]);
+    const row = db.prepare('SELECT importance FROM observations WHERE id = ?').get(id);
+    expect(row.importance).toBe(2);
+  });
+
+  // `demotePinned` and the boosts are opponents — lib/maintain-core.mjs states the
+  // precedence ("demote_pinned MUST come after boost") and enforces it by ordering the ops
+  // inside a maintenance run. This function is a promoter OUTSIDE that run: it fires from
+  // `fetchObsDetail`, so before this clause `maintain execute --ops demote_pinned` floored a
+  // row 2 -> 1 and ONE subsequent `get` handed it straight back, on demote_pinned's own
+  // target population.
+  //
+  // The threshold is read from the owning module, not typed as 8 here, so raising
+  // PINNED_INJ_THRESHOLD moves the fixture with the rule instead of silently parking this
+  // case below it.
+  it('does not re-promote a row demotePinned floored (pinned-but-uncited)', () => {
+    insertSession(db, { id: 'sess-pinned', project: 'test' });
+    const result = insertObs(db, {
+      sessionId: 'sess-pinned',
+      title: 'injected everywhere, cited nowhere',
+      importance: 1,
+      accessCount: 5,
+    });
+    const id = Number(result.lastInsertRowid);
+    db.prepare('UPDATE observations SET injection_count = ?, cited_count = 0 WHERE id = ?').run(
+      PINNED_INJ_THRESHOLD + 1,
+      id,
+    );
+
+    autoBoostIfNeeded(db, [id]);
+
+    const row = db.prepare('SELECT importance FROM observations WHERE id = ?').get(id);
+    expect(row.importance).toBe(1);
+  });
+
+  it('still boosts a heavily-injected row that HAS been cited', () => {
+    // The paired arm: the guard keys on "injected a lot AND never cited", so a cited row must
+    // stay boostable. Without this, narrowing the exclusion to `injection_count >= N` alone —
+    // which disables the boost for every well-injected row — would read exactly as green.
+    insertSession(db, { id: 'sess-cited', project: 'test' });
+    const result = insertObs(db, {
+      sessionId: 'sess-cited',
+      title: 'injected everywhere and actually cited',
+      importance: 1,
+      accessCount: 5,
+    });
+    const id = Number(result.lastInsertRowid);
+    db.prepare('UPDATE observations SET injection_count = ?, cited_count = 2 WHERE id = ?').run(
+      PINNED_INJ_THRESHOLD + 1,
+      id,
+    );
+
+    autoBoostIfNeeded(db, [id]);
+
     const row = db.prepare('SELECT importance FROM observations WHERE id = ?').get(id);
     expect(row.importance).toBe(2);
   });

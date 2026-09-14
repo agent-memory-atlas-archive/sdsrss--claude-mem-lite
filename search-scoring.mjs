@@ -12,6 +12,13 @@ import { CLI_INVOKE } from './cli-path.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
+// The pinned-but-uncited threshold, from the module that OWNS the rule (`demotePinned` and
+// its forecast both read it there). Imported rather than restated: two hand-typed copies of
+// this number is how the v3.76.0 scan-vs-execute drift happened one file over. The edge is
+// cheap — `lib/maintain-core.mjs` pulls only `utils.mjs`, `lib/dedup-constants.mjs` and
+// `lib/inject-search-core.mjs`, two of which this module already imports, and none of them
+// reaches a native dependency or back to this file.
+import { PINNED_INJ_THRESHOLD } from './lib/maintain-core.mjs';
 // ─── MCP Server Instructions Builder ───────────────────────────────────────
 // Phase A (v2.31.3+): when quiet=true, drops WHEN-TO-USE proactive-trigger and
 // Decision-rules sections; keeps the irreducible CLI/MCP tool list. Intended
@@ -303,6 +310,35 @@ export function expandQueryByConcepts(db, ftsQuery, project) {
  * Boost importance to 2 for observations that have been accessed multiple times
  * (access_count >= 2) but still have default importance (1).
  * Called after incrementing access_count in mem_get.
+ *
+ * THE THIRD PROMOTER. `lib/maintain-core.mjs`'s DEFAULT_MAINTAIN_OPS docblock records that
+ * `boostAccessed` and `demotePinned` are opponents, and that the automatic path "promoted
+ * and never demoted" until the two were ordered demote-last — measured there at 148/148
+ * rows sitting back at importance>=3 after citation-decay had demoted them. That fix
+ * ordered the ops INSIDE a maintenance run. This function is a promoter OUTSIDE one: it
+ * fires from `fetchObsDetail`, so every `get` / `mem_get` is another chance to hand the row
+ * straight back, which is the same sentence that docblock uses for the bug it closed.
+ *
+ * Reproduced end-to-end before this clause: `maintain execute --ops demote_pinned` floors a
+ * pinned-but-uncited row 2 -> 1, and ONE subsequent `get` returns it to 2. So the op that
+ * CLAUDE.md lists in the default maintain set had an effect any read reverted, on its own
+ * target population.
+ *
+ * Population, stated rather than implied (doctrine rule 3): on the maintainer's DB sampled
+ * 2026-09-14T20:14:16Z, 67 live rows, 3 pinned-but-uncited, and 0 of those had reached
+ * access_count >= 2 — `injection_count` does not bump `access_count`, so the overlap needs
+ * two explicit reads and was unrealised there. The mechanism is deterministic; the observed
+ * incidence on that corpus is zero, and this is a snapshot of one corpus, not a property.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT FIX. `importance = 1` is also what an explicit
+ * `claude-mem-lite update N --importance 1` writes, and that demotion is reverted by the
+ * next read exactly the same way — worse, INSPECTING the row is what pushes access_count to
+ * 2 in the first place. Separating "1 because nobody set it" from "1 because a human said
+ * so" needs a marker this schema does not have, and `demoted_at` is not it: that column is
+ * the citation-decay loop's, stamped on uncited-streak rollover and cleared on citation
+ * (lib/citation-tracker.mjs:1593,1621), so writing it here would evict rows from the pool
+ * keyed on its emptiness. Left as a design decision rather than patched around.
+ *
  * @param {object} db better-sqlite3 database handle
  * @param {number[]} ids Array of observation IDs to check
  */
@@ -315,6 +351,10 @@ export function autoBoostIfNeeded(db, ids) {
     WHERE id IN (${placeholders})
       AND COALESCE(importance, 1) = 1
       AND COALESCE(access_count, 0) >= 2
+      AND NOT (
+        COALESCE(injection_count, 0) >= ${PINNED_INJ_THRESHOLD}
+        AND COALESCE(cited_count, 0) = 0
+      )
   `,
   ).run(...ids);
 }

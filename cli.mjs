@@ -136,6 +136,46 @@ const INSTALL_COMMANDS = new Set([
   'release',
 ]);
 
+// A reader that leaves is not an error. `claude-mem-lite search x | head -1`,
+// `| grep -q`, or quitting `less` closes the read end while we are still writing;
+// Node then emits 'error' on the stdout Socket, and with no listener that is an
+// UNHANDLED error event — a ~20-line stack ending in `outVerbatim` where the user
+// expected the shell prompt.
+//
+// WHICH COMMANDS, measured rather than generalised (20 trials each, `| head -1`,
+// pre-fix): `search`, `export`, `recent`, `stats`, `doctor`, `timeline`,
+// `citation-stats` 20/20; `browse` 19/20; `help`, `status`, `context`, `get`,
+// `memdir-audit` 0/20. So NOT "every stdout-bearing command" — what decides it is
+// whether a write is still pending when the reader goes, which depends on how many
+// lines the consumer takes and how the output is batched — NOT on the 64 KB pipe
+// buffer, which an earlier draft of this comment blamed: pre-ship review found
+// `stats` crashing at `head -20` on an output far under it. That output's size is
+// corpus dependent, so no byte count is quoted here. This is also why the crash
+// survived so long — it is invisible to exactly the pipe depths a smoke test picks.
+//
+// Lives HERE, at the published `bin`, and not at `cli/common.mjs`'s `out()`: the
+// crash reproduces on `doctor` too, whose writes are `console.log` inside
+// install.mjs, so a chokepoint fix would cover the CLI half and leave the installer
+// half loud. One process-level listener covers both routes below.
+//
+// SWALLOW, DO NOT EXIT. The first cut called `process.exit(0)` here, on the
+// reasoning that a CLI whose consumer has gone should stop rather than serialise a
+// whole-DB `export` into a dead pipe. Pre-ship review measured what that costs:
+// `doctor | head -1` under `pipefail` exited 0 on 10/10 runs while the same doctor
+// exits 1 unpiped, because `runDoctor` assigns `process.exitCode = 1` AFTER its last
+// print (install.mjs, "Diagnostic-tool exit-code contract") and the forced exit lands
+// first. That silently turns a failing `claude-mem-lite doctor || alert` — the
+// wrapper that contract names — into a passing one. `process.exitCode ?? 0` does not
+// rescue it: the verdict does not exist yet at kill time. Returning instead reads
+// exit 1 on 10/10 and keeps the crash fixed (doctor 0/10, search 0/10 EPIPE stacks).
+// Correctness over the saved work: the process finishes into a pipe nobody reads,
+// which is wasted effort but never a wrong answer. Non-EPIPE is rethrown — this is a
+// classifier, not a blanket swallow, the same charter `explainBrokenInstall` follows.
+process.stdout.on('error', (err) => {
+  if (err && err.code === 'EPIPE') return;
+  throw err;
+});
+
 const cmd = process.argv[2];
 
 // `version` and `-V` are aliases, not extra syntax: the bare subcommand is what a user

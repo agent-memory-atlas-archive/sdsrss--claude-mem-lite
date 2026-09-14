@@ -106,6 +106,9 @@ import {
   rejectBareStringFlags,
   resolvePositionalAlias,
   suggestUnknownFlags,
+  resetFlagTracking,
+  inertFilterFlags,
+  inertFilterFlagNotice,
   OBS_TIME_FIELDS,
   formatObsFieldValue,
   obsFieldLabel,
@@ -3610,6 +3613,30 @@ import { DAY_MS } from './lib/time-constants.mjs';
 // ─── Main Entry Point ────────────────────────────────────────────────────────
 
 export async function run(argv) {
+  // The inert-selection-flag notice is emitted HERE rather than inside the dispatcher because
+  // `runDispatch` returns from a dozen places (adopt / unadopt / memdir-audit before the DB is
+  // even opened, plus every `fail()` path), and a notice wired at some of them is a notice that
+  // reports a dropped filter on some commands and not others. `fail()` sets `process.exitCode`
+  // and RETURNS rather than calling process.exit, so this `finally` covers the failure paths too.
+  resetFlagTracking();
+  try {
+    return await runDispatch(argv);
+  } finally {
+    // Only when the command SUCCEEDED. The notice is about an answer that is wider than the
+    // one asked for; a command that failed has no answer for it to qualify, and saying "the
+    // results above are UNFILTERED" under an error message describes results that do not
+    // exist. Found by sweeping correct usage for false alarms: `activity search --limit 3`
+    // (no query) fails its own usage check BEFORE anything reads `flags.limit`, so the flag
+    // is genuinely unread and the notice was genuinely wrong. The error IS the feedback there.
+    const inert = process.exitCode ? [] : inertFilterFlags();
+    // stderr only: stdout is a data channel (`search --json | jq`, and commands/mem.md pipes
+    // these outputs into model context), so the notice must not enter it. Exit code untouched —
+    // the command did run, and its answer is real, just wider than the user asked for.
+    if (inert.length > 0) process.stderr.write(inertFilterFlagNotice(argv[0], inert) + '\n');
+  }
+}
+
+async function runDispatch(argv) {
   const cmd = argv[0];
   const cmdArgs = argv.slice(1);
 

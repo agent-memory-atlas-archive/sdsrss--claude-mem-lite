@@ -83,7 +83,107 @@ export function parseArgs(argv) {
       i++;
     }
   }
-  return { positional, flags };
+  return { positional, flags: trackFlagReads(flags) };
+}
+
+// ─── Inert selection flags ───────────────────────────────────────────────────
+//
+// The third cause of the harm parseArgs' docblock names twice. `--include_noise` (underscore
+// spelling) and `--obs_type` (an MCP field name) both parsed, matched no reader, and let the
+// command answer the unfiltered question; both are fixed above. `suggestUnknownFlags` fixes a
+// third case, flags unknown to the whole CLI. What is left is the case where NOTHING is
+// misspelled: `--type` is canonical and real — on `search`, `save` and `export` — so it clears
+// the global known-flag set, and `browse` simply never reads it. Measured before the fix:
+// `browse --type bugfix` printed rows of every type, exit 0, not a word.
+//
+// The check is read-tracking, not a per-command flag manifest, and that is the whole design.
+// A manifest rots, and worse, it cannot see a flag that a command forwards wholesale into a
+// core helper (`cmdSearch` hands the object to the pipeline, `cmdExport` to the writer) —
+// deriving "which flags does this command read" from its own body would fire on every one of
+// those. Watching what the object is actually ASKED for is exact in both directions.
+//
+// Scope is SELECTION-shaped flags only. Those are the ones whose silent drop hands back a
+// wider set that reads as the answer, which is the harm. A `--confirm` that a short-circuited
+// branch never reached is deliberately out of scope: nothing there is wrong, and a warning on
+// correct usage is worse than the silence it replaces.
+//
+// `prompts-limit` is NOT here, and the reason generalises: `doctor --benchmark --prompts-limit`
+// is read off raw `process.argv` in cli/doctor.mjs and never touches a flags object, so
+// read-tracking would call a working flag inert. Anything read off argv must stay out.
+export const FILTER_FLAGS = new Set([
+  'type',
+  'source',
+  'project',
+  'tier',
+  'since',
+  'from',
+  'to',
+  'branch',
+  'scope',
+  'importance',
+  'limit',
+  'offset',
+  'sort',
+  'days',
+  'age-days',
+]);
+
+let suppliedFlags = new Set();
+let readFlags = new Set();
+
+/**
+ * Wrap a parsed flags object so every lookup is recorded.
+ *
+ * `get` and `has` are both trapped: a reader spelled `if ('tier' in flags)` must count as a
+ * read exactly like `flags.tier`. `ownKeys` deliberately is NOT — `Object.keys(flags)` is
+ * enumeration, not consumption, and `suggestUnknownFlags` does exactly that on its own parse.
+ */
+function trackFlagReads(flags) {
+  for (const k of Object.keys(flags)) suppliedFlags.add(k);
+  return new Proxy(flags, {
+    get(target, prop, recv) {
+      if (typeof prop === 'string') readFlags.add(prop);
+      return Reflect.get(target, prop, recv);
+    },
+    has(target, prop) {
+      if (typeof prop === 'string') readFlags.add(prop);
+      return Reflect.has(target, prop);
+    },
+  });
+}
+
+/** Start a fresh recording. `run()` calls this per invocation so tests can drive it in a loop. */
+export function resetFlagTracking() {
+  suppliedFlags = new Set();
+  readFlags = new Set();
+}
+
+/**
+ * Selection flags the user supplied that nothing looked at, sorted.
+ *
+ * Read AFTER the command has finished — a flag consumed late (inside a branch, or by a helper
+ * the command awaits) has still been read, and reporting it early would be a false alarm.
+ * @returns {string[]}
+ */
+export function inertFilterFlags() {
+  return [...suppliedFlags].filter((f) => FILTER_FLAGS.has(f) && !readFlags.has(f)).sort();
+}
+
+/**
+ * The sentence the user gets. Says what happened to their results, not what the parser did:
+ * "ignored" alone leaves them to work out whether the output is still the answer they asked
+ * for. It is not.
+ * @param {string} cmd
+ * @param {string[]} inert
+ * @returns {string}
+ */
+export function inertFilterFlagNotice(cmd, inert) {
+  const names = inert.map((f) => `--${f}`).join(' and ');
+  const verb = inert.length > 1 ? 'were' : 'was';
+  return (
+    `[mem] ${names} ${verb} ignored — \`${cmd}\` does not filter on ${inert.length > 1 ? 'them' : 'it'}, ` +
+    `so the results above are UNFILTERED. Run "claude-mem-lite help" for the flags this command reads.`
+  );
 }
 
 // ─── Output Helpers ──────────────────────────────────────────────────────────

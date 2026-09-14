@@ -1,6 +1,6 @@
 // tests/efficacy-bridge-select.test.mjs
 import { describe, it, expect } from 'vitest';
-import { lessonBindsToRegion, bridgeFired } from '../lib/efficacy-bridge-select.mjs';
+import { lessonBindsToRegion, bridgeFired } from '../benchmark/efficacy-bridge-select.mjs';
 
 describe('lessonBindsToRegion', () => {
   it('true when a lesson identifier appears in the region', () => {

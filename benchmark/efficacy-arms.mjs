@@ -1,4 +1,9 @@
-// lib/efficacy-arms.mjs — pure arm-semantics for the efficacy severe test.
+// benchmark/efficacy-arms.mjs — pure arm-semantics for the efficacy severe test.
+//
+// Lives beside its only consumer, not in lib/: lib/ is shipped product code, registered in
+// BOTH source-files.mjs and package.json#files, and these two files are neither (they serve
+// benchmark/efficacy-harness.mjs and their own tests). Keeping them there made lib/ mean two
+// things and left the registration rule unmechanizable — see tests/lib-registration-complete.
 // ONE tested source of truth for "what does arm X mean", because a wrong per-arm
 // env silently invalidates the experiment (cf. #8711 isolated-v1: an omitted
 // model env floored every arm and read like a real 0/8 result).
@@ -10,7 +15,7 @@
 //                            in the imperative template — channel-isolation vs T (same
 //                            position; memory-attribution vs genuine spec). See spec
 //                            docs/superpowers/specs/2026-06-29-task-imperative-memory-injection-design.md
-import { formatTaskImperative } from './task-imperative.mjs';
+import { formatTaskImperative } from '../lib/task-imperative.mjs';
 
 export const INJECTED_ARMS = new Set(['A', 'AL', 'F', 'B']);
 

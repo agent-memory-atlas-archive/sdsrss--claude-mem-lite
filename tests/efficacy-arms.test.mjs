@@ -1,6 +1,6 @@
 // tests/efficacy-arms.test.mjs
 import { describe, it, expect } from 'vitest';
-import { armConfig, INJECTED_ARMS, taskSuffixForArm } from '../lib/efficacy-arms.mjs';
+import { armConfig, INJECTED_ARMS, taskSuffixForArm } from '../benchmark/efficacy-arms.mjs';
 
 describe('efficacy arm semantics (single tested source of truth — cf. #8711 env floor)', () => {
   it('F: bind-salience injection', () => {

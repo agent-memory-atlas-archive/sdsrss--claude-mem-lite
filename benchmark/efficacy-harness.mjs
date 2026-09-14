@@ -43,8 +43,8 @@ import { execSync, execFileSync, execFile } from 'child_process';
 import { promisify } from 'util';
 const execFileP = promisify(execFile);
 
-import { armConfig, INJECTED_ARMS, taskSuffixForArm } from '../lib/efficacy-arms.mjs';
-import { lessonBindsToRegion, bridgeFired } from '../lib/efficacy-bridge-select.mjs';
+import { armConfig, INJECTED_ARMS, taskSuffixForArm } from './efficacy-arms.mjs';
+import { lessonBindsToRegion, bridgeFired } from './efficacy-bridge-select.mjs';
 
 const REPO = process.cwd();
 const args = Object.fromEntries(

@@ -165,6 +165,18 @@ describe('a selection flag the command never reads is reported', () => {
     expect(r.stderr, `stderr was:\n${r.stderr}`).not.toMatch(/ignored|UNFILTERED/);
   });
 
+  it('stays quiet for optimize, the one DB command that parses its own argv', () => {
+    // Found by the pre-ship review, not by the sweep that shipped the list: the sweep
+    // enumerated the DB-command family and `optimize` reads --project and --scope with
+    // args.indexOf() at mem-cli.mjs:3505,3518, so read-tracking sees them supplied and never
+    // read. The notice said "the results above are UNFILTERED" directly under stdout's own
+    // `Project filter: demo`.
+    const r = cli(['optimize', '--project', 'demo']);
+    expect(r.stderr, `optimize --project warned:\n${r.stderr}`).not.toMatch(/was ignored/);
+    const r2 = cli(['optimize', '--scope', 'wide']);
+    expect(r2.stderr, `optimize --scope warned:\n${r2.stderr}`).not.toMatch(/were? ignored/);
+  });
+
   it('stays quiet for doctor, which selects its mode off raw argv', () => {
     const r = cli(['doctor', '--metrics']);
     expect(r.stderr, `stderr was:\n${r.stderr}`).not.toMatch(/ignored|UNFILTERED/);

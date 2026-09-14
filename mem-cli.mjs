@@ -3616,10 +3616,18 @@ import { DAY_MS } from './lib/time-constants.mjs';
  * Commands that read their own raw argv instead of the object parseArgs returns, so the
  * inert-flag notice below has no way to observe a flag being consumed and must stay quiet.
  * `adopt` / `unadopt` hand `cmdArgs` straight to adopt-cli.mjs; `doctor` selects its mode
- * with `args.includes('--x')`. Adding a command here is the per-command twin of leaving a
- * flag out of FILTER_FLAGS.
+ * with `args.includes('--x')`; `cmdOptimize` reads `--project` and `--scope` positionally
+ * (`args.indexOf('--scope')`, and see its own note about parsing flags that way). Adding a
+ * command here is the per-command twin of leaving a flag out of FILTER_FLAGS.
+ *
+ * Do not extend this by hand alone. `tests/cli-argv-parsed-commands-complete.test.mjs`
+ * DERIVES the answer — it walks the dispatcher's switch, reads each handler's body, and
+ * fails if a handler indexes raw argv for a FILTER_FLAGS name without being listed here.
+ * `optimize` was the second miss on this list in one branch (`unadopt --all` was the first),
+ * both found by sweeping invocations, and a sweep only ever covers the population somebody
+ * remembered to enumerate.
  */
-const ARGV_PARSED_COMMANDS = new Set(['adopt', 'unadopt', 'doctor']);
+const ARGV_PARSED_COMMANDS = new Set(['adopt', 'unadopt', 'doctor', 'optimize']);
 
 export async function run(argv) {
   // The inert-selection-flag notice is emitted HERE rather than inside the dispatcher because

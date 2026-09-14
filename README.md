@@ -128,7 +128,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **FTS integrity management** -- `mem_fts_check` tool verifies FTS5 index health or rebuilds indexes on demand, useful after database recovery or when search results seem wrong
 - **Atomic multi-table writes** -- `saveObservation` wraps the observations + observation_files INSERTs in a single `db.transaction()`, preventing orphaned rows on crash
 - **Modular NLP pipeline** -- Synonym maps, stop words, scoring constants, and query building extracted into focused modules (`synonyms.mjs`, `stop-words.mjs`, `scoring-sql.mjs`, `nlp.mjs`) for independent testing and maintenance
-- **Porter-aligned PRF** -- Pseudo-relevance feedback terms are now stemmed with the same Porter algorithm used by FTS5, ensuring PRF expansion terms match the search index
+- **Surface-form PRF expansion** -- `observations_fts` is built on FTS5's default `unicode61` tokenizer, so the index is **not stemmed**: a query term matches the word forms actually stored, and `crash` does not match a row that only contains `crashes`. Pseudo-relevance feedback therefore uses the Porter stemmer only to *bucket* morphological variants when judging which candidate terms are discriminative, and emits the most frequent **surface** form of each — emitting a bare stem (`cach`) would match nothing and kill expansion recall
 
 ## Platform Support
 

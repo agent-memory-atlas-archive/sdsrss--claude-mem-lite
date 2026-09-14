@@ -2,6 +2,56 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.9.0 — the silent dropped filter, and a round of checks whose criteria were right and whose populations were not
+
+**Upgrade note.** No schema change, no migration, nothing to do. Downgrading is clean:
+`npm i claude-mem-lite@6.8.3` (or pin the plugin to that version) needs no data-directory
+work, because nothing in this release touches the database format.
+
+Three things change what you see.
+
+- **A selection flag a command does not read now says so.** Previously `claude-mem-lite
+  browse --type bugfix` silently returned the unfiltered dashboard: `--type` is real on
+  `search`, `save` and `export`, so it cleared the known-flag check, and `browse` simply
+  never looked at it. You got a wider answer than you asked for with no signal. There is
+  now one stderr line naming every dropped flag. It goes to stderr, leaves stdout and the
+  exit code untouched, and stays quiet when the command failed for another reason or when
+  the command reads its own argv.
+
+- **`doctor` tells you the deeper checks exist.** A plain `claude-mem-lite doctor` audits
+  the install and prints "All checks passed!" — while `--benchmark`, `--metrics` and
+  `--session-audit` audit the database and retrieval layers, and nothing ever mentioned
+  them. If your install is healthy but recall is poor, that wording ended your search.
+
+- **A search result no longer echoes your whole query back.** A long query produced output
+  that scaled with it: 50,000 characters in, 50,024 out on the CLI, and the MCP face has no
+  argv ceiling, so it carried the lot into the model's context. Labels are now bounded and
+  report the real length alongside the prefix. The worst of the three sites was the
+  no-results branch, which printed the SYNONYM-EXPANDED query and so returned more than it
+  received (measured 1.32x).
+
+Fixes, each with a prior failing state:
+
+- **`setup.sh` used one variable for three different locations**, so after relocating a
+  data directory the legacy-database check, the dependency-broken flag and the migration
+  each asked about the wrong one. Two separate defects; both had survived twelve audit
+  rounds because every guard that hunts this shape sweeps `.mjs`/`.js` and the shipped
+  bash hooks are outside that population.
+- **`post-tool-use.sh` wrote its captured Read paths where the Node side does not read
+  them** whenever `CLAUDE_MEM_RUNTIME_DIR` was set — so those file paths were dropped from
+  every episode, and the file itself sat outside the reaper's directory and grew forever.
+- **`doctor` prescribed a repair binary that was itself one of the missing files**, and
+  separately reported an install as never deployed while forty of its files were present,
+  withdrawing the `repair` that would have worked.
+- **`get D#<missing>` printed "not found" twice**, the second a superset of the first.
+- **`optimize --project` reported the filter as ignored** while applying it.
+
+One LLM-visible change: an example inside the memory-extraction prompt said "FTS5 porter
+stemmer doesn't tokenize CJK". This index does not use the Porter tokenizer, so the example
+stated something false about the system the model was describing. It now reads "FTS5's
+default tokenizer doesn't split CJK", which is true of the index and teaches the same
+thing. Nothing about your stored memories changes.
+
 ## v6.8.3 — a managed block that could eat the prose around it, and a search that dead-ended on a repairable fault
 
 **Upgrade note.** No schema change, no migration, nothing to do. Two behaviour changes

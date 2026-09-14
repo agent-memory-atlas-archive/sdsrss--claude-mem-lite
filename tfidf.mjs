@@ -1,15 +1,14 @@
-// tfidf.mjs — tokenization + Porter stemming.
+// tfidf.mjs — the Porter stemmer.
 //
 // NAME IS HISTORICAL. This module was the TF-IDF vector search engine (vocabulary, vectors,
 // cosine similarity, vector search, RRF merge). Phase-1 (v3.17.0, 2026-06-27) gated that arm
 // off; Phase-2 removed it. What is left is the text-normalization half, which was never part
 // of the vector arm and has live consumers on the DEFAULT retrieval path:
 //   - porterStem  -> search-scoring.mjs (PRF term extraction)
-//   - tokenize    -> benchmark/adoption-cosine.mjs
+// `tokenize` lived here too until it was moved to benchmark/adoption-cosine.mjs, beside the
+// only callers it had left; this module is now one function under a two-word historical name.
 // RRF_K moved to lib/rrf.mjs, its actual home. See tests/vector-arm-removed.test.mjs for the
 // removal contract and tasks/specs/vector-arm-removal.md for the measurements behind it.
-
-import { cjkBigrams } from './utils.mjs';
 
 // ─── Porter Stemmer ──────────────────────────────────────────────────────────
 // Minimal Porter stemmer (1980). It used to normalize tokens for the TF-IDF vocabulary,
@@ -187,47 +186,4 @@ export function porterStem(w) {
   }
 
   return word;
-}
-
-// ─── Tokenization ───────────────────────────────────────────────────────────
-
-const CJK_RANGE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
-
-/**
- * Tokenize text into stemmed terms.
- * ASCII: lowercase + split + Porter stem.
- * CJK: reuse cjkBigrams() for consistency with FTS5.
- *
- * Built for the TF-IDF vocabulary, which is gone; the surviving consumer is
- * benchmark/adoption-cosine.mjs, which builds its own bags. The "aligned with FTS5's
- * porter tokenizer" claim the old docblock made here is NOT true and was already
- * contradicted by the stemmer's own note above — observations_fts uses unicode61 with no
- * stemming, so these terms are stems and FTS5's are surface forms.
- */
-export function tokenize(text) {
-  if (!text) return [];
-  text = String(text).toLowerCase();
-
-  const tokens = [];
-
-  // Split into ASCII and CJK segments
-  const parts = text.split(/([\u4e00-\u9fff\u3400-\u4dbf]+)/);
-  for (const part of parts) {
-    if (CJK_RANGE.test(part)) {
-      // CJK: use bigrams for consistency with FTS5 indexing
-      const bigrams = cjkBigrams(part);
-      if (bigrams) {
-        for (const t of bigrams.split(/\s+/)) {
-          if (t.length >= 2) tokens.push(t);
-        }
-      }
-    } else {
-      // ASCII: split on non-alphanumeric, then Porter stem
-      for (const t of part.split(/[^a-z0-9]+/)) {
-        if (t.length >= 2) tokens.push(porterStem(t));
-      }
-    }
-  }
-
-  return tokens;
 }

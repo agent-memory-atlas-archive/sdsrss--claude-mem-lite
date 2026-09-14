@@ -6,7 +6,10 @@
 // subject is worse than no guard. What remains is what tfidf.mjs still exports and what
 // the default retrieval path still consumes.
 import { describe, it, expect } from 'vitest';
-import { tokenize, porterStem } from '../tfidf.mjs';
+import { porterStem } from '../tfidf.mjs';
+// tokenize moved to benchmark/adoption-cosine.mjs (its only callers live there); the stemmer
+// stayed, because search-scoring.mjs uses it on the default retrieval path.
+import { tokenize } from '../benchmark/adoption-cosine.mjs';
 
 describe('tokenize', () => {
   it('lowercases and splits ASCII', () => {

@@ -2,6 +2,43 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.9.1 — three things a real user hits, found by using the product instead of reading it
+
+**Upgrade note.** No schema change, no migration, nothing to do. Downgrading is clean:
+`npm i claude-mem-lite@6.9.0` (or pin the plugin to that version) needs no data-directory
+work, because nothing in this release touches the database format.
+
+Three fixes, all from an end-to-end QA round that drove the CLI, the hooks and the MCP
+server the way a user does rather than auditing the source.
+
+**`claude-mem-lite <anything> | head` printed a Node stack trace.** Closing the read end of
+the pipe — `| head -1`, `| grep -q`, quitting `less` — made the CLI die on an unhandled
+EPIPE instead of ending quietly. Measured 20 trials per command before the fix: `search`,
+`export`, `recent`, `stats`, `doctor`, `timeline` and `citation-stats` crashed 20/20 at
+`head -1`, `browse` 19/20. The fix drops EPIPE at the `bin` entry and rethrows everything
+else. It deliberately does **not** force-exit: doing so would have made `doctor | head -1`
+report success under `pipefail` while the same doctor exits 1 unpiped, quietly breaking the
+`claude-mem-lite doctor || alert` contract the installer documents.
+
+**`status` told you to reinstall a symlink that already existed.** When
+`~/.local/bin/claude-mem-lite` is present and working but that directory is not on PATH —
+the common case on a non-login shell — `status` printed "run install again to create
+symlink". Re-running the installer recreates the link, reports ✓, and leaves `status` saying
+the same thing. It now names the directory and the `export PATH=…` line, and tells a missing
+symlink, a dangling one, a directory of that name, and an on-PATH command that fails apart.
+`status --json` gains a `linked` field on the `cli` check.
+
+**A single `get` undid what `maintain` had just done.** `maintain execute --ops
+demote_pinned` floors a heavily-injected, never-cited observation so it stops crowding out
+better memories — and one read promoted it straight back, on that op's own target
+population. Reads no longer re-promote a row the pinned-but-uncited rule would floor.
+Ordinary low-importance rows still gain importance when you keep coming back to them, and a
+lesson-bearing row still reaches importance 2, which is the floor that rule sets for it.
+
+Known and not fixed: an explicit `update <id> --importance 1` is reverted by the next read
+the same way. Telling "1 because nobody set it" from "1 because a human said so" needs a
+column the schema does not have, so it is a design decision rather than a patch.
+
 ## v6.9.0 — the silent dropped filter, and a round of checks whose criteria were right and whose populations were not
 
 **Upgrade note.** No schema change, no migration, nothing to do. Downgrading is clean:

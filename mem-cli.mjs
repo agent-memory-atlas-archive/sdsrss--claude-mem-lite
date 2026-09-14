@@ -949,7 +949,16 @@ function cmdGet(db, args) {
       sections.push(dRows.map(formatDeferredDetail).join('\n\n'));
       totalFound += dRows.length;
     }
-    if (deferredMissing.length > 0) {
+    // This note exists for a MIXED request: other sections still render, so without it the
+    // output looks complete while an id the caller asked for silently produced nothing.
+    // A deferred-only request that matched nothing is not that shape — the terminal branch
+    // below prints the same list plus the `defer list` hint, and running both made
+    // `get D#99` say it twice, the second line a superset of the first. Conditions checked
+    // rather than the note dropped: silencing it outright would blind the case it is for.
+    const deferredOnlyMiss =
+      dRows.length === 0 &&
+      bySrc.obs.length + bySrc.session.length + bySrc.prompt.length + bySrc.event.length === 0;
+    if (deferredMissing.length > 0 && !deferredOnlyMiss) {
       process.stderr.write(
         `[mem] Deferred item(s) not found: ${deferredMissing.map((i) => `D#${i}`).join(', ')}\n`,
       );

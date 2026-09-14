@@ -1259,9 +1259,15 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   | vocab_mismatch_paraphrase (n=12) | R@10 0.3407 · MRR 0.4161 | R@10 0.2990 · MRR 0.4834 | ΔR@10 −0.042, ΔMRR +0.067 |
   | cjk_mixed (n=15) | R@10 1.000 · P@10 0.940 | unchanged | 0.000 |
 
-  Verdict TRADEOFF: one gain against five regressions. **Read the resolution before the
-  signs**: the ruler prints 1/n per suite, and only `precision_hard_negatives` (1/n = 0.033)
-  resolves a Δ this size — its **P@10 −0.054 is the one movement that is real**. Every vocab
+  Verdict TRADEOFF: one gain against five regressions. **That verdict counts all twelve
+  metric-suite cells (4 metrics × 3 suites); the table above prints the 8 that moved**, so
+  the fifth regression is in a cell the table does not show — counting the Δ column as
+  published gives four. Stating it because rule 3 ("state the population") is exactly what a
+  reader needs here to reconcile the two.
+
+  **Read the resolution before the signs**: the ruler prints 1/n per suite, and only
+  `precision_hard_negatives` (1/n = 0.033) resolves a Δ this size. Two of its three movements
+  clear that floor — **P@10 −0.054 and nDCG −0.044**; its ΔR@10 −0.029 does not. Every vocab
   figure, the −0.042 and the +0.067 alike, is below that suite's 1/n = 0.083 and cannot be
   resolved either way. So the honest summary is not "recall traded for precision"; it is
   "precision measurably worse, recall not shown to improve at all".

@@ -105,9 +105,9 @@ scratch file there — moves the headline.
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **392 files / 6255**, 0 skipped | `fix/qa-round-sentinel-and-fts` @ 2026-09-13, v6.8.3 release tree |
-| Knip | **43** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree |
-| Coverage | **85.52** stmts · **79.81** branches · **91.24** funcs · **86.72** lines | same tree, vitest 5.0.0, 3/3 green runs |
+| Tests | **406 files / 6350**, 0 skipped (1 skips without git hooks) | `converge/20260914-setup-sh-runtime-dir` @ 2026-09-14, v6.9.0 tree |
+| Knip | **32** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree |
+| Coverage | **85.51** stmts · **79.82** branches · **90.89** funcs · **86.75** lines | same tree, vitest 5.0.0 |
 
 Coverage `include` is a **denylist** — staying out costs a named `exclude`. Outside by
 design: `install.mjs`, `server.mjs`, `hook.mjs`, `cli.mjs`, `benchmark/**`, `scripts/**`

@@ -16,8 +16,9 @@
 // The two arms that make the rest readable are the FLOOR and the IMPORTS arm:
 //
 //   * `node -e ''` is the floor — Node's own start, which no change to this repo can move.
-//     Every "our cost" figure below is measured ABOVE it, because quoting 88ms as though it
-//     were all ours would attribute ~21ms of V8 boot to the code under test.
+//     Every "our cost" figure below is measured ABOVE it, because quoting a raw column as
+//     though it were all ours would credit Node's whole boot — the floor row, 16.4ms on the
+//     standing read below — to the code under test.
 //   * `hook.mjs` with NO event argument loads the whole top-level import graph and then
 //     matches no `case`, so it is the import cost with the work subtracted. The dispatcher's
 //     switch falling through is what makes this arm possible; if a future default: arm does
@@ -254,7 +255,8 @@ function buildArms(sbx) {
  *
  * READ THIS IMMEDIATELY AFTER THAT ARM, never at the end of the run. The `session-start` arm
  * below it is a real SessionStart: its first spawn finds the leftover buffer, flushes it and
- * unlinks it, and the eleven after that find nothing. Sampling at the end therefore reports
+ * unlinks it, and the rest of the run's spawns (fourteen at the default n=15) find nothing.
+ * Sampling at the end therefore reports
  * "the hook never buffered" for a hook that buffered correctly — which is how the first
  * version of this file failed its own self-check.
  *

@@ -3,8 +3,9 @@
 //
 // The two-doctor split is invisible from outside: `doctor` with no flags goes to install.mjs's
 // health check, and `--benchmark` / `--metrics` / `--session-audit` are routed to
-// cli/doctor.mjs by cli.mjs. Measured on a clean sandbox: the plain run prints nineteen check
-// lines and a count, and the strings "benchmark", "metrics" and "session-audit" appear nowhere
+// cli/doctor.mjs by cli.mjs. On a clean sandbox the plain run prints a couple of dozen check
+// lines and a count — the exact number depends on the sandbox's own state, so it is not quoted
+// as a property — and the strings "benchmark", "metrics" and "session-audit" appeared nowhere
 // in it. A user whose install is healthy but whose RETRIEVAL is bad reads "All checks passed!"
 // and has no way to learn that a retrieval benchmark is one flag away.
 //

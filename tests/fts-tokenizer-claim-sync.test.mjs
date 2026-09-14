@@ -15,13 +15,48 @@
 // later is a legitimate change — it just has to take the README with it, which is the point.
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createTestDb, insertSession } from './test-helpers.mjs';
 
 // D#207: join() rather than new URL('../README.md', import.meta.url).
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Every file this package SHIPS, repo-relative. `package.json#files` is the manifest npm
+ * actually packs, so it carries the bash hooks and the markdown that `walkShipped`'s
+ * ".mjs/.js" walk cannot see. Directory entries are expanded; README* and LICENSE are added
+ * because npm packs those whatever `files` says (measured on v6.1.0: README.zh-CN.md is in
+ * the tarball and is not in `files`).
+ */
+/**
+ * Word-bounded on purpose: a bare /porter/i also matches **re**porter**, and the very line
+ * this guard was widened to fix carries `vitest --reporter=verbose` two clauses after the
+ * claim. The unbounded version reported that line as an offender after it had been
+ * corrected — a warning fired at correct usage, which is worse than the silence it replaces
+ * and is the same defect two other guards in this branch shipped.
+ */
+const PORTER = /\bporter\b/i;
+
+function shippedPopulation() {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  const out = new Set();
+  const add = (rel) => {
+    const full = join(ROOT, rel);
+    let st;
+    try {
+      st = statSync(full);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) for (const n of readdirSync(full)) add(`${rel}/${n}`);
+    else out.add(rel);
+  };
+  for (const f of pkg.files || []) add(f);
+  for (const n of readdirSync(ROOT)) if (/^(README|LICENSE|llms)/i.test(n)) add(n);
+  return [...out];
+}
 
 describe('FTS tokenizer: behaviour and the README agree', () => {
   it('the observations index does not stem — a stem matches nothing, the surface form matches', () => {
@@ -57,17 +92,63 @@ describe('FTS tokenizer: behaviour and the README agree', () => {
     db.close();
   });
 
-  it('README does not claim FTS5 stems', () => {
-    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-    // Guard the guard: the file has to be the one carrying the search-quality prose, or the
-    // assertion below passes because it is reading something else.
-    expect(readme).toMatch(/Pseudo-relevance feedback/i);
+  it('nothing SHIPPED ties Porter to FTS5', () => {
+    // POPULATION, and this is the half the first version got wrong. It read `README.md` and
+    // nothing else, in a commit whose own message called this "the recurring failure this
+    // repo keeps paying for" — so a re-tie anywhere but that one file was invisible to the
+    // guard written to prevent exactly it. The pre-ship review's own sweep then found one:
+    // `hook-llm.mjs`, a shipped LLM PROMPT TEMPLATE, which is the worst surface for it
+    // because the reader is a model rather than a person.
+    //
+    // The population is now `package.json#files` — the real shipped set, which includes the
+    // three bash hooks and the markdown, and is therefore wider than `walkShipped`'s
+    // ".mjs/.js" (the blind spot that hid two setup.sh defects for twelve audit rounds).
+    // Plus the files npm packs regardless of `files`: README* and LICENSE.
+    const files = shippedPopulation();
 
-    const offenders = readme
-      .split('\n')
-      .filter((line) => /porter/i.test(line) && /fts5?/i.test(line))
-      .filter((line) => !/not stemmed|does not stem|unicode61/i.test(line));
+    // Premise before criteria. An empty population agrees with every claim.
+    expect(files.length, 'the shipped population came back empty').toBeGreaterThan(100);
+    expect(files, 'the prose the README half of this guard exists for').toContain('README.md');
+    expect(files, 'the prompt templates').toContain('hook-llm.mjs');
 
-    expect(offenders, `README lines tying Porter to FTS5:\n${offenders.join('\n')}`).toEqual([]);
+    const offenders = [];
+    for (const rel of files) {
+      let text;
+      try {
+        text = readFileSync(join(ROOT, rel), 'utf8');
+      } catch {
+        continue; // generated at pack time (npm-shrinkwrap.json) or otherwise absent
+      }
+      for (const [i, line] of text.split('\n').entries()) {
+        if (!PORTER.test(line) || !/fts\s?-?5?\b/i.test(line)) continue;
+        // The corrected forms, which SAY the index does not stem. Those are the sentences
+        // this guard wants to survive, not the ones it hunts.
+        if (/not stemmed|does not stem|no stemming|NOT true|unicode61/i.test(line)) continue;
+        offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+      }
+    }
+
+    expect(
+      offenders,
+      'shipped lines tying Porter to FTS5. The index is unicode61 and does not stem; a line ' +
+        'saying otherwise is false wherever it ships, and in a prompt template a model reads ' +
+        `it as fact:\n${offenders.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('can still say NO, and does not fire on "reporter"', () => {
+    // Both directions, because a sweep that cannot discriminate passes by describing nothing.
+    const offend = (line) => PORTER.test(line) && /fts\s?-?5?\b/i.test(line);
+    expect(offend('PRF terms are stemmed with the same Porter algorithm used by FTS5')).toBe(true);
+    expect(offend('"FTS5 doesn\'t split CJK", "vitest --reporter=verbose hangs"')).toBe(false);
+    expect(offend('the FTS5 index is unicode61 and porter is not enabled')).toBe(true); // the
+    // exclusion list, not the match, is what lets that last one through — asserted here so a
+    // change to either half is visible.
+  });
+
+  it('the README half still has its own subject', () => {
+    // Guard the guard: the sweep above is only meaningful if README.md is still the file
+    // carrying the search-quality prose the original claim lived in.
+    expect(readFileSync(join(ROOT, 'README.md'), 'utf8')).toMatch(/Pseudo-relevance feedback/i);
   });
 });

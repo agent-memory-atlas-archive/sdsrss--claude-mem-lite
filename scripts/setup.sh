@@ -81,8 +81,45 @@ mkdir -p "$DATA_DIR/runtime"
 # and exit on the require() error. v2.79: write a JSON flag to runtime/.deps-broken
 # and hook.mjs SessionStart surfaces it in the Claude context as a HIGH-VISIBILITY
 # block; success branches remove the flag so a self-heal stays visible too.
-DEPS_FLAG="$DATA_DIR/runtime/.deps-broken"
-mkdir -p "$DATA_DIR/runtime" 2>/dev/null || true
+#
+# ...and that contract is a two-directory agreement, not a filename. hook.mjs renders the
+# flag from `join(RUNTIME_DIR, '.deps-broken')`, where RUNTIME_DIR is
+# `resolveRuntimeDir(resolveDataDir(CLAUDE_MEM_DIR))` (hook-shared.mjs). Hardcoding
+# "$DATA_DIR/runtime" here meant that under CLAUDE_MEM_DIR / CLAUDE_MEM_RUNTIME_DIR the
+# writer and the reader named two different directories, so the one surface that says
+# "your hooks are degraded" rendered nothing on exactly the installs that had relocated.
+# Measured 2026-09-14: flag planted where this script wrote it → banner 0 times; planted
+# where hook.mjs reads → 1. Same SPLIT shape lib/resolve-data-dir.mjs documents; it
+# survived because tests/runtime-dir-single-home.test.mjs sweeps `walkShipped`, which is
+# every shipped .mjs/.js — a bash hook is structurally outside that population.
+#
+# ASK the shared resolver instead of re-deriving its rules (absolute-only, "undefined" /
+# "null" rejected) in a second language. lib/resolve-data-dir.mjs is a leaf module —
+# node: builtins only — so it still loads in the broken-dependency state this flag
+# describes. Gated on an override actually being set: with neither var the resolver
+# returns "$DATA_DIR/runtime" by definition, and SessionStart should not pay a node spawn
+# to be told that. A resolver that is missing (truncated tree) or that throws (invalid
+# override) falls back to today's path; the Node side rejects a bad value loudly enough.
+#
+# ONLY this marker moves. `.mcp-dedup-v2.78` and `.residue-warned-v2.55` below are one-shot
+# state about THIS MACHINE's install — a ~/.claude.json edit and a settings.json warning,
+# not state a hook hands to another component. Read lib/resolve-data-dir.mjs's MOVES/STAYS
+# list before relocating either: moving a run-once marker re-runs what it gated.
+RUNTIME_DIR="$DATA_DIR/runtime"
+if [[ -n "${CLAUDE_MEM_DIR:-}" || -n "${CLAUDE_MEM_RUNTIME_DIR:-}" ]] && [[ -f "$ROOT/lib/resolve-data-dir.mjs" ]]; then
+  # shellcheck disable=SC2016  # node script single-quoted on purpose; path passed via env, not shell expansion
+  _resolved="$(RESOLVER_MOD="$ROOT/lib/resolve-data-dir.mjs" node -e '
+    const { pathToFileURL } = require("node:url");
+    import(pathToFileURL(process.env.RESOLVER_MOD).href)
+      .then((m) => process.stdout.write(m.resolveRuntimeDir(m.resolveDataDir(process.env.CLAUDE_MEM_DIR))))
+      .catch(() => process.exit(1));
+  ' 2>/dev/null)" || _resolved=""
+  [[ -n "$_resolved" ]] && RUNTIME_DIR="$_resolved"
+  unset _resolved
+fi
+
+DEPS_FLAG="$RUNTIME_DIR/.deps-broken"
+mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 
 mark_deps_broken() {
   local reason="$1"

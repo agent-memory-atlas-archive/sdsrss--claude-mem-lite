@@ -409,7 +409,7 @@ models v5 (relative path, no `contains`) behind a tripwire that fails on the nex
 Under the stale model an `exclude` entry was a SUBSTRING test, so `'cli.mjs'` also
 excluded `mem-cli.mjs` and `adopt-cli.mjs`.
 
-## Invariants that bite — full text, all 37
+## Invariants that bite — full text, all 38
 
 _Verbatim from CLAUDE.md lines 415-1189 at v6.5.0._
 
@@ -1207,6 +1207,39 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   included — `list.includes(platform)` agrees on the simple case and is wrong on `["!win32"]`
   in the direction that tells a correct platform it is unsupported. Windows is still NOT
   CI-covered (no runner exists), so the README claims "installs", not "supported".
+- **A structural sweep is only as wide as the population it enumerates, and that population
+  is written down once and then trusted forever.** `tests/shipped-tree.mjs`'s `walkShipped`
+  is documented as "Every shipped `.mjs`/`.js` module", and every sweep built on it inherits
+  that filter — including `tests/runtime-dir-single-home.test.mjs`, whose whole subject is
+  the defect FORM "a shipped module builds `join(…, 'runtime')` itself instead of asking the
+  resolver". Three shipped bash hooks (`scripts/setup.sh`, `post-tool-use.sh`,
+  `pre-agent-inject.sh`) are structurally outside it, and `setup.sh` is the FIRST hook
+  SessionStart runs. That is where two instances of the exact defect the sweep exists to
+  catch lived through twelve audit rounds, measured 2026-09-14:
+  - `setup.sh` wrote `.deps-broken` to `$HOME/.claude-mem-lite/runtime` while `hook.mjs`
+    renders it from `join(RUNTIME_DIR, …)`, i.e. `resolveRuntimeDir(resolveDataDir(
+    CLAUDE_MEM_DIR))`. Two arms: flag planted where the writer writes → the "hooks are
+    degraded" banner rendered **0** times; planted where the reader reads → **1**. Under a
+    relocation the only surface that reports hook degradation was silent.
+  - The same one-variable-for-three-locations confusion sent both database migrations at
+    `CODE_DIR`. The legacy `~/.claude-mem/` backup is gated on "no `claude-mem-lite.db`
+    here yet", which under a relocation nothing ever falsifies — the product creates the
+    database in `DB_DIR`. Three SessionStarts with the product creating its own database
+    in between: control arm **1** backup and stable, relocated arm **1 → 3**, one full copy
+    of the legacy database per session start without bound. This is the THIRD outing of the
+    `DB_DIR` / `CODE_DIR` confusion in this repo (v6.3.0, then that fix reintroduced with
+    the halves swapped, then here), which is why `setup.sh` now spells all three location
+    names out with the reason each does or does not follow the override.
+
+  Two rules come out of it. **Read a structural guard's population before its criteria** —
+  a correct criterion over the wrong population is indistinguishable from a clean sweep, and
+  a file type missing from the population must be an explicit, written exception rather than
+  a default. And **fix this class with behavioural guards, not text scans**: a scan of
+  `setup.sh` would have been one more ruler carrying the same blind spot.
+  `tests/setup-sh-deps-flag-relocation.test.mjs` and
+  `tests/setup-sh-legacy-db-relocation.test.mjs` instead observe which file the live
+  `mark_deps_ok` branch deletes and which directory each migration acts on, and each carries
+  controls so a red arm cannot be mistaken for a harness that never reached the branch.
 
 ## Condensed surfaces — original wording (pre-20 KB cap, v6.5.0)
 

@@ -171,6 +171,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 - **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at an unadopted temp dir and assert a premise first.
 - **An MCP tool's advertised JSON Schema is not its enforced schema, and `.pipe()` is where they part** — zod 4 renders the ZodPipe's INPUT side. Put the constraint INSIDE the `z.preprocess`.
 - **Tool name mapping**: Claude Code's Agent tool is `'Agent'`, not `'Task'`; Skill via `event.tool_input?.skill`. Skill commands (`/search`, `/recall`, `/recent`, `/timeline`) use `!` preprocessing for CLI injection.
+- **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the three shipped bash hooks sit outside every guard built on it, which is where two `setup.sh` runtime-dir splits hid for 12 audit rounds. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.
 <!-- claude-mem-lite:begin v1 -->
 ## claude-mem-lite — persistent memory
 

@@ -47,7 +47,7 @@ Seven hook events in `hooks/hooks.json`: `SessionStart`, `PreCompact`, `PreToolU
 matchers, not three**; `install.mjs`'s settings.json twin must stay equal to it.
 
 `code-graph-mcp overview .` maps the tree; the modules whose ROLE the filename does not give
-away are: **`tfidf.mjs` — the name is historical**, it is tokenizing + Porter stemming only
+away are: **`tfidf.mjs` — the name is historical**, it is the Porter stemmer alone
 since the vector engine was removed; `lib/tool-refusal.mjs` gates PostToolUseFailure,
 separating a program failing from the agent's own chain refusing; `hook-optimize.mjs` is
 re-enrich + normalize + cluster-merge + smart-compress; `server.mjs` exposes 18 tools, 9 in
@@ -59,10 +59,10 @@ user-prompt.
 Retrieval path: `sanitizeFtsQuery` → BM25 → OR fallback → concept co-occurrence. SessionStart
 emits `<claude-mem-context>` on stdout fresh from the DB.
 
-**Where new code goes — the trigger is a SHARED code path, never line count.** Logic two
-faces share (CLI + MCP, or two hook events) goes to `lib/*-core.mjs`. **Register every new
-`lib/` module in BOTH `source-files.mjs` and `package.json#files`** — a missed registration
-has shipped a broken tarball three times.
+**Where new code goes:** `lib/` takes a path two faces SHARE (CLI + MCP, or two hook events
+→ `lib/*-core.mjs`), a unit carved out of an entry file so COVERAGE reaches it, or a LEAF
+that keeps a load graph out. **Never line count alone. Register every new one in BOTH
+`source-files.mjs` and `package.json#files`.**
 
 ## Measurement doctrine
 

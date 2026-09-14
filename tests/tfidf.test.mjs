@@ -1,4 +1,4 @@
-// tests/tfidf.test.mjs — tokenization + Porter stemming.
+// tests/tfidf.test.mjs — the Porter stemmer, plus the tokenizer that moved to benchmark/.
 //
 // The vocabulary / vector / cosine / vectorSearch / vectorsEnabled blocks that used to
 // make up most of this file are GONE with the TF-IDF vector arm (Phase-2). They are

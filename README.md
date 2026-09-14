@@ -735,7 +735,7 @@ claude-mem-lite/
   hook-semaphore.mjs   # LLM concurrency control: file-based semaphore for background workers
   schema.mjs           # Database schema: single source of truth for tables, migrations, FTS5
   tool-schemas.mjs     # Shared Zod schemas for MCP tool validation
-  tfidf.mjs            # tokenization + Porter stemming (name is historical: the TF-IDF vector engine it held was removed)
+  tfidf.mjs            # the Porter stemmer (name is historical: the TF-IDF vector engine it held was removed)
   tier.mjs             # Temporal tier system: activity-based time window classification
   utils.mjs            # Re-export hub: backward-compatible surface for all utility modules
   nlp.mjs              # FTS5 query building: synonym expansion, CJK bigrams, sanitization

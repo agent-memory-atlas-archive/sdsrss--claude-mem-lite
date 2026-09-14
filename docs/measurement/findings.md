@@ -1317,7 +1317,7 @@ has TWO matchers, not three** — the `Skill` one went with the skill registry
 | `hook-update.mjs` | Auto-update via GitHub Releases (24h check, dev-mode skip) |
 | `hook-optimize.mjs` | LLM-powered optimization: re-enrich, normalize, cluster-merge, smart-compress |
 | `server.mjs` | MCP server — 18 tools: 9 core exposed via `tools/list` (mem_search/mem_recent/mem_recall/mem_get/mem_save/mem_timeline + mem_defer/mem_defer_list/mem_defer_drop) + 9 hidden-but-callable by exact name. Split flag in `tool-schemas.mjs`; agents reach hidden ones via the `claude-mem-lite <cmd>` CLI |
-| `tfidf.mjs` | **Name is historical** — tokenization + Porter stemming only. The vector engine (vocabulary, vectors, cosine, vector search, RRF merge) was removed in Phase-2; `porterStem` survives because `search-scoring.mjs` uses it on the default path, and `RRF_K` moved to `lib/rrf.mjs` |
+| `tfidf.mjs` | **Name is historical** — the Porter stemmer alone (`tokenize` moved to `benchmark/adoption-cosine.mjs`, its only callers). The vector engine (vocabulary, vectors, cosine, vector search, RRF merge) was removed in Phase-2; `porterStem` survives because `search-scoring.mjs` uses it on the default path, and `RRF_K` moved to `lib/rrf.mjs` |
 | `tier.mjs` | Temporal tier system — activity-based time window classification |
 | `schema.mjs` | DB schema definitions and migrations (v49 DROPs `vocab_state` + `observation_vectors`) |
 | `utils.mjs` | FTS query sanitization, synonym expansion, CJK extraction, token estimation |

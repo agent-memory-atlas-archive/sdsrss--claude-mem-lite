@@ -1241,6 +1241,44 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `mark_deps_ok` branch deletes and which directory each migration acts on, and each carries
   controls so a red arm cannot be mistaken for a harness that never reached the branch.
 
+## Levers measured and rejected
+
+- **A Porter tokenizer on the FTS index — measured 2026-09-14, REJECTED.** The index is
+  `unicode61` with no stemming, so `crash` does not match a row containing only `crashes`
+  and `inputs` does not match `input`. Adding `tokenize='porter unicode61'` to `ensureFTS`
+  is the obvious repair and it is **measured net-negative**, including on the one suite that
+  exists for this exact problem.
+
+  `benchmark/denoise-ab.mjs`, control and treatment back-to-back on the same tree, the
+  treatment arm re-run once and identical to the digit (the ruler is deterministic, so the
+  delta is not noise):
+
+  | suite | control | with porter | Δ |
+  |---|---|---|---|
+  | precision_hard_negatives (n=30) | R@10 0.8867 · P@10 0.8108 · nDCG 0.9226 | R@10 0.8581 · P@10 0.7564 · nDCG 0.8789 | **ΔP@10 −0.054**, ΔR@10 −0.029, ΔnDCG −0.044 |
+  | vocab_mismatch_paraphrase (n=12) | R@10 0.3407 · MRR 0.4161 | R@10 0.2990 · MRR 0.4834 | ΔR@10 −0.042, ΔMRR +0.067 |
+  | cjk_mixed (n=15) | R@10 1.000 · P@10 0.940 | unchanged | 0.000 |
+
+  Verdict TRADEOFF: one gain against five regressions. **Read the resolution before the
+  signs**: the ruler prints 1/n per suite, and only `precision_hard_negatives` (1/n = 0.033)
+  resolves a Δ this size — its **P@10 −0.054 is the one movement that is real**. Every vocab
+  figure, the −0.042 and the +0.067 alike, is below that suite's 1/n = 0.083 and cannot be
+  resolved either way. So the honest summary is not "recall traded for precision"; it is
+  "precision measurably worse, recall not shown to improve at all".
+
+  Two things to carry. **CJK is untouched by construction** — Porter is ASCII-only, and this
+  project's CJK recall runs on synonym extraction, so "add stemming" would never have been a
+  cross-language improvement however the English half read. And the mechanism behind the
+  vocab arm failing to improve is **not established**: the plausible story is that the
+  expansion machinery is built around an unstemmed index (`extractPRFTerms` deliberately
+  emits surface forms, and the synonym maps are keyed on surface forms too), so stemming both
+  dilutes IDF and collapses the distinctions those expansions rely on — but that is a
+  hypothesis nobody has measured, and it must not be quoted as a finding.
+
+  The user-facing gap is real and stays open. What is closed is one candidate fix. A
+  query-side expansion — mapping a query term to the word forms the index actually holds —
+  is untested and would need its own run of this same ruler.
+
 ## Condensed surfaces — original wording (pre-20 KB cap, v6.5.0)
 
 The 2026-09-08 cap rewrote CLAUDE.md's header and its Commands / module / Rulers tables in

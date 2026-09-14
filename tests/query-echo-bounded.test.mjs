@@ -89,6 +89,36 @@ describe('the MCP search result does not carry the whole query', () => {
     db.close();
   });
 
+  it('bounds it on the NO-RESULTS branch, where the echo is bigger than the query', async () => {
+    // The third site, and the one the arm above explicitly waved off: its comment said a
+    // long non-matching query "lands on a third branch which never renders the label at
+    // all". True of the LABEL and false of the echo — that branch prints `Searched as:
+    // ${expanded}`, the EXPANDED query, which synonym expansion makes larger than the input.
+    // Measured before the fix: a 10,329-char query produced a 13,691-char MCP result, 1.33x
+    // the input, on the tool whose purpose is to spend model context carefully.
+    const db = createTestDb();
+    insertSession(db, { id: 's', project: 'test' });
+    insertObs(db, { sessionId: 's', title: 'caching layer crash', project: 'test' });
+
+    // Terms that expand (so `expanded !== query` and the branch is reached) and match
+    // nothing, so it is the no-results path rather than the results path.
+    const nonMatching = `database connection timeout ${Array.from({ length: 900 }, (_, i) => `errorword${i}`).join(' ')}`;
+    const res = await handleSearchForTest(db, { query: nonMatching, deep: false });
+    const text = res.content[0].text;
+
+    // Premise: this really is the no-results branch AND the echo line was reached, or the
+    // length assertion below passes by the branch never printing anything.
+    expect(text).toMatch(/No results found/);
+    expect(text).toMatch(/Searched as:/);
+
+    expect(
+      text.length,
+      `MCP result is ${text.length} chars for a ${nonMatching.length}-char query`,
+    ).toBeLessThan(nonMatching.length);
+    expect(text.length).toBeLessThan(2000);
+    db.close();
+  });
+
   it('bounds it on the FILTERED-query branch too', async () => {
     // A second, separately-reached echo site: when a query tokenises to nothing, the hint
     // quotes it back. Found by sweeping for the ENTITY (`${args.query}` / `${query}`) rather

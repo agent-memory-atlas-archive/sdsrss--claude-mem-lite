@@ -24,7 +24,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
 
 const REPO = resolve(import.meta.dirname, '..');
 const INSTALLER = join(REPO, 'install.mjs');
@@ -116,5 +116,38 @@ describe('doctor remedies name commands that can run', () => {
 
     expect(lines).toMatch(/repair/);
     expect(lines).not.toMatch(/no claude-mem-lite code is deployed/);
+  });
+
+  it('does not call an install "never deployed" while forty of its files are present', async () => {
+    // The case above keeps `server.mjs`, so it exercises the discriminator from the side
+    // where it works. The neighbouring population is the one it cannot reach: BOTH entry
+    // points gone and everything else still there. `hasAnyManagedCode` asked only about
+    // MANAGED_ENTRY_POINTS — two files — while the message it gates claims "none present"
+    // about the whole managed list, and withdraws `repair`, which is runnable here because
+    // cli.mjs is sitting right there.
+    //
+    // Single-shape fixtures are structurally blind to the shape next door; that is what the
+    // pre-ship review used to find this.
+    const { SOURCE_FILES } = await import('../source-files.mjs');
+    const home = mkdtempSync(join(tmpdir(), 'doctor-remedy-'));
+    homes.push(home);
+    const dir = join(home, '.claude-mem-lite');
+    const present = SOURCE_FILES.filter((f) => f !== 'server.mjs' && f !== 'hook.mjs');
+    for (const f of present) {
+      mkdirSync(dirname(join(dir, f)), { recursive: true });
+      writeFileSync(join(dir, f), '// stub\n');
+    }
+    // Premise: the fixture really is the shape under test — lots present, both entries gone.
+    expect(present.length).toBeGreaterThan(40);
+    expect(existsSync(join(dir, 'cli.mjs'))).toBe(true);
+    expect(existsSync(join(dir, 'server.mjs'))).toBe(false);
+    expect(existsSync(join(dir, 'hook.mjs'))).toBe(false);
+
+    const lines = messages(doctorIn(home)).join('\n');
+
+    expect(lines, `doctor called this a data-only directory:\n${lines}`).not.toMatch(
+      /no claude-mem-lite code is deployed/,
+    );
+    expect(lines).toMatch(/repair/);
   });
 });

@@ -2371,12 +2371,19 @@ async function doctor() {
   // Both checks below otherwise prescribe `repair`, which re-syncs an install from the signed
   // release and runs from `<INSTALL_DIR>/cli.mjs` — one of the very entry points whose absence
   // produced the verdict, so on this shape it hands the reader a command that cannot start.
-  // Damaged (some entry points survive) and never-deployed (none do) are different populations
-  // with opposite commands, the same conflation the plugin-only branch above fixed once already.
-  // `some` vs `every` is the whole discriminator, and both live on one list in
-  // lib/install-shape.mjs so they cannot drift apart. Declared out here because the hook-script
-  // check needs it too and a `const` inside the try below is not in scope there.
-  const noCodeInstall = !shape.managed && !shape.activePluginVersion && !hasAnyManagedCode(INSTALL_DIR);
+  // Damaged (some of the managed files survive) and never-deployed (none do) are different
+  // populations with opposite commands, the same conflation the plugin-only branch above fixed
+  // once already. Declared out here because the hook-script check needs it too and a `const`
+  // inside the try below is not in scope there.
+  //
+  // The population is SOURCE_FILES, not the two entry points. Asking about the entry points
+  // alone made this verdict a claim about two files while the message it gates says "none
+  // present" about all of them: an install holding cli.mjs and every lib/ module, with only
+  // server.mjs and hook.mjs gone, was reported as a data directory with no install behind it
+  // — and sent to re-`install` instead of `repair`, which was runnable from the cli.mjs
+  // already there.
+  const noCodeInstall =
+    !shape.managed && !shape.activePluginVersion && !hasAnyManagedCode(INSTALL_DIR, SOURCE_FILES);
   const installRemedy = `node ${join(PROJECT_DIR, 'install.mjs')} install`;
   try {
     const skipDrift = !shape.managed && !!shape.activePluginVersion;

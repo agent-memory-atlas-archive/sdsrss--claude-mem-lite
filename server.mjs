@@ -426,7 +426,12 @@ function formatSearchOutput(
       hint.push('No results found.');
       if (args.query) {
         const expanded = ftsQuery || args.query;
-        if (expanded !== args.query) hint.push(`Searched as: ${expanded}`);
+        // Bounded like the other two echo sites. This one is the worst of the three: it
+        // prints the EXPANDED query, and synonym expansion makes it LARGER than the input
+        // (measured 13,691 chars out for 10,329 in, 1.33x). The first pass of this fix
+        // skipped the branch on the reasoning that it "never renders the label" — true of
+        // the label, false of the echo.
+        if (expanded !== args.query) hint.push(`Searched as: ${queryLabel(expanded)}`);
         hint.push('Tip: check spelling, try broader terms, or use mem_stats to see available data.');
       }
     }

@@ -76,7 +76,7 @@ import { formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cl
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
 import { CLI_INVOKE } from './cli-path.mjs';
-import { neutralizeContextDelimiters, neutralizeSkillDelimiters } from './format-utils.mjs';
+import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
 import {
   memSearchSchema,
   memRecentSchema,
@@ -420,7 +420,7 @@ function formatSearchOutput(
         'This is a recall miss (the rewrite ran), not a query-syntax issue; the memory likely has no related observations.',
       );
     } else if (args.query && !ftsQuery) {
-      hint.push(`Query "${args.query}" was filtered (FTS5 keywords/special chars only).`);
+      hint.push(`Query "${queryLabel(args.query)}" was filtered (FTS5 keywords/special chars only).`);
       hint.push('Tip: use content words instead of operators (AND, OR, NOT, NEAR).');
     } else {
       hint.push('No results found.');
@@ -449,7 +449,7 @@ function formatSearchOutput(
   );
   // P2-6: empty/omitted query falls through to a "listing recent" path — label it explicitly
   // so callers don't mistake BM25-less results for relevance-ranked ones.
-  const qLabel = args.query ? ` for "${args.query}"` : ' (no query — listing recent)';
+  const qLabel = args.query ? ` for "${queryLabel(args.query)}"` : ' (no query — listing recent)';
   // Surface AND→OR fallback so callers (incl. Claude) know a strict multi-term
   // query actually matched only a subset of the terms. Suppressed when the caller
   // explicitly requested OR semantics — there's no "fallback" in that path.

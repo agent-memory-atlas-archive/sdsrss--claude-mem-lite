@@ -40,6 +40,7 @@ export { scrubSecrets, SECRET_PATTERNS } from './secret-scrub.mjs';
 export { stripPrivate } from './lib/private-strip.mjs';
 export {
   truncate,
+  queryLabel,
   typeIcon,
   fmtDate,
   fmtTime,

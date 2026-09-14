@@ -25,6 +25,36 @@ export function truncate(str, max = 80) {
   return str.slice(0, end) + '\u2026';
 }
 
+/**
+ * Longest query echoed back verbatim in a result label. Long enough that no query a human
+ * or an agent actually types is touched — the shapes that exceed it are pasted stack traces,
+ * file dumps and multi-paragraph questions.
+ */
+export const QUERY_LABEL_MAX = 200;
+
+/**
+ * A query as it should appear in output handed back to whoever asked.
+ *
+ * Every search surface labels its answer with the query (`Found N result(s) for "<query>"`),
+ * which is how a caller confirms what was actually searched. Unbounded, that made the size
+ * of the answer track the size of the question: a 50,000-character query produced 50,024
+ * characters of CLI output, and the MCP face — with no argv ceiling — carried the whole
+ * thing back into the model's context. For a tool whose purpose is to spend context
+ * carefully, returning several KB of the caller's own input is the budget it was invoked to
+ * protect.
+ *
+ * Bounded, not silently truncated: the real length travels with the prefix, so the label
+ * still answers the question it exists for. `truncate` handles the surrogate-pair boundary.
+ *
+ * @param {string} query
+ * @returns {string}
+ */
+export function queryLabel(query) {
+  if (typeof query !== 'string') return '';
+  if (query.length <= QUERY_LABEL_MAX) return query;
+  return `${truncate(query, QUERY_LABEL_MAX)} [query truncated; ${query.length} chars]`;
+}
+
 // Two delimiter classes are defanged here:
 //   1. The blocks claude-mem-lite wraps injected context in (claude-mem-context /
 //      memory-context / session-handoff). User-derived text containing one LITERALLY

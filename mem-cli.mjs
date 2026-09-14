@@ -6,7 +6,14 @@ import { homedir } from 'os';
 import { ensureDbWithWalRecovery, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
-import { truncate, typeIcon, inferProject, scrubSecrets, COMPRESSED_PENDING_PURGE } from './utils.mjs';
+import {
+  truncate,
+  queryLabel,
+  typeIcon,
+  inferProject,
+  scrubSecrets,
+  COMPRESSED_PENDING_PURGE,
+} from './utils.mjs';
 import { resolveProject } from './project-utils.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
 // falls back to the enclosing work-tree root, so `cd src/auth && … recent` reads what the
@@ -191,7 +198,7 @@ function emitRecallHint(db, query) {
     const n = countRecallableByFile(db, q);
     if (n > 0) {
       out(`[mem] ${n} observation(s) are linked to that file — search indexes text, not file paths.`);
-      out(`[mem] Try: claude-mem-lite recall "${q}"`);
+      out(`[mem] Try: claude-mem-lite recall "${queryLabel(q)}"`);
     }
   } catch {
     /* hint is best-effort; never break search */
@@ -326,7 +333,7 @@ async function cmdSearch(db, args, { llm } = {}) {
       out(JSON.stringify({ query, total: 0, returned: 0, offset, limit, deep: false, results: [] }));
     } else {
       emitDeferredTrailer();
-      fail(`[mem] No valid search terms in "${query}"`);
+      fail(`[mem] No valid search terms in "${queryLabel(query)}"`);
     }
     return;
   }
@@ -477,7 +484,7 @@ async function cmdSearch(db, args, { llm } = {}) {
         }),
       );
     } else {
-      out(`[mem] No results for "${query}"`);
+      out(`[mem] No results for "${queryLabel(query)}"`);
       emitRecallHint(db, query);
       // The zero-result path is where the trailer earns its keep — the D#92
       // failure chain was exactly "searched, found nothing, item was deferred".
@@ -515,7 +522,7 @@ async function cmdSearch(db, args, { llm } = {}) {
         }),
       );
     } else {
-      out(`[mem] No results for "${query}" at offset ${offset}`);
+      out(`[mem] No results for "${queryLabel(query)}" at offset ${offset}`);
     }
     return;
   }
@@ -576,7 +583,7 @@ async function cmdSearch(db, args, { llm } = {}) {
   // Pluralize on total — "Found 1 of 44 result" reads wrong; the population (44) drives
   // grammatical number, not the page slice (1).
   out(
-    `[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${query}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}`,
+    `[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${queryLabel(query)}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}`,
   );
   // `~Nt` = est. tokens to fetch this row's full body via mem_get (attachBodyTokens, paired with
   // MCP). Conditional so a row that skipped enrichment renders cleanly, not "~undefinedt".

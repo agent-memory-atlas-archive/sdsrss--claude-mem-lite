@@ -181,6 +181,68 @@ describe('consumeHandoff marks the row instead of deleting it', () => {
     expect(detectContinuationIntent(db, prompt, 'p')).toBe(false);
   });
 
+  // Each of the three stages queries through TWO arms — scoped (a CC session id was in
+  // hook stdin) and unscoped (legacy / no stdin) — and they are separate SQL strings, so a
+  // case covering one says nothing about the other. A per-site mutation run over this suite
+  // caught exactly that: stripping the predicate from the arm no case exercised left all
+  // 12 cases green. These three are the mirror arms.
+
+  it('Stage -1 stops anchoring once consumed — scoped arm', () => {
+    vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
+      ...NEUTRAL_GIT,
+      headSha: 'cafebabe0002',
+    });
+    const prompt = 'what next';
+    // type 'clear' so the scoped anchor query can only match through `session_id = ?`.
+    const h = insertHandoff(db, { type: 'clear', sessionId: 'cc-A', sha: 'cafebabe0002' });
+    expect(detectContinuationIntent(db, prompt, 'p', 'cc-A')).toBe(true); // premise
+
+    consumeHandoff(db, h);
+
+    expect(detectContinuationIntent(db, prompt, 'p', 'cc-A')).toBe(false);
+  });
+
+  it('Stage 0 stops auto-continuing once consumed — unscoped arm', () => {
+    // Unscoped Stage 0 needs keyword overlap (or an explicit continuation keyword) even for
+    // a short prompt. ONE overlapping token: enough for Stage 0's `hasOverlap`, below
+    // Stage 2's weighted threshold of 3, so the assertion stays about Stage 0.
+    const prompt = 'ranker status?';
+    const h = insertHandoff(db, { type: 'clear', sessionId: 's1', keywords: 'ranker' });
+    expect(detectContinuationIntent(db, prompt, 'p')).toBe(true); // premise
+
+    consumeHandoff(db, h);
+
+    expect(detectContinuationIntent(db, prompt, 'p')).toBe(false);
+  });
+
+  it('Stage 2 stops matching once consumed — scoped arm', () => {
+    const prompt = 'how did the scoring_sql multiplier and the bm25 floor turn out';
+    // No sha (Stage -1 cannot fire) and type 'exit' (Stage 0 reads 'clear' only), so the
+    // verdict can only come from Stage 2's scoped query.
+    const h = insertHandoff(db, {
+      type: 'exit',
+      sessionId: 'cc-other',
+      keywords: 'scoring_sql bm25 multiplier',
+    });
+    expect(detectContinuationIntent(db, prompt, 'p', 'cc-A')).toBe(true); // premise
+
+    consumeHandoff(db, h);
+
+    expect(detectContinuationIntent(db, prompt, 'p', 'cc-A')).toBe(false);
+  });
+
+  it('a second consume does not move the timestamp the first one set', () => {
+    // consumeHandoff carries the predicate in its own WHERE so two sessions racing to
+    // inject the same exit handoff leave the FIRST stamp standing. Nothing else in this
+    // suite reaches that clause.
+    const h = insertHandoff(db);
+
+    expect(consumeHandoff(db, h, 1000)).toBe(1);
+    expect(consumeHandoff(db, h, 2000)).toBe(0);
+
+    expect(db.prepare('SELECT consumed_at FROM session_handoffs').get().consumed_at).toBe(1000);
+  });
+
   // ─── site 3: the startup dashboard's continuation pointer ─────────────────
 
   it('the dashboard stops promising a continuation it can no longer deliver', () => {

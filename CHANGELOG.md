@@ -2,6 +2,46 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.10.1 — the path scrubber was eating the filenames it was meant to protect
+
+**Upgrade note.** Nothing to do. No schema change, no migration, no config. Handoff rows
+written before this release keep whatever they stored; they expire on the existing age-based
+GC, and a session that hands off again overwrites its own row.
+
+**`Key Files` could name a redaction marker instead of a file.** `session_handoffs.key_files`
+holds filesystem paths and was scrubbed with the whole-string secret scrubber. Many credential
+patterns carry a value class that does not exclude `/` — measured 11 of the 40 on a 15-shape
+grid here, and 12, 15 and 21 on the three wider populations the pre-ship review tried; the
+count is grid-dependent, the mechanism is not. So the match ate the separator and everything
+after it, and `/home/ai/dev/app/password=hunter2abcdef/notes.mjs` was stored as
+`/home/ai/dev/app/password=***`. Both renderers show `basename()`, so a resuming session read
+`Key Files: password=***` where the file was `notes.mjs` — destroyed at write time and
+unrecoverable from the row. Two files under one such directory also collapsed onto the
+identical string. Scrubbing is per path segment here now, as it already was for the other six
+path columns.
+
+**A credential whose syntax spans a separator is redacted again.** Per-segment scrubbing cannot
+see `scheme://user:pass@host`, a Slack webhook path or a `postgres://` connection string, and
+that was accepted on the reasoning that these columns hold filesystem paths. They do not:
+`mem_save(files=[…])` validates only that each entry is a string, and the PostToolUse hook
+returns a URL verbatim from a tool's `path` input. Four URL shapes v6.10.0 redacted were being
+stored raw. A value carrying `://` is now scrubbed whole-string, which covers all seven path
+columns rather than one call site. Named cost: a URL whose credential sits in a path segment
+loses its filename to the greedy value class. A credential-free URL is untouched.
+
+**`match_keywords` stored credentials that its exclusion reason said could not reach it.** The
+recorded reason was that the column is built from tokenizer output, so a secret cannot survive.
+It has two inputs and neither behaves that way: the file arm never reaches the tokenizer, and
+the tokenizer splits a secret from its keyword rather than removing it, so `token=ghp_…`
+contributes the token as a term of its own. Both inputs are scrubbed at the derivation now. The
+column is never rendered and no export face reads the table, so this was data at rest on your
+own machine rather than a disclosure — worth removing all the same.
+
+**Correction to the v6.8.2 entry below.** It says "Five columns held paths … All six scrub now"
+and "Eight credential patterns have a value class that does not exclude `/`". Both numbers were
+low: there are seven path columns, and the pattern figure is an under-count on every population
+since tried. The entry is left as written because it records what was measured then.
+
 ## v6.10.0 — the cross-session handoff was shipping an empty envelope
 
 **Upgrade note.** Four additive nullable columns land on `session_handoffs`

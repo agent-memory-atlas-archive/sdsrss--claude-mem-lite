@@ -14,7 +14,7 @@ import {
   notLowSignalTitleClause,
   neutralizeContextDelimiters,
 } from './utils.mjs';
-import { scrubRecord } from './lib/scrub-record.mjs';
+import { scrubRecord, scrubFilePath } from './lib/scrub-record.mjs';
 import {
   HANDOFF_EXPIRY_CLEAR,
   HANDOFF_EXPIRY_EXIT,
@@ -262,7 +262,12 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // directories — accepted and then rendered as key files. `Key Files: claude-mem-lite`
   // in a real injection was the basename of the project directory.
   //
-  // Named cost: an extensionless FILE (Makefile, LICENSE) no longer qualifies. The only
+  // Named cost, and it is wider than "Makefile, LICENSE" — the pre-ship review diffed old
+  // against new over a plausible path set and the drop list is two classes: (a) every
+  // extensionless file, which includes the ones under `bin/` and `scripts/` that are
+  // executables rather than docs (this repo tracks `.githooks/pre-commit`), and (b) any
+  // extension longer than 10 characters, so `.env` qualifies but `.editorconfig` does not.
+  // The alternative to the whole rule is a hand-drawn list of extensionless filenames. The
   // alternative is a hand-drawn list of extensionless filenames, and a hand-drawn class is
   // the shape that has been rejected three times in this repo for rejecting real cases.
   // Residual, equally named: a directory that happens to end in `.something` still passes.
@@ -348,7 +353,12 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       // rewrite the serialized form risks breaking the downstream JSON.parse. Same rule
       // key_files follows below.
       nextSteps = JSON.stringify({
-        file: scrubSecrets(String(note.file)),
+        // scrubFilePath, not scrubSecrets: this field is a filesystem PATH, and eight of
+        // the secret patterns carry a value class that does not exclude `/`, so a
+        // whole-path scrub eats the separator and destroys the filename. That is the named
+        // mechanism this repo grew for exactly this shape; the prose fields below are prose
+        // and correctly take the plain scrub.
+        file: scrubFilePath(String(note.file)),
         title: scrubSecrets(String(note.title)),
         items: note.items.map((i) => scrubSecrets(String(i))),
       });
@@ -814,14 +824,21 @@ function renderHandoffFromRow(handoff, db, project) {
         .split('\n')
         .filter((l) => l.trim())
     : [];
-  // Match on the TITLE, not the whole line: rows written before key_decisions carried the
-  // `[type]` prefix hold bare titles, and they live until their expiry.
-  const decisionTitles = new Set(decisionLines.map(titleOf));
+  // Match on the WHOLE line. Matching on the stripped title collapsed two DIFFERENT
+  // observations that share a title but not a type — `[change] 更新测试` vanished from
+  // Completed because `[decision] 更新测试` was standing policy — and that false match was
+  // permanent while the thing it accommodated is not. Pre-ship defect lens.
+  const decisionWhole = new Set(decisionLines);
+  // The accommodation, scoped to the rows that actually need it: a row written before
+  // key_decisions carried the `[type]` prefix holds a bare title, so only those get the
+  // looser title-only match. They age out at the handoff's own expiry.
+  const legacyTitles = new Set(decisionLines.filter((l) => !TYPE_PREFIX_RE.test(l)).map((l) => titleOf(l)));
+  const isDuplicateOfDecision = (line) => decisionWhole.has(line) || legacyTitles.has(titleOf(line));
 
   if (handoff.completed) {
     const kept = safeText(handoff.completed)
       .split('\n')
-      .filter((l) => l.trim() && !decisionTitles.has(titleOf(l)));
+      .filter((l) => l.trim() && !isDuplicateOfDecision(l));
     // An empty `## Completed` header is worse than no header — three of the eight measured
     // projects had a session whose entire history was its decisions. No type tags are lost
     // with it: key_decisions carries them now too.

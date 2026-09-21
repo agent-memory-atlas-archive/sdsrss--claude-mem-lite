@@ -4,8 +4,10 @@
 // this machine, zero readers.
 //
 // This is also the answer to "the next step must be written down, not inferred":
-// session_summaries.next_steps is populated in 11 of 310 rows (3.5%), so the LLM-summary
-// route to a next step has already been measured and does not work.
+// session_summaries.next_steps is unreliable rather than dead, and both numbers belong here
+// because the lifetime average hides a trend: 15 of 318 rows non-empty (4.7%) over the
+// corpus lifetime, 4 of the newest 20 (20%). The reason to read a FILE is that a paused note
+// is written by a human on purpose and names its own verify command.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'fs';
 import { join } from 'path';

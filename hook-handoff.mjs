@@ -295,8 +295,17 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // T10d: capture HEAD sha so detectContinuationIntent can anchor on it later.
   // Best-effort — failures (non-git dir, missing binary, timeout) yield null.
   let gitShaAtHandoff = null;
+  let gitBranch = null;
+  let gitDirtyCount = null;
   try {
-    gitShaAtHandoff = gitStateModule.readGitState({ cwd: process.cwd() }).headSha || null;
+    const st = gitStateModule.readGitState({ cwd: process.cwd() });
+    gitShaAtHandoff = st.headSha || null;
+    gitBranch = st.branch || null;
+    // 0 and NULL are different answers here: "measured, and the tree is clean" versus "no
+    // measurement happened". readGitState returns an empty `changed` for BOTH a clean repo
+    // and a directory that is not a repo at all, so the sha/branch decide which one it was.
+    // Collapsing them would let a handoff written outside a repo claim a clean tree.
+    gitDirtyCount = st.headSha || st.branch ? st.changed.length : null;
   } catch {
     /* swallow — handoff must still persist */
   }
@@ -323,8 +332,8 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   const safeKeyFiles = JSON.stringify([...fileSet].slice(0, 20).map((f) => scrubSecrets(String(f))));
   db.prepare(
     `
-    INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch, git_sha_at_handoff)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch, git_sha_at_handoff, git_branch, git_dirty_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project, type, session_id) DO UPDATE SET
       working_on = excluded.working_on,
       completed = excluded.completed,
@@ -333,7 +342,9 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       key_decisions = excluded.key_decisions,
       match_keywords = excluded.match_keywords,
       created_at_epoch = excluded.created_at_epoch,
-      git_sha_at_handoff = excluded.git_sha_at_handoff
+      git_sha_at_handoff = excluded.git_sha_at_handoff,
+      git_branch = excluded.git_branch,
+      git_dirty_count = excluded.git_dirty_count
   `,
   ).run(
     project,
@@ -349,6 +360,8 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     safe.match_keywords,
     Date.now(),
     gitShaAtHandoff,
+    gitBranch,
+    gitDirtyCount,
   );
 }
 
@@ -629,6 +642,23 @@ function renderHandoffFromRow(handoff, db, project) {
   if (handoff.working_on) {
     lines.push('## Working On', neutralizeContextDelimiters(handoff.working_on), '');
   }
+
+  // Tree state. The sha has been stored since v25 but was only ever an INPUT to the
+  // continuation anchor — it was never shown, so a resumed session opened by running
+  // `git status` / `git rev-parse` to find out where it stood. Rendered right after the
+  // objective, because "which branch, and is the tree dirty" is the next question after
+  // "what was I doing". Branch names are defanged for the same reason key_files basenames
+  // are: git ref names admit angle brackets, and this text is replayed into the prompt.
+  // A 7-char sha cannot carry a complete tag, so it is sliced rather than scrubbed.
+  const treeBits = [];
+  if (handoff.git_branch) treeBits.push(`branch ${neutralizeContextDelimiters(handoff.git_branch)}`);
+  if (handoff.git_sha_at_handoff) treeBits.push(`@ ${String(handoff.git_sha_at_handoff).slice(0, 7)}`);
+  if (typeof handoff.git_dirty_count === 'number') {
+    // NULL stays silent: a row written before this shipped, or written outside a repo, has
+    // no measurement, and "clean" would be a claim nobody made.
+    treeBits.push(handoff.git_dirty_count === 0 ? 'clean' : `${handoff.git_dirty_count} uncommitted file(s)`);
+  }
+  if (treeBits.length > 0) lines.push('## Tree state', treeBits.join(' · '), '');
   if (handoff.completed) {
     lines.push(
       '## Completed',

@@ -126,6 +126,25 @@ describe('readPausedNote', () => {
     expect(note.items).toEqual(['fresh item']);
   });
 
+  it('marks a truncated item and never splits a surrogate pair', () => {
+    // Found by reading a real rendered block: the generated notes' Resume paragraph came
+    // out cut mid-word with nothing marking it, so it read as corrupt text rather than as
+    // a summary. The raw slice also had the hazard format-utils' own truncate documents —
+    // cutting between the halves of a surrogate pair emits a lone surrogate.
+    writePaused(
+      'long-paused.md',
+      `# Paused — long\n\n## Not done\n\n- ${'x'.repeat(199)}😀 and more text after it\n`,
+    );
+
+    const note = readPausedNote({ projectPath: root });
+
+    expect(note.items[0]).toMatch(/…$/); // visibly truncated
+    expect(note.items[0].length).toBeLessThanOrEqual(200);
+    // No unpaired surrogate anywhere in the result.
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    expect(loneSurrogate.test(note.items[0])).toBe(false);
+  });
+
   it('caps the item count and the item length', () => {
     const many = Array.from({ length: 12 }, (_, i) => `- item ${i} ${'x'.repeat(400)}`).join('\n');
     writePaused('big-paused.md', `# Paused — big\n\n## Not done\n\n${many}\n`);

@@ -291,10 +291,17 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // which is exactly the namespace the id equality could not reach, and all 17 live rows
   // carried key_decisions = 0 bytes. The liveness predicate stays the FULL one (this field
   // is replayed to a later session as standing policy — see the note above).
+  // `type` alongside the title: the render drops the duplicate copy of each decision from
+  // `## Completed`, so this section is the only place those entries still appear and it has
+  // to carry the `[bugfix]` / `[decision]` tag that Completed was providing. The only
+  // production reader of session_handoffs.key_decisions is this file's own renderer
+  // (session_summaries.key_decisions is a different column, a JSON array from Haiku), and
+  // every existing assertion on it is a substring/regex match on the title, so the added
+  // prefix is not a contract change for them.
   const decisions = db
     .prepare(
       `
-    SELECT title FROM observations
+    SELECT title, type FROM observations
     WHERE (memory_session_id = ? OR project = ?) AND COALESCE(importance, 1) >= 2
       AND ${liveObsFilterSql('')} ${obsWindowClause}
     ORDER BY created_at_epoch DESC LIMIT 10
@@ -370,7 +377,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     working_on: workingOn,
     completed: completed.map((c) => `[${c.type}] ${c.title}`).join('\n'),
     unfinished,
-    key_decisions: decisions.map((d) => d.title).join('\n'),
+    key_decisions: decisions.map((d) => `[${d.type}] ${d.title}`).join('\n'),
     match_keywords: keywords,
   });
   const safeKeyFiles = JSON.stringify([...fileSet].slice(0, 20).map((f) => scrubSecrets(String(f))));
@@ -679,6 +686,12 @@ function safeText(value) {
   return neutralizeContextDelimiters(String(value)).replace(ATX_HEADING_RE, '$1');
 }
 
+// `[bugfix] title` → `title`. Both `completed` and `key_decisions` store the observation
+// type this way; the bracket run is length-capped so a title that merely opens with a
+// bracket ("[WIP] ..." is not a type) is not silently truncated to nothing.
+const TYPE_PREFIX_RE = /^\[[^\]]{1,20}\]\s*/;
+const titleOf = (line) => line.replace(TYPE_PREFIX_RE, '').trim();
+
 function renderHandoffFromRow(handoff, db, project) {
   const ageSec = Math.round((Date.now() - handoff.created_at_epoch) / 1000);
   const ageStr =
@@ -725,14 +738,37 @@ function renderHandoffFromRow(handoff, db, project) {
     treeBits.push(handoff.git_dirty_count === 0 ? 'clean' : `${handoff.git_dirty_count} uncommitted file(s)`);
   }
   if (treeBits.length > 0) lines.push('## Tree state', treeBits.join(' · '), '');
-  if (handoff.completed) {
-    lines.push(
-      '## Completed',
-      ...safeText(handoff.completed)
+
+  // Key Decisions is computed here, before Completed renders, because Completed is deduped
+  // against it. Measured on the live corpus 2026-09-21 with the real predicates, population
+  // = every project with observations: 35 of 35 rendered Key Decisions lines were
+  // byte-identical to a Completed line, in all 8 projects. The overlap only became visible
+  // once the payload fix landed — before that both sections were empty.
+  //
+  // One-directional on purpose, and this is the F4 ruling rather than a preference:
+  // `completed` is the session's OWN HISTORY, `key_decisions` is standing policy replayed to
+  // a LATER session, which is why only the latter filters superseded_at. So the line to drop
+  // is the duplicate in history, and the one case where the two genuinely differ — a
+  // retracted decision, absent from key_decisions — is exactly the case where nothing is
+  // dropped and the history keeps it. Render-time only: the stored row is untouched, so all
+  // three F4 guards in tests/audit-silent-20260814.test.mjs still read what they pinned.
+  const decisionLines = handoff.key_decisions
+    ? safeText(handoff.key_decisions)
         .split('\n')
-        .map((l) => `- ${l}`),
-      '',
-    );
+        .filter((l) => l.trim())
+    : [];
+  // Match on the TITLE, not the whole line: rows written before key_decisions carried the
+  // `[type]` prefix hold bare titles, and they live until their expiry.
+  const decisionTitles = new Set(decisionLines.map(titleOf));
+
+  if (handoff.completed) {
+    const kept = safeText(handoff.completed)
+      .split('\n')
+      .filter((l) => l.trim() && !decisionTitles.has(titleOf(l)));
+    // An empty `## Completed` header is worse than no header — three of the eight measured
+    // projects had a session whose entire history was its decisions. No type tags are lost
+    // with it: key_decisions carries them now too.
+    if (kept.length > 0) lines.push('## Completed', ...kept.map((l) => `- ${l}`), '');
   }
   if (handoff.unfinished) {
     // Extract only the pending-work portion (before narrative history separator).
@@ -781,14 +817,8 @@ function renderHandoffFromRow(handoff, db, project) {
     }
   }
 
-  if (handoff.key_decisions) {
-    lines.push(
-      '## Key Decisions',
-      ...safeText(handoff.key_decisions)
-        .split('\n')
-        .map((l) => `- ${l}`),
-      '',
-    );
+  if (decisionLines.length > 0) {
+    lines.push('## Key Decisions', ...decisionLines.map((l) => `- ${l}`), '');
   }
 
   lines.push('</session-handoff>');

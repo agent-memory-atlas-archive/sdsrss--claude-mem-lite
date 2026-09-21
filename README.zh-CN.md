@@ -91,6 +91,7 @@
 - **LLM 并发控制** -- 基于文件的信号量将后台 worker 限制为 2 个并发 LLM 调用，防止资源争用
 - **stdin 溢出保护** -- Hook 输入在 256KB 处截断，对超大工具输出使用正则挽救关键信息
 - **跨会话交接** -- 在 `/clear` 或 `/exit` 时捕获会话状态（请求、已完成工作、后续步骤、关键文件），下次会话检测到继续意图时自动注入上下文（支持显式关键词和 FTS5 术语重叠匹配）
+  <br>**v6.10.0 变更**：注入块从 2 段变为 6 段。此前它的观测查询按钩子铸造的会话 id 过滤，而每一次 `mem_save` 写的是 `manual-<project>` id，两个命名空间不相交，所以 `completed` 与 `key_decisions` 根本够不到已保存的经验——库里 17 行交接记录这两个字段全是 0 字节。现在还会带 `## Tree state`（分支、短 sha、未提交文件数）和 `## Next steps`（读取项目里最新且未超过 7 天的 `tasks/<slug>-paused.md`）。`session_handoffs` 新增 4 个可空列；schema 版本号**刻意不动**，所以旧版本仍能打开数据库（已实测：v6.9.1 的代码能读写本版本迁移过的库）。回退方式：固定到 `claude-mem-lite@6.9.1`，无需处理数据目录。
 - **插件缓存 hook 自愈** -- Claude Code runtime 从 `~/.claude/plugins/cache/<mp>/<plugin>/<ver>/hooks/hooks.json` 读取插件 hook，而非 marketplace 源。当 `install.mjs` 写入 `settings.json` 的 hooks 与残留 cache `hooks.json` 同时存在（例如曾装过 marketplace 版本，或插件被 Claude Code 自动升级重建 cache），runtime 会注册两套 hook → 每次 SessionStart / UserPromptSubmit 都触发两份。`install.mjs` 和 `hook-update.mjs` 现在会清理每个 cache 版本目录下的 `hooks.json`；`hook.mjs session-start` 每次启动自愈（通过 `hasInstallManagedHooks` 门控，不影响纯插件模式用户）；`install.mjs status` 会报告 cache 污染状况（自 v2.31.1 / v2.31.2 起）。
 - **Git-SHA 延续锚点**（v2.31.0）-- handoff 记录包含 `git_sha_at_handoff` 字段，任何匹配当前 `HEAD` 的 handoff 都视为延续会话，不受 TTL 限制。代码状态比时钟时间更能反映上下文延续。
 - **启动面板**（v2.31.0）-- SessionStart hook 将 `git status` + `~/.claude/tasks/*.json` + `~/.claude/plans/*.md` + 最近 /exit 交接 + 最近事件数聚合为一个结构化块，通过 `hookSpecificOutput.additionalContext` 注入。

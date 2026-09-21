@@ -2,6 +2,72 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.10.0 — the cross-session handoff was shipping an empty envelope
+
+**Upgrade note.** Four additive nullable columns land on `session_handoffs`
+(`consumed_at`, `git_branch`, `git_dirty_count`, `next_steps`). There is nothing to do, and
+the schema version deliberately does **not** move: a newer build opening your database does
+not lock an older one out, which is the whole reason the bump was skipped. Revert path,
+measured rather than reasoned — on a copy of a real 107-observation database, this release
+added all four columns (version row stayed 49), and the v6.9.1 tree then opened the same
+file, read 16 handoff rows and 107 observations, and still wrote to it. So
+`npm i claude-mem-lite@6.9.1` (or pinning the plugin) needs no data-directory work.
+
+What you will notice: the block a new session receives after `/clear` or `/exit` goes from
+two sections to six. It was mostly empty before, and the measurements say how empty.
+
+**The payload could not reach the namespace your lessons live in.** `completed`,
+`key_files` and `key_decisions` were built with `WHERE memory_session_id = ?`, keyed on the
+id the hooks mint (`hook-<project>-<uuid8>`). Every explicit `mem_save` writes
+`manual-<project>`. Disjoint prefixes, so that join could never match a saved lesson — not
+rarely, by construction. On the maintainer's database: 101 of 105 observations sat in the
+`manual-` namespace, all 101 at importance >= 2, and all 17 stored handoff rows carried
+`completed` = 0 bytes and `key_decisions` = 0 bytes. The id side is now
+`(memory_session_id = ? OR project = ?)`, bounded by a time window rather than by the id.
+
+**Injecting a handoff now marks it instead of deleting the row.** A handoff delivered at a
+moment the model could not act on it used to be gone permanently, and the row behind any
+given injection no longer existed by the time anyone investigated it. `consumed_at` keeps
+it until the same age-based GC reaps it.
+
+**Tree state is rendered.** `git_sha_at_handoff` has been captured since v2.31.0 but was
+only ever an input to the continuation anchor, never shown — so a resumed session opened by
+running `git status` to find out where it stood. The block now carries
+`branch <name> · @ <sha> · N uncommitted file(s)`, and a measured-clean tree reads `clean`
+while an unmeasured one stays silent.
+
+**`tasks/<slug>-paused.md` is delivered as `## Next steps`.** It is the one place a session
+writes down by hand what is left and how to verify it, and nothing read it: 27 such files
+across 7 projects on the maintainer's machine, zero readers. Notes older than the handoff's
+own 7-day expiry are ignored. Deliberately not sourced from `deferred_work` — the
+`### Deferred Work` block already delivers the head of that queue at SessionStart, and
+adding it here would double-inject.
+
+**`key_files` kept directories and dropped repo-root files.** The filter asked for a path
+separator, which answers "does this look like a path", not "does this look like a file":
+59 of 218 `files_modified` entries were repo-root filenames like `hook.mjs` and were dropped,
+while extensionless slash-bearing values passed. It asks the basename for an extension now.
+Named cost: an extensionless file (`Makefile`, `.githooks/pre-commit`) no longer reaches
+`key_files`, and an extension over 10 characters (`.editorconfig`) does not qualify.
+
+**Replayed text can no longer forge a section header.** The block frames itself with
+`## Working On` and friends, and a prompt that opens with its own markdown outline flattened
+into it carrying `#` markers of its own. Stripping them takes a fixpoint, not one pass: the
+gap is two characters wide and `## ## Key Decisions` came out of a single pass as a live
+section.
+
+**`## Completed` and `## Key Decisions` no longer print the same lines twice.** Measured
+with the real predicates over every project with observations: 35 of 35 rendered Key
+Decisions lines were byte-identical to a Completed line. The dedup runs one way only, so a
+retracted decision — absent from standing policy by design — still appears in the session's
+own history.
+
+Two reviewers on disjoint lenses ran before the tag and sent back 2 P1, 2 P2 and 7 false
+claims of my own. Both P1s were in this release's own new code: a single-pass defang that
+re-formed the very header it strips, and an unbounded observation window on the `/clear`
+path — the path this release exists to fix — which reported a month-old decision from a
+different session as the current one's, and replayed it as standing policy.
+
 ## v6.9.1 — three things a real user hits, found by using the product instead of reading it
 
 **Upgrade note.** No schema change, no migration, nothing to do. Downgrading is clean:

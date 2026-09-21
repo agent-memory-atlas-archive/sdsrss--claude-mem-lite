@@ -280,14 +280,27 @@ describe('end-to-end leak check via in-memory DB', () => {
 // TEXT_FIELDS_BY_TABLE on purpose (scrubbing a stringified array can rewrite
 // quoted values and break JSON.parse) and prescribes the remedy in its header:
 // "Pre-scrub each element upstream of the JSON.stringify call instead."
-// hook-handoff.mjs:296 (session_handoffs.key_files) is the one call site that
-// did. These four columns are the ones that did not, asserted through the
+// buildAndSaveHandoff (session_handoffs.key_files) is the one call site that did.
+// These four columns are the ones that did not, asserted through the
 // SHIPPING writers rather than a test replica — __insertObservationForTest
 // exists because an earlier leak test asserted on a hand-spelled copy of the
 // write point and drifted from it.
-// Pre-ship defect review of v6.8.2. Eight SECRET_PATTERNS use a value class that does
-// NOT exclude `/` (secret-scrub.mjs:33/74/78/83/98 `[^\s,;'"}\]]{6,}`, :109 `[^\s'"]{6,}`,
-// :259, :260). Correct on prose; on a PATH the match eats the separator and everything
+//
+// CORRECTION, and it reverses what the sentence above was taken to mean: key_files
+// pre-scrubbed each ELEMENT, which is the letter of the prescription, using
+// `scrubSecrets` — the whole-string function, on a column of filesystem paths. So the
+// one call site held up as the compliant model was itself carrying the very defect the
+// paragraph below describes, through v6.10.0. It is fixed at its own call site and
+// pinned behaviourally in tests/handoff-key-files.test.mjs, which asserts the RENDERED
+// `## Key Files` line rather than only the stored column. Do not read "followed the
+// prescription" as "called the helper"; only the second is checkable, which is why
+// the header now names `scrubFilePaths`.
+// Pre-ship defect review of v6.8.2. Many SECRET_PATTERNS use a value class that does
+// NOT exclude `/`. That round said "eight" and enumerated
+// secret-scrub.mjs:33/74/78/83/98/109/259/260; v6.10.1's claims lens measured the figure an
+// UNDER-count on every population it tried. The measured count and its population now live
+// in lib/scrub-record.mjs and nowhere else, because five copies of a grid-dependent number
+// is how it stayed wrong. Correct on prose; on a PATH the match eats the separator and everything
 // after it, so `/repo/token=…/notes.mjs` was stored as `/repo/token=***` — the filename
 // destroyed at write time, irreversibly, and two different files under one such directory
 // collapsing to a single recall key.
@@ -326,6 +339,61 @@ describe('scrubFilePath — a credential in one segment cannot eat the rest of t
     expect(scrubFilePath('C:\\proj\\src\\hook-memory.mjs')).toBe('C:\\proj\\src\\hook-memory.mjs');
     expect(scrubFilePath('relative/path/x.mjs')).toBe('relative/path/x.mjs');
     expect(scrubFilePath('bare.mjs')).toBe('bare.mjs');
+  });
+
+  // The gap segment-wise scrubbing opened, and the reason the docblock gave for accepting it
+  // ("these columns hold filesystem paths") is measured FALSE: save-observation filters
+  // `params.files` on `typeof f === 'string'` alone, and bash-utils' extractFilePaths returns a
+  // URL verbatim from a `{path}` / `{filePath}` tool input under a `PostToolUse: *` matcher. So a
+  // URL reaches these columns, and its credential syntax is exactly the kind that spans `/`.
+  // v6.10.0's whole-string scrub caught all four of these; v6.10.1 without this guard caught none.
+  it('redacts a credential whose syntax SPANS the separator (URL shapes)', () => {
+    // The webhook is ASSEMBLED, never written as one literal — the convention
+    // tests/secret-scrub-r4.test.mjs:88-93 already established for this exact fixture.
+    // A whole literal is well-formed enough that GitHub's push protection classifies it as a
+    // live Slack webhook and rejects the push, which is what it did to the first draft of
+    // this case. The scrubber sees the assembled runtime string either way.
+    const webhookTail = 'X'.repeat(24);
+    const URL_SHAPES = [
+      'https://deploy:hunter2secret@internal.example.com/api/keys.json',
+      'ftp://svc:S3cretValue1@files.example.com/drop/report.csv',
+      'postgres://admin:pw123456@db.example.com/dump.sql',
+      'https://hooks.slack.com/services/' + 'T00000000/B00000000/' + webhookTail + '/payload.json',
+    ];
+    for (const u of URL_SHAPES) {
+      const out = scrubFilePath(u);
+      expect(out, `${u} was stored verbatim`).not.toBe(u);
+      expect(out).toContain('***');
+    }
+  });
+
+  it('leaves a credential-free URL byte-identical', () => {
+    // The guard must not fire on the scheme alone — scrubSecrets is what decides, and it is
+    // identity here. Without this, "redact URLs" would corrupt every http(s)/s3/file path.
+    for (const u of [
+      'file:///home/ai/dev/app/server.mjs',
+      'https://example.com/docs/readme.md',
+      's3://bucket/key/data.json',
+    ])
+      expect(scrubFilePath(u), `${u} was rewritten`).toBe(u);
+  });
+
+  it('the URL guard does not weaken the segment-wise path case', () => {
+    // The two rules must not fight: a plain filesystem path with a credential in a directory
+    // segment keeps its basename, exactly as the first case in this describe pins.
+    expect(scrubFilePath('/home/u/build/password=hunter2correct/out.js')).toBe(
+      '/home/u/build/password=***/out.js',
+    );
+  });
+
+  // NAMED COST of the guard, pinned so it is a decision and not a surprise: a URL-shaped value
+  // whose credential sits in a path segment now goes whole-string, so the greedy value class eats
+  // the filename — the very thing segment-wise scrubbing exists to prevent, traded back on this
+  // one shape. Redacting the credential wins over preserving a filename that is not a recall key.
+  it('named cost: a URL with a segment credential loses its filename', () => {
+    expect(scrubFilePath('https://example.com/password=hunter2correct/file.mjs')).toBe(
+      'https://example.com/password=***',
+    );
   });
 
   // The other half of the pre-ship review's finding: the READER moved and the stored rows

@@ -14,7 +14,7 @@ import {
   notLowSignalTitleClause,
   neutralizeContextDelimiters,
 } from './utils.mjs';
-import { scrubRecord, scrubFilePath } from './lib/scrub-record.mjs';
+import { scrubRecord, scrubFilePath, scrubFilePaths } from './lib/scrub-record.mjs';
 import {
   HANDOFF_EXPIRY_CLEAR,
   HANDOFF_EXPIRY_EXIT,
@@ -372,9 +372,10 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       // rewrite the serialized form risks breaking the downstream JSON.parse. Same rule
       // key_files follows below.
       nextSteps = JSON.stringify({
-        // scrubFilePath, not scrubSecrets: this field is a filesystem PATH, and eight of
-        // the secret patterns carry a value class that does not exclude `/`, so a
-        // whole-path scrub eats the separator and destroys the filename. That is the named
+        // scrubFilePath, not scrubSecrets: this field is a filesystem PATH, and many of
+        // the secret patterns carry a value class that does not exclude `/` (count and
+        // population: lib/scrub-record.mjs), so a whole-path scrub eats the separator and
+        // destroys the filename. That is the named
         // mechanism this repo grew for exactly this shape; the prose fields below are prose
         // and correctly take the plain scrub.
         file: scrubFilePath(String(note.file)),
@@ -386,9 +387,44 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     /* best-effort, like the task reader above — never block the handoff */
   }
 
-  // 6. Match keywords
-  const allText = [workingOn, ...completed.map((c) => c.title).filter(Boolean), unfinished].join(' ');
-  const keywords = extractMatchKeywords(allText, [...fileSet]);
+  // 6. Match keywords.
+  //
+  // Scrubbed at the DERIVATION, and the scrubbed file array is derived ONCE and feeds both
+  // sinks (here and key_files below) — the shape hook-llm.mjs uses where one path array
+  // reaches two columns. lib/scrub-record.mjs excludes match_keywords from scrubRecord, and
+  // the reason it recorded — "built from tokenizeHandoff() output (alphanumeric tokens
+  // only), so secrets cannot survive the upstream tokenizer" — does not hold on either arm:
+  // the FILE arm never reaches the tokenizer (it takes basename-minus-extension straight off
+  // this set, which holds RAW paths), and the tokenizer SPLITS a secret from its keyword
+  // rather than removing it, so `token=ghp_…` contributes `ghp_…` as a term of its own.
+  //
+  // Exposure, measured rather than asserted: nothing renders this column and no export face
+  // reads the table — `EXPORT_COLUMNS` is observations-only and `session_handoffs` has zero
+  // occurrences in server.mjs and the CLI. So this is local-DB-at-rest, with no egress path.
+  // A credential in a stored column is still worth removing; it is not a disclosure. (The
+  // sentence this replaces claimed egress through `export` and was false — a replacement
+  // justification written while retracting another one, unverified, which is this repo's
+  // signature recurrence. Pre-ship claims lens.)
+  //
+  // Per ELEMENT, then join — never scrub the concatenation. A credential noun ending one
+  // element and a `=`/`:` opening the next form a match that exists in NEITHER, and the
+  // derived term set then loses a word both columns keep (measured: `zebrafish`). Same rule
+  // next_steps and key_files already follow, and the same rule the truncation note below
+  // states. NOT identity on ordinary prose, which an earlier draft of this comment claimed:
+  // `api_key: handling` loses `handling` (5 of 6 ordinary developer prompts in a directed
+  // grid lose exactly one term). What is true, and is the actual justification, is that the
+  // term set now AGREES with what the resuming session is shown — `working_on` / `completed`
+  // / `unfinished` lose the same word through scrubRecord below. No value is scrubbed twice:
+  // these elements and the columns below are separate derivations from one raw source, each
+  // scrubbed once, which is the distinction D#46 is open about.
+  const safeFiles = scrubFilePaths([...fileSet]);
+  // The nullish guard mirrors what join() already did with a nullish element. Without it
+  // String(undefined) would put the literal token "undefined" into the term set — a behaviour
+  // change smuggled in by the per-element rewrite rather than chosen.
+  const allText = [workingOn, ...completed.map((c) => c.title).filter(Boolean), unfinished]
+    .map((t) => (t === null || t === undefined ? '' : scrubSecrets(String(t))))
+    .join(' ');
+  const keywords = extractMatchKeywords(allText, safeFiles);
 
   // T10d: capture HEAD sha so detectContinuationIntent can anchor on it later.
   // Best-effort — failures (non-git dir, missing binary, timeout) yield null.
@@ -427,7 +463,21 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     key_decisions: decisions.map((d) => `[${d.type}] ${d.title}`).join('\n'),
     match_keywords: keywords,
   });
-  const safeKeyFiles = JSON.stringify([...fileSet].slice(0, 20).map((f) => scrubSecrets(String(f))));
+  // scrubFilePath, not scrubSecrets — the same correction next_steps.file took above, and
+  // key_files was the last of the six path columns still taking the whole-string form. It
+  // was already element-wise, which is what made it look compliant with this module's
+  // prescription; the function was the wrong one. Many SECRET_PATTERNS have a value class
+  // that does not exclude `/` (count and population: lib/scrub-record.mjs), so a whole-path
+  // match eats the separator and the filename
+  // with it, and the renderer below emits `basename(f)` — `## Key Files` read `password=***`
+  // where the file was `notes.mjs`. Worse than a wrong name: fileSet is keyed on the RAW
+  // path, so two files under one credential-bearing directory survive dedup and then
+  // collapse onto the identical stored string.
+  // `safeFiles` was derived at the keywords block above, so both sinks see one scrubbed
+  // array rather than two independent scrubs of the same paths. Slicing after the map is
+  // equivalent to mapping after the slice (per-element, order-preserving) and keeps the
+  // keyword arm on the FULL set, which is what it read before.
+  const safeKeyFiles = JSON.stringify(safeFiles.slice(0, 20));
   // The UPSERT below resets `consumed_at`. Rewriting a handoff makes it fresh again, so it
   // must become injectable again: the DELETE that consumeHandoff replaced did this
   // implicitly (row gone, next build INSERTed a new one), while the UPSERT reuses the row.

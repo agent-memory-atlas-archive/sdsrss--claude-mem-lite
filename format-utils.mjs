@@ -134,6 +134,68 @@ export function neutralizeContextDelimiters(s) {
   return defangToFixpoint(s, CONTEXT_DELIMITER_RE);
 }
 
+// Markdown ATX markers carried by replayed text, at a token boundary.
+//
+// The injected blocks frame THEMSELVES with `## Working On` / `### Working State` / `###
+// Recent`, and the text they replay is user prompt text — a prompt that opens with its own
+// outline flattens into the block carrying `#` and `##` of its own, on the same line,
+// because working_on joins up to five prompts with ` → `. A real injection read
+// `## Working On` / `# 自主端到端测试与修复循环  ## 角色与授权 …`, at which point the
+// block's structure and the replayed text's structure are indistinguishable to whatever
+// reads it next. Same class as the authority-tag defanging above: a forged SECTION rather
+// than a forged tag.
+//
+// Only a marker followed by whitespace, at a token boundary, counts — `#42`, `C#` and
+// `D#216` are ordinary in this project's prose and survive untouched.
+const ATX_HEADING_RE = /(^|\s)#{1,6}\s/g;
+const ATX_MAX_PASSES = 32;
+
+/**
+ * Strip ATX markers to a FIXPOINT, not in one pass.
+ *
+ * The gap is two characters wide and it is the same one `defangToFixpoint` documents for
+ * the tag half: `(^|\s)` CONSUMES the boundary, so after removing the first `## ` the regex
+ * resumes past the second one and leaves it live. `## ## Key Decisions` came out of a single
+ * pass as a real `## Key Decisions` section inside the block — the precise property this
+ * defanging exists to hold, defeated by two extra characters.
+ *
+ * TERMINATION: every match contains at least one `#` and the replacement drops all of them,
+ * so any pass that changes the string removes at least one `#`. Self-bounded by the number
+ * of `#` in the input, and bounded again by the constant.
+ *
+ * INERT AT ANY DEPTH: still changing at the cap (≥32 nested forged layers, not reachable by
+ * accident) → drop every remaining `#`. Lossier, but the return value then provably carries
+ * no marker, which is the property callers rely on. Same fail-closed shape as the sibling.
+ */
+function stripAtxToFixpoint(s) {
+  let text = s;
+  for (let pass = 0; pass < ATX_MAX_PASSES; pass++) {
+    const next = text.replace(ATX_HEADING_RE, '$1');
+    if (next === text) return text;
+    text = next;
+  }
+  return text.replace(/#/g, '');
+}
+
+/**
+ * Defang authority tags AND section markers, for any replayed free text.
+ *
+ * Lives here rather than in one renderer because the SAME session_handoffs columns are
+ * replayed by two surfaces — `hook-handoff.mjs`'s `<session-handoff>` block and
+ * `hook-context.mjs`'s `### Working State (from /clear)` — and until 2026-09-21 only the first
+ * one called it. One home, so they cannot drift apart again.
+ *
+ * Apply it PER FIELD, never to an assembled block: both callers structure themselves with
+ * ATX headers, so a whole-string pass would delete their own sectioning along with the
+ * forged one.
+ *
+ * @param {*} value Replayed free text (any type; coerced)
+ * @returns {string} Text with delimiter tags and section markers defanged
+ */
+export function safeText(value) {
+  return stripAtxToFixpoint(neutralizeContextDelimiters(String(value)));
+}
+
 // <skill-loaded> is deliberately NOT in CONTEXT_DELIMITER_RE above: mem_use's legitimate
 // load path has to emit a REAL one, and that result goes through the same handler-wide
 // defang, which would strip it. So the tag is neutralized here instead — per call site,

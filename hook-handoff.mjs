@@ -12,7 +12,7 @@ import {
   EDIT_TOOLS,
   isMetaTriggerPrompt,
   notLowSignalTitleClause,
-  neutralizeContextDelimiters,
+  safeText,
 } from './utils.mjs';
 import { scrubRecord, scrubFilePath, scrubFilePaths } from './lib/scrub-record.mjs';
 import {
@@ -101,14 +101,33 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   const subjectPrompts = prompts.filter((p) => !isMetaTriggerPrompt(p.prompt_text));
   const sourcePrompts = subjectPrompts.length > 0 ? subjectPrompts : prompts;
 
+  // Scrub BEFORE truncate. A secret straddling the 200-char cut is shortened below the
+  // length floor its own pattern requires, stops matching entirely, and the retained head is
+  // then stored verbatim — the exact failure the persistence-boundary comment below
+  // prescribes against, in the three call sites that sit above it. Measured on a
+  // 244-cut-point sweep across five credential families (the cut walked through the token one
+  // character at a time): 33 cut points leak ≥12 characters under truncate-then-scrub and 0
+  // under this order. FIXED-LENGTH families are the worst case, because a short read matches
+  // nothing at all rather than matching less — `ghp_`+36 retained 28 of its 36 entropy
+  // characters and `AKIA`+16 retained 14 of 16, while variable-length `sk-ant-api03-`
+  // retained 0. The destination is not a log line: this column is persisted and replayed
+  // into a later session's prompt by both renderers.
+  //
+  // `working_on` is consequently the one column scrubbed TWICE — here, and again at the
+  // persistence boundary via scrubRecord, which stays as-is because `completed` /
+  // `unfinished` reach that call from STORED ROWS rather than from prompts. scrubSecrets is
+  // a fixpoint on its own output for every family that reaches this path; that property is
+  // pinned in tests/handoff-working-on-scrub-order.test.mjs rather than assumed here, since
+  // D#46 is open on idempotence by CONTRACT.
   const seen = new Set();
-  const uniquePrompts = sourcePrompts.filter((p) => {
-    const t = truncate(p.prompt_text, 200);
-    if (seen.has(t)) return false;
-    seen.add(t);
-    return true;
-  });
-  let workingOn = uniquePrompts.map((p) => truncate(p.prompt_text, 200)).join(' → ');
+  const safePromptLines = [];
+  for (const p of sourcePrompts) {
+    const line = truncate(scrubSecrets(String(p.prompt_text ?? '')), 200);
+    if (seen.has(line)) continue;
+    seen.add(line);
+    safePromptLines.push(line);
+  }
+  let workingOn = safePromptLines.join(' → ');
 
   if (subjectPrompts.length === 0) {
     const fallback = db
@@ -123,7 +142,10 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       )
       .get(project);
     if (fallback?.title) {
-      workingOn = `(carry-forward subject) ${truncate(fallback.title, 180)}`;
+      // Same order as the prompt arm above. Titles are scrubbed on write TODAY, so this is
+      // defense-in-depth for rows that predate that — which is not hypothetical: D#49 still
+      // has three bare credential-shaped values backfilled in a sibling column.
+      workingOn = `(carry-forward subject) ${truncate(scrubSecrets(String(fallback.title)), 180)}`;
     }
   }
 
@@ -414,9 +436,19 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // `api_key: handling` loses `handling` (5 of 6 ordinary developer prompts in a directed
   // grid lose exactly one term). What is true, and is the actual justification, is that the
   // term set now AGREES with what the resuming session is shown — `working_on` / `completed`
-  // / `unfinished` lose the same word through scrubRecord below. No value is scrubbed twice:
-  // these elements and the columns below are separate derivations from one raw source, each
-  // scrubbed once, which is the distinction D#46 is open about.
+  // / `unfinished` lose the same word through scrubRecord below.
+  //
+  // SUPERSEDED 2026-09-21, and the correction is load-bearing rather than cosmetic. This
+  // block used to end "No value is scrubbed twice: these elements and the columns below are
+  // separate derivations from one raw source, each scrubbed once, which is the distinction
+  // D#46 is open about." That still holds for `completed` and `unfinished`. It is now FALSE
+  // for `workingOn`, which arrives here ALREADY scrubbed, because the prompt arm above had
+  // to scrub before truncating to stop a boundary-straddling secret from being stored as a
+  // verbatim head. So `workingOn` passes scrubSecrets twice on this derivation and a third
+  // time through scrubRecord. Idempotence is therefore a property this file now DEPENDS on
+  // rather than merely tolerates — measured and pinned in
+  // tests/handoff-working-on-scrub-order.test.mjs, not asserted here. D#46 stays open on
+  // idempotence by CONTRACT; what is closed is idempotence for the families reaching here.
   const safeFiles = scrubFilePaths([...fileSet]);
   // The nullish guard mirrors what join() already did with a nullish element. Without it
   // String(undefined) would put the literal token "undefined" into the term set — a behaviour
@@ -773,54 +805,12 @@ export function renderHandoffInjection(db, project, currentCcSessionId = null) {
   return renderHandoffFromRow(handoff, db, project);
 }
 
-// Markdown ATX markers carried by replayed text, at a token boundary.
-//
-// This block frames itself with `## Working On` / `## Completed` / `## Next steps`, and
-// working_on is user prompt text — a prompt that opens with its own outline flattens into
-// the block carrying `#` and `##` of its own, on the same line, because working_on joins up
-// to five prompts with ` → `. A real injection read
-// `## Working On` / `# 自主端到端测试与修复循环  ## 角色与授权 …`, at which point the
-// block's structure and the replayed text's structure are indistinguishable to whatever
-// reads it next. Same class as the authority-tag defanging one level down: a forged
-// SECTION rather than a forged tag.
-//
-// Only a marker followed by whitespace, at a token boundary, counts — `#42`, `C#` and
-// `D#216` are ordinary in this project's prose and survive untouched.
-const ATX_HEADING_RE = /(^|\s)#{1,6}\s/g;
-const ATX_MAX_PASSES = 32;
-
-/**
- * Strip ATX markers to a FIXPOINT, not in one pass.
- *
- * The gap is two characters wide and it is the same one format-utils' `defangToFixpoint`
- * documents for the tag half: `(^|\s)` CONSUMES the boundary, so after removing the first
- * `## ` the regex resumes past the second one and leaves it live. `## ## Key Decisions`
- * came out of a single pass as a real `## Key Decisions` section inside the block — the
- * precise property this defanging exists to hold, defeated by two extra characters. Found
- * by the pre-ship defect lens; reproduced end-to-end before the fix.
- *
- * TERMINATION: every match contains at least one `#` and the replacement drops all of them,
- * so any pass that changes the string removes at least one `#`. Self-bounded by the number
- * of `#` in the input, and bounded again by the constant.
- *
- * INERT AT ANY DEPTH: still changing at the cap (≥32 nested forged layers, not reachable by
- * accident) → drop every remaining `#`. Lossier, but the return value then provably carries
- * no marker, which is the property callers rely on. Same fail-closed shape as the sibling.
- */
-function stripAtxToFixpoint(s) {
-  let text = s;
-  for (let pass = 0; pass < ATX_MAX_PASSES; pass++) {
-    const next = text.replace(ATX_HEADING_RE, '$1');
-    if (next === text) return text;
-    text = next;
-  }
-  return text.replace(/#/g, '');
-}
-
-/** Defang authority tags AND section markers, for any replayed free text. */
-function safeText(value) {
-  return stripAtxToFixpoint(neutralizeContextDelimiters(String(value)));
-}
+// `safeText` — the ATX-marker + authority-tag defang this renderer has applied since a real
+// injection came back carrying `## ` of its own — moved to format-utils.mjs 2026-09-21. It
+// was private here while hook-context's `### Working State (from /clear)` replayed the SAME
+// three session_handoffs columns with only the tag half of the treatment, so the two surfaces
+// had drifted apart by a whole defence. One home now; see the docblock there for why it must
+// be applied per FIELD and never to an assembled block.
 
 // `[bugfix] title` → `title`. Both `completed` and `key_decisions` store the observation
 // type this way; the bracket run is length-capped so a title that merely opens with a

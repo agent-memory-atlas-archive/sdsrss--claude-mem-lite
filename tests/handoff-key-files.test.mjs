@@ -201,3 +201,7 @@ describe('key_files scrubs per path SEGMENT, not whole-string', () => {
     expect(out).not.toContain('password=***');
   });
 });
+
+// The ATX half of the same two-surface asymmetry lives in tests/handoff-context-defang.test.mjs:
+// `renderHandoffFromRow` wraps this basename join in `safeText` and hook-context's
+// `- Key files:` did not, across all three columns that block replays.

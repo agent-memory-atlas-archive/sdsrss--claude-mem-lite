@@ -16,6 +16,7 @@ import {
   inferProject,
   debugLog,
   neutralizeContextDelimiters,
+  safeText,
   DECAY_HALF_LIFE_BY_TYPE,
   DEFAULT_DECAY_HALF_LIFE_MS,
   notLowSignalTitleClause,
@@ -772,17 +773,34 @@ export function buildSessionContextLines(
   const handoffLines = [];
   if (prevClearHandoff) {
     handoffLines.push('### Working State (from /clear)');
+    // `safeText`, per field, on all three: these are the same session_handoffs columns
+    // hook-handoff.mjs's `<session-handoff>` block replays, and that surface has defanged
+    // them since a real injection arrived carrying `## ` of its own. This one applied only
+    // the TAG half — the `neutralizeContextDelimiters` at the bottom of this function covers
+    // every line in the block — and no ATX marker at all, so a forged SECTION replayed live.
+    // `working_on` is the worst of the three: it is raw user prompt text.
+    //
+    // Defang BEFORE truncate, the same order the handoff builder's own persistence comment
+    // prescribes, so the 200-char cut cannot leave a half-processed marker at the boundary.
+    //
+    // Per FIELD, never over the assembled block: `### Working State` / `### Recent` /
+    // `### Last Session` are this block's OWN sectioning and a whole-string ATX pass would
+    // delete it. That is also why this is not simply folded into the return below.
     if (prevClearHandoff.working_on) {
-      handoffLines.push(`- Working on: ${truncate(prevClearHandoff.working_on, 200)}`);
+      handoffLines.push(`- Working on: ${truncate(safeText(prevClearHandoff.working_on), 200)}`);
     }
     if (prevClearHandoff.unfinished) {
       const pendingSummary = extractUnfinishedSummary(prevClearHandoff.unfinished);
-      if (pendingSummary) handoffLines.push(`- Recent activity: ${truncate(pendingSummary, 200)}`);
+      if (pendingSummary) {
+        handoffLines.push(`- Recent activity: ${truncate(safeText(pendingSummary), 200)}`);
+      }
     }
     if (prevClearHandoff.key_files) {
       try {
         const files = JSON.parse(prevClearHandoff.key_files);
-        if (files.length > 0) handoffLines.push(`- Key files: ${files.map((f) => basename(f)).join(', ')}`);
+        if (files.length > 0) {
+          handoffLines.push(`- Key files: ${safeText(files.map((f) => basename(f)).join(', '))}`);
+        }
       } catch {
         /* malformed JSON — skip */
       }

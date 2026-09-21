@@ -2114,13 +2114,16 @@ function saveHandoffAndFastSummary(
       debugCatch(e, 'session-start-handoff');
     }
 
-    // Read the just-saved handoff for downstream consumers (fast summary remaining, working state).
+    // Read the just-saved handoff for the ONE downstream consumer here: the fast summary's
+    // "remaining" line, below. It used to select `working_on, unfinished, key_files` and
+    // read only `unfinished` — the other two were dead, because the `### Working State`
+    // block that renders them is built by hook-context.mjs from its own query, not from
+    // this row. Selected columns are cheap; a reader looking for who consumes `key_files`
+    // is not, and this site answered that question wrongly.
     // Session-scoped read to avoid picking up a parallel session's clear handoff.
     try {
       prevClearHandoff = db
-        .prepare(
-          'SELECT working_on, unfinished, key_files FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?',
-        )
+        .prepare('SELECT unfinished FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?')
         .get(prevProject || project, 'clear', handoffScopeId);
     } catch {}
 

@@ -155,15 +155,29 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // key_decisions excludes a retracted decision" in tests/audit-silent-20260814.test.mjs.
   // Audit R8 §11.3 proposed adding the filter here from a repo-wide regex sweep of the
   // predicate shape; it was rejected on this reasoning, and the guard catches it.
+  // `(memory_session_id = ? OR project = ?)`, not the bare id equality this shipped with.
+  // The id side alone is unreachable for the rows that matter: the hook mints
+  // `hook-<project>-<uuid8>` (hook-shared.mjs) and hands it here, while every explicit
+  // mem_save writes `manual-<project>` (lib/save-observation.mjs). Disjoint prefixes, so
+  // the join could not match a saved lesson at all. Measured on the live DB 2026-09-21:
+  // 101 of 105 observations sat in the `manual-` namespace and all 17 stored handoff rows
+  // carried `completed` = 0 bytes.
+  //
+  // The widening does NOT give back what D#28 bought: isolation is the TIME WINDOW's job
+  // (`obsWindowClause`, lower-bounded at this CC session's first prompt), and it still
+  // excludes a prior session's rows — pinned by the control case in
+  // tests/handoff-payload-reach.test.mjs. The id side is kept as an OR so every row that
+  // matched before still matches (project names have been renormalized before, see the
+  // migration at schema.mjs:1127, and a row can carry the old name).
   const completed = db
     .prepare(
       `
     SELECT title, type, narrative FROM observations
-    WHERE memory_session_id = ? AND COALESCE(compressed_into, 0) = 0 ${obsWindowClause}
+    WHERE (memory_session_id = ? OR project = ?) AND COALESCE(compressed_into, 0) = 0 ${obsWindowClause}
     ORDER BY created_at_epoch DESC LIMIT 15
   `,
     )
-    .all(sessionId, ...obsWindowParams);
+    .all(sessionId, project, ...obsWindowParams);
 
   // 3. Recent activity — episode snapshot + full session edit history from narratives.
   // Keep only entries that represent in-flight work (file edits) or outright failures
@@ -227,15 +241,17 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     !f.startsWith('/proc/') &&
     !f.startsWith('/tmp/');
   if (episodeSnapshot?.files) episodeSnapshot.files.filter(isValidFile).forEach((f) => fileSet.add(f));
+  // Same namespace widening as `completed` above — see the reasoning there. Measured
+  // 2026-09-21: 8 of the 17 live handoff rows stored key_files as the empty array.
   const obsFiles = db
     .prepare(
       `
     SELECT files_modified FROM observations
-    WHERE memory_session_id = ? AND files_modified IS NOT NULL ${obsWindowClause}
+    WHERE (memory_session_id = ? OR project = ?) AND files_modified IS NOT NULL ${obsWindowClause}
     ORDER BY created_at_epoch DESC LIMIT 10
   `,
     )
-    .all(sessionId, ...obsWindowParams);
+    .all(sessionId, project, ...obsWindowParams);
   for (const row of obsFiles) {
     try {
       JSON.parse(row.files_modified)
@@ -253,16 +269,21 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // retracted decision rendered there is indistinguishable from live policy. The
   // carry-forward fallback at the top of this function already filters the same column;
   // this is the sibling that did not.
+  // Same namespace widening as `completed` above — see the reasoning there. This is the
+  // field the widening exists for: a `decision` / `bugfix` lesson is written by mem_save,
+  // which is exactly the namespace the id equality could not reach, and all 17 live rows
+  // carried key_decisions = 0 bytes. The liveness predicate stays the FULL one (this field
+  // is replayed to a later session as standing policy — see the note above).
   const decisions = db
     .prepare(
       `
     SELECT title FROM observations
-    WHERE memory_session_id = ? AND COALESCE(importance, 1) >= 2
+    WHERE (memory_session_id = ? OR project = ?) AND COALESCE(importance, 1) >= 2
       AND ${liveObsFilterSql('')} ${obsWindowClause}
     ORDER BY created_at_epoch DESC LIMIT 10
   `,
     )
-    .all(sessionId, ...obsWindowParams)
+    .all(sessionId, project, ...obsWindowParams)
     .filter((d) => d.title && !LOW_SIGNAL_TITLE.test(d.title))
     .slice(0, 5);
 

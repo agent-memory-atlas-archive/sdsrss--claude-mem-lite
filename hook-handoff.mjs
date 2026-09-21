@@ -659,6 +659,26 @@ export function renderHandoffInjection(db, project, currentCcSessionId = null) {
   return renderHandoffFromRow(handoff, db, project);
 }
 
+// Markdown ATX markers carried by replayed text, at a token boundary.
+//
+// This block frames itself with `## Working On` / `## Completed` / `## Next steps`, and
+// working_on is user prompt text — a prompt that opens with its own outline flattens into
+// the block carrying `#` and `##` of its own, on the same line, because working_on joins up
+// to five prompts with ` → `. A real injection read
+// `## Working On` / `# 自主端到端测试与修复循环  ## 角色与授权 …`, at which point the
+// block's structure and the replayed text's structure are indistinguishable to whatever
+// reads it next. Same class as the authority-tag defanging one level down: a forged
+// SECTION rather than a forged tag.
+//
+// Only a marker followed by whitespace, at a token boundary, counts — `#42`, `C#` and
+// `D#216` are ordinary in this project's prose and survive untouched.
+const ATX_HEADING_RE = /(^|\s)#{1,6}\s/g;
+
+/** Defang authority tags AND section markers in one pass, for any replayed free text. */
+function safeText(value) {
+  return neutralizeContextDelimiters(String(value)).replace(ATX_HEADING_RE, '$1');
+}
+
 function renderHandoffFromRow(handoff, db, project) {
   const ageSec = Math.round((Date.now() - handoff.created_at_epoch) / 1000);
   const ageStr =
@@ -686,7 +706,7 @@ function renderHandoffFromRow(handoff, db, project) {
   // user prompt or edit snippet carrying a literal </session-handoff> would otherwise
   // close the block early and the rest would read as a real user message.
   if (handoff.working_on) {
-    lines.push('## Working On', neutralizeContextDelimiters(handoff.working_on), '');
+    lines.push('## Working On', safeText(handoff.working_on), '');
   }
 
   // Tree state. The sha has been stored since v25 but was only ever an INPUT to the
@@ -697,7 +717,7 @@ function renderHandoffFromRow(handoff, db, project) {
   // are: git ref names admit angle brackets, and this text is replayed into the prompt.
   // A 7-char sha cannot carry a complete tag, so it is sliced rather than scrubbed.
   const treeBits = [];
-  if (handoff.git_branch) treeBits.push(`branch ${neutralizeContextDelimiters(handoff.git_branch)}`);
+  if (handoff.git_branch) treeBits.push(`branch ${safeText(handoff.git_branch)}`);
   if (handoff.git_sha_at_handoff) treeBits.push(`@ ${String(handoff.git_sha_at_handoff).slice(0, 7)}`);
   if (typeof handoff.git_dirty_count === 'number') {
     // NULL stays silent: a row written before this shipped, or written outside a repo, has
@@ -708,7 +728,7 @@ function renderHandoffFromRow(handoff, db, project) {
   if (handoff.completed) {
     lines.push(
       '## Completed',
-      ...neutralizeContextDelimiters(handoff.completed)
+      ...safeText(handoff.completed)
         .split('\n')
         .map((l) => `- ${l}`),
       '',
@@ -723,7 +743,7 @@ function renderHandoffFromRow(handoff, db, project) {
     if (pending) {
       lines.push(
         '## Recent activity',
-        ...neutralizeContextDelimiters(pending)
+        ...safeText(pending)
           .split('; ')
           .map((l) => `- ${l}`),
         '',
@@ -737,7 +757,7 @@ function renderHandoffFromRow(handoff, db, project) {
       // (Linux allows almost any char but '/'), and this is the one field in this block
       // that was rendered raw while working_on/unfinished/key_decisions all neutralize.
       if (files.length > 0)
-        lines.push('## Key Files', neutralizeContextDelimiters(files.map((f) => basename(f)).join(', ')), '');
+        lines.push('## Key Files', safeText(files.map((f) => basename(f)).join(', ')), '');
     } catch {}
   }
   // Next steps, from the project's newest paused note. Placed after Key Files and before
@@ -750,10 +770,10 @@ function renderHandoffFromRow(handoff, db, project) {
       const note = JSON.parse(handoff.next_steps);
       if (Array.isArray(note?.items) && note.items.length > 0) {
         lines.push('## Next steps');
-        const from = note.file ? ` (from ${neutralizeContextDelimiters(String(note.file))})` : '';
-        if (note.title) lines.push(`${neutralizeContextDelimiters(String(note.title))}${from}`);
+        const from = note.file ? ` (from ${safeText(String(note.file))})` : '';
+        if (note.title) lines.push(`${safeText(String(note.title))}${from}`);
         else if (from) lines.push(from.trim());
-        for (const item of note.items) lines.push(`- ${neutralizeContextDelimiters(String(item))}`);
+        for (const item of note.items) lines.push(`- ${safeText(String(item))}`);
         lines.push('');
       }
     } catch {
@@ -764,7 +784,7 @@ function renderHandoffFromRow(handoff, db, project) {
   if (handoff.key_decisions) {
     lines.push(
       '## Key Decisions',
-      ...neutralizeContextDelimiters(handoff.key_decisions)
+      ...safeText(handoff.key_decisions)
         .split('\n')
         .map((l) => `- ${l}`),
       '',
@@ -812,10 +832,9 @@ function renderHandoffFromRow(handoff, db, project) {
       // Defang: these come from session_summaries, populated by Haiku OR by
       // extractStructuredSummary over the assistant transcript tail — replayed text that can
       // carry tool-XML / forged authority tags, same class as working_on above (audit MED-4).
-      if (summary.completed) lines.push(neutralizeContextDelimiters(summary.completed));
-      if (summary.remaining_items)
-        lines.push(`Remaining: ${neutralizeContextDelimiters(summary.remaining_items)}`);
-      if (summary.next_steps) lines.push(`Next steps: ${neutralizeContextDelimiters(summary.next_steps)}`);
+      if (summary.completed) lines.push(safeText(summary.completed));
+      if (summary.remaining_items) lines.push(`Remaining: ${safeText(summary.remaining_items)}`);
+      if (summary.next_steps) lines.push(`Next steps: ${safeText(summary.next_steps)}`);
       lines.push('</session-summary>');
     }
   } catch {}

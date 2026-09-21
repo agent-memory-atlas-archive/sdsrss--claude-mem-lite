@@ -1975,9 +1975,11 @@ function runSessionStartAutoMaintain(db, project) {
         debugCatch(e, 'auto-maintain-orphan-sweep');
       }
 
-      // GC expired session_handoffs: the consume-DELETE (handleSessionStart) only removes
-      // the single handoff a continuation reads back; an 'exit'/'compact' that is never
-      // resumed (and every superseded 'clear') lingers forever — read paths filter by
+      // GC expired session_handoffs. This is now the ONLY reaper: consuming a handoff
+      // stamps `consumed_at` (injectHandoffIfEarly, the UserPromptSubmit path) instead of
+      // deleting the row, so nothing removes rows but this. Before that change a consume
+      // did delete one row, and an 'exit'/'compact' that is never
+      // resumed (and every superseded 'clear') lingered forever — read paths filter by
       // expiry but nothing reaped the rows. Delete past-expiry rows with a +1d margin so a
       // still-readable handoff is never raced away. 'clear' 6h+1d, 'exit'/other 7d+1d.
       try {

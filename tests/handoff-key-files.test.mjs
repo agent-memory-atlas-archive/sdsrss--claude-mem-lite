@@ -6,7 +6,11 @@
 // entries): 59 of them (27%) are repo-root filenames like `hook.mjs` and were dropped on
 // the floor, and 3 are extensionless slash-bearing values — directories — which sailed
 // through and rendered as key files. That is where `Key Files: claude-mem-lite` in a real
-// injection came from: the basename of the project directory.
+// injection came from — though from the EPISODE BUFFER arm of key_files, not from
+// files_modified: no entry in that column equals a project directory. The three
+// extensionless slash-bearing values it does hold are one executable and two /var/tmp
+// scratch dirs. Corrected by the pre-ship claims lens; isValidFile gates both arms, so the
+// predicate under test covers the real source too.
 //
 // The replacement asks the basename for an extension. Named cost: an extensionless file
 // (Makefile, LICENSE) no longer qualifies. The alternative is a hand-drawn list of

@@ -190,7 +190,9 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // excludes a prior session's rows — pinned by the control case in
   // tests/handoff-payload-reach.test.mjs. The id side is kept as an OR so every row that
   // matched before still matches (project names have been renormalized before, see the
-  // migration at schema.mjs:1127, and a row can carry the old name).
+  // `normalize-project-names` migration in schema.mjs, and a row can carry the old name).
+  // The earlier citation here and in the commit body pointed at schema.mjs:1127, which is
+  // inside the observation_files backfill — the right fact, the wrong line.
   const completed = db
     .prepare(
       `
@@ -256,11 +258,24 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   const fileSet = new Set();
   // Ask the BASENAME for an extension, rather than asking the string for a separator.
   // The separator test answered "does this look like a path", which is a different
-  // question and got both halves wrong. Measured on the live DB 2026-09-21 over all 218
-  // non-null files_modified entries: 59 (27%) were repo-root filenames like `hook.mjs`,
-  // rejected for having no `/`; and 3 were extensionless slash-bearing values — project
-  // directories — accepted and then rendered as key files. `Key Files: claude-mem-lite`
-  // in a real injection was the basename of the project directory.
+  // question and got both halves wrong.
+  //
+  // key_files is built from TWO sources — the episode buffer on disk (`episodeSnapshot
+  // .files`) and `observations.files_modified` — and the measurement covered only the
+  // second, so quote it for only that half: over all 218 non-null files_modified entries
+  // on the live DB 2026-09-21, 59 (27%) were repo-root filenames like `hook.mjs`, rejected
+  // for having no `/`. That is the dropped-file half, and it reproduces.
+  //
+  // The directory half comes from the EPISODE BUFFER, which that measurement never read:
+  // `~/.claude-mem-lite/runtime/ep-<project>.json` carries entries like
+  // `/home/ai/dev/loop-testing`, byte-for-byte the key_files of the matching handoff row.
+  // `Key Files: claude-mem-lite` in a real injection came from there, NOT from
+  // files_modified — no entry in that column equals a project directory. The three
+  // extensionless slash-bearing values it does hold are one executable
+  // (`claude-plugin/bin/code-graph-mcp`) and two `/var/tmp` scratch dirs, and the
+  // executable is an instance of the named cost below rather than evidence for this
+  // defect. Corrected by the pre-ship claims lens; the fix is unaffected because
+  // isValidFile gates both sources.
   //
   // Named cost, and it is wider than "Makefile, LICENSE" — the pre-ship review diffed old
   // against new over a plausible path set and the drop list is two classes: (a) every
@@ -340,9 +355,13 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // edits with surfaced errors, so a hand-written remaining-work list would be mislabelled.
   //
   // Deliberately NOT sourced from deferred_work, even though it is the other project-scoped
-  // durable queue: those rows are already delivered by the SessionStart dashboard (measured
-  // 2026-09-21: 12 open rows, and the dashboard lists them), so adding them here would
-  // double-inject. Nothing delivers the paused note.
+  // durable queue: those rows are already delivered at SessionStart by the `### Deferred
+  // Work` block in hook-context.mjs, inside `<claude-mem-context>` — NOT by
+  // lib/startup-dashboard.mjs, which contains no reference to the table (the claims lens
+  // corrected that attribution). It renders the top 5 open rows by priority, so "already
+  // delivered" is true of the head of the queue rather than all of it; 12 were open on
+  // 2026-09-21. Adding them here would double-inject that head. Nothing delivers the
+  // paused note.
   let nextSteps = null;
   try {
     // No explicit projectPath: the reader defaults to cwd, and neutralises that default
@@ -839,9 +858,12 @@ function renderHandoffFromRow(handoff, db, project) {
     const kept = safeText(handoff.completed)
       .split('\n')
       .filter((l) => l.trim() && !isDuplicateOfDecision(l));
-    // An empty `## Completed` header is worse than no header — three of the eight measured
-    // projects had a session whose entire history was its decisions. No type tags are lost
-    // with it: key_decisions carries them now too.
+    // An empty `## Completed` header is worse than no header — TWO of the eight measured
+    // projects had a session whose entire history was its decisions (dev--daagu and
+    // scratchpad--loop-smoke; the next closest keeps 2 lines). The commit body and an
+    // earlier draft of this comment said three; re-derived at both the 105- and
+    // 107-observation corpus states it is two. No type tags are lost with the header:
+    // key_decisions carries them now too.
     if (kept.length > 0) lines.push('## Completed', ...kept.map((l) => `- ${l}`), '');
   }
   if (handoff.unfinished) {

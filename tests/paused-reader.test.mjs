@@ -1,6 +1,6 @@
 // tasks/<slug>-paused.md is the one place a session writes down, by hand, what is left and
 // how to verify it — the spec that governs this repo makes writing one mandatory on a
-// mid-task exit. Nothing read it. Measured 2026-09-21: 18 such files across 9 projects on
+// mid-task exit. Nothing read it. Measured 2026-09-21: 27 such files across 7 projects on
 // this machine, zero readers.
 //
 // This is also the answer to "the next step must be written down, not inferred":

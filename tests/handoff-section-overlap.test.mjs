@@ -88,7 +88,7 @@ describe('Completed and Key Decisions do not render the same line twice', () => 
   });
 
   it('omits Completed entirely when every one of its lines is a decision', () => {
-    // The shape three of the eight measured projects had: the session's whole history IS
+    // The shape two of the eight measured projects had: the session's whole history IS
     // its decisions. An empty `## Completed` header with nothing under it is worse than no
     // header, and the type tags are not lost because key_decisions carries them too.
     insertRow(db, {

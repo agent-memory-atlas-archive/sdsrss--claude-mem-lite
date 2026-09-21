@@ -1768,9 +1768,10 @@ describe('Suite 8a: Additional E2E', () => {
   });
 
   it('auto-maintain GCs expired session_handoffs (reaps past-expiry, keeps fresh)', () => {
-    // The consume-DELETE only removes the one handoff a continuation reads back; an unresumed
-    // 'exit' and every superseded 'clear' lingered forever (read paths filter by expiry but
-    // nothing reaped the rows). auto-maintain now deletes past-expiry rows with a +1d margin.
+    // auto-maintain is the only reaper: consuming a handoff stamps `consumed_at` rather
+    // than deleting the row, so an unresumed 'exit' and every superseded 'clear' would
+    // linger forever (read paths filter by expiry but nothing reaps). Past-expiry rows are
+    // deleted with a +1d margin.
     const db = openTestDb(tmpHome);
     const now = Date.now();
     const ins = db.prepare(

@@ -23,6 +23,7 @@ import * as taskReaderModule from '../lib/task-reader.mjs';
 
 // Stub git + TaskList for the whole file: this suite runs inside a real git repo, and both
 // readers would otherwise leak this repo's own HEAD and pending tasks into the rows.
+// (The paused-note reader needs no stub: it neutralises its own default under the test guard.)
 beforeEach(() => {
   vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
     changed: [],

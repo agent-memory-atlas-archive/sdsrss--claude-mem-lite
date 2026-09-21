@@ -69,6 +69,7 @@
     "lib/cli-flags.mjs",
     "lib/git-state.mjs",
     "lib/task-reader.mjs",
+    "lib/paused-reader.mjs",
     "lib/plan-reader.mjs",
     "lib/startup-dashboard.mjs",
     "lib/doctor-benchmark.mjs",

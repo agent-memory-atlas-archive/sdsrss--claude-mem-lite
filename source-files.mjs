@@ -66,6 +66,7 @@ export const SOURCE_FILES = [
   'lib/activity.mjs',
   'lib/cli-flags.mjs',
   'lib/task-reader.mjs',
+  'lib/paused-reader.mjs',
   'lib/plan-reader.mjs',
   'lib/git-state.mjs',
   'lib/startup-dashboard.mjs',

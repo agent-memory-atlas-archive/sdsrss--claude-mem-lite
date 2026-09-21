@@ -605,6 +605,13 @@ export function initSchema(db) {
     if (!handoffCols.includes('git_dirty_count')) {
       db.exec(`ALTER TABLE session_handoffs ADD COLUMN git_dirty_count INTEGER DEFAULT NULL`);
     }
+    // The remaining work a paused note spells out (lib/paused-reader.mjs). Kept out of
+    // `unfinished`, which renders as "Recent activity" and mixes in-flight edits with
+    // surfaced errors — calling a hand-written remaining-work list "recent activity" would
+    // mislabel the one field in this row that a human actually wrote.
+    if (!handoffCols.includes('next_steps')) {
+      db.exec(`ALTER TABLE session_handoffs ADD COLUMN next_steps TEXT DEFAULT NULL`);
+    }
   } catch {
     /* non-critical — migration retries on next open */
   }

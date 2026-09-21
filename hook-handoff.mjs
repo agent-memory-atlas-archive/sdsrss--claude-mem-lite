@@ -28,6 +28,9 @@ import {
 // immutable in ESM and cannot be mocked after the fact.
 import * as gitStateModule from './lib/git-state.mjs';
 import * as taskReaderModule from './lib/task-reader.mjs';
+// Namespace import for the same reason as the two above: ESM named bindings are immutable,
+// so a named import could not be spied on in tests.
+import * as pausedReaderModule from './lib/paused-reader.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 
 /**
@@ -301,6 +304,34 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     .filter((d) => d.title && !LOW_SIGNAL_TITLE.test(d.title))
     .slice(0, 5);
 
+  // 5b. Next steps — the remaining work a paused note spells out, which is the only
+  // next-step source in this system that a human wrote down on purpose. Deliberately not
+  // folded into `unfinished`: that field renders as "Recent activity" and mixes in-flight
+  // edits with surfaced errors, so a hand-written remaining-work list would be mislabelled.
+  //
+  // Deliberately NOT sourced from deferred_work, even though it is the other project-scoped
+  // durable queue: those rows are already delivered by the SessionStart dashboard (measured
+  // 2026-09-21: 12 open rows, and the dashboard lists them), so adding them here would
+  // double-inject. Nothing delivers the paused note.
+  let nextSteps = null;
+  try {
+    // No explicit projectPath: the reader defaults to cwd, and neutralises that default
+    // under the test guard so no suite writes this repo's own paused note into its rows.
+    const note = pausedReaderModule.readPausedNote();
+    if (note) {
+      // Scrub per ELEMENT before stringify, never the JSON string — letting scrubSecrets
+      // rewrite the serialized form risks breaking the downstream JSON.parse. Same rule
+      // key_files follows below.
+      nextSteps = JSON.stringify({
+        file: scrubSecrets(String(note.file)),
+        title: scrubSecrets(String(note.title)),
+        items: note.items.map((i) => scrubSecrets(String(i))),
+      });
+    }
+  } catch {
+    /* best-effort, like the task reader above — never block the handoff */
+  }
+
   // 6. Match keywords
   const allText = [workingOn, ...completed.map((c) => c.title).filter(Boolean), unfinished].join(' ');
   const keywords = extractMatchKeywords(allText, [...fileSet]);
@@ -345,8 +376,8 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   const safeKeyFiles = JSON.stringify([...fileSet].slice(0, 20).map((f) => scrubSecrets(String(f))));
   db.prepare(
     `
-    INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch, git_sha_at_handoff, git_branch, git_dirty_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch, git_sha_at_handoff, git_branch, git_dirty_count, next_steps)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project, type, session_id) DO UPDATE SET
       working_on = excluded.working_on,
       completed = excluded.completed,
@@ -357,7 +388,8 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       created_at_epoch = excluded.created_at_epoch,
       git_sha_at_handoff = excluded.git_sha_at_handoff,
       git_branch = excluded.git_branch,
-      git_dirty_count = excluded.git_dirty_count
+      git_dirty_count = excluded.git_dirty_count,
+      next_steps = excluded.next_steps
   `,
   ).run(
     project,
@@ -375,6 +407,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     gitShaAtHandoff,
     gitBranch,
     gitDirtyCount,
+    nextSteps,
   );
 }
 
@@ -707,6 +740,27 @@ function renderHandoffFromRow(handoff, db, project) {
         lines.push('## Key Files', neutralizeContextDelimiters(files.map((f) => basename(f)).join(', ')), '');
     } catch {}
   }
+  // Next steps, from the project's newest paused note. Placed after Key Files and before
+  // Key Decisions: it is the most actionable block here, and it cites its own source file
+  // so the resuming session can open the full note instead of trusting this summary.
+  // Defanged like every other free-text field — the note is repo text, replayed verbatim
+  // into the prompt, and a literal closer would end the block early.
+  if (handoff.next_steps) {
+    try {
+      const note = JSON.parse(handoff.next_steps);
+      if (Array.isArray(note?.items) && note.items.length > 0) {
+        lines.push('## Next steps');
+        const from = note.file ? ` (from ${neutralizeContextDelimiters(String(note.file))})` : '';
+        if (note.title) lines.push(`${neutralizeContextDelimiters(String(note.title))}${from}`);
+        else if (from) lines.push(from.trim());
+        for (const item of note.items) lines.push(`- ${neutralizeContextDelimiters(String(item))}`);
+        lines.push('');
+      }
+    } catch {
+      /* malformed JSON — skip, same as key_files */
+    }
+  }
+
   if (handoff.key_decisions) {
     lines.push(
       '## Key Decisions',

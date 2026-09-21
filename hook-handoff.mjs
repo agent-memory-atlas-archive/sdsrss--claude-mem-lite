@@ -21,6 +21,7 @@ import {
   HANDOFF_ANCHOR_MAX_AGE,
   HANDOFF_MATCH_THRESHOLD,
   CONTINUE_KEYWORDS,
+  UNCONSUMED_HANDOFF_SQL,
 } from './hook-shared.mjs';
 // T10d: import the whole module (not a named export) so tests can spy on
 // gitStateModule.readGitState via vi.spyOn. Named-import bindings are
@@ -392,6 +393,7 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
               `
             SELECT created_at_epoch, match_keywords FROM session_handoffs
             WHERE project = ? AND git_sha_at_handoff = ? AND (type = 'exit' OR session_id = ?)
+              AND ${UNCONSUMED_HANDOFF_SQL}
             ORDER BY created_at_epoch DESC LIMIT 1
           `,
             )
@@ -400,7 +402,7 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
             .prepare(
               `
             SELECT created_at_epoch, match_keywords FROM session_handoffs
-            WHERE project = ? AND git_sha_at_handoff = ?
+            WHERE project = ? AND git_sha_at_handoff = ? AND ${UNCONSUMED_HANDOFF_SQL}
             ORDER BY created_at_epoch DESC LIMIT 1
           `,
             )
@@ -426,7 +428,7 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
         .prepare(
           `
         SELECT created_at_epoch, match_keywords FROM session_handoffs
-        WHERE project = ? AND type = 'clear' AND session_id = ?
+        WHERE project = ? AND type = 'clear' AND session_id = ? AND ${UNCONSUMED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 1
       `,
         )
@@ -435,7 +437,7 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
         .prepare(
           `
         SELECT created_at_epoch, match_keywords FROM session_handoffs
-        WHERE project = ? AND type = 'clear'
+        WHERE project = ? AND type = 'clear' AND ${UNCONSUMED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 1
       `,
         )
@@ -476,6 +478,7 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
         SELECT type, match_keywords, created_at_epoch FROM session_handoffs
         WHERE project = ?
           AND ((type = 'clear' AND session_id = ?) OR type = 'exit')
+          AND ${UNCONSUMED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC
       `,
         )
@@ -484,7 +487,7 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
         .prepare(
           `
         SELECT type, match_keywords, created_at_epoch FROM session_handoffs
-        WHERE project = ? ORDER BY created_at_epoch DESC
+        WHERE project = ? AND ${UNCONSUMED_HANDOFF_SQL} ORDER BY created_at_epoch DESC
       `,
         )
         .all(project);
@@ -539,6 +542,7 @@ export function pickHandoffToInject(db, project, currentCcSessionId = null) {
         SELECT * FROM session_handoffs
         WHERE project = ?
           AND ((type = 'clear' AND session_id = ?) OR (type = 'exit' AND session_id != ?))
+          AND ${UNCONSUMED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 5
       `,
         )
@@ -547,7 +551,7 @@ export function pickHandoffToInject(db, project, currentCcSessionId = null) {
         .prepare(
           `
         SELECT * FROM session_handoffs
-        WHERE project = ? ORDER BY created_at_epoch DESC LIMIT 5
+        WHERE project = ? AND ${UNCONSUMED_HANDOFF_SQL} ORDER BY created_at_epoch DESC LIMIT 5
       `,
         )
         .all(project);
@@ -558,6 +562,36 @@ export function pickHandoffToInject(db, project, currentCcSessionId = null) {
       return age <= maxAge;
     }) || null
   );
+}
+
+/**
+ * Mark one handoff row as delivered.
+ *
+ * Replaces the DELETE that used to follow injection. Two things that DELETE cost: a handoff
+ * injected at a moment the model could not act on it was gone for good, and the row behind a
+ * bad injection no longer existed by the time anyone went looking for it. Marking keeps the
+ * row until the existing age-based GC in hook.mjs's auto-maintain reaps it, so retention is
+ * unchanged in the limit — only the window in which it can be read back grows.
+ *
+ * Scoped to the exact PK so a parallel session's handoff is untouched (the DELETE this
+ * replaces already had that property, and pre-v2.46 not having it made the DB forgetful).
+ *
+ * @param {Database} db Opened main database
+ * @param {{project: string, type: string, session_id: string}} handoff Row from pickHandoffToInject
+ * @param {number} [now=Date.now()] Injected for tests
+ * @returns {number} Rows changed (0 when a concurrent session consumed it first)
+ */
+export function consumeHandoff(db, handoff, now = Date.now()) {
+  if (!handoff) return 0;
+  // `consumed_at IS NULL` in the WHERE, not just the SET: two sessions can race to inject
+  // the same exit handoff, and the first stamp is the one that should stand.
+  const res = db
+    .prepare(
+      `UPDATE session_handoffs SET consumed_at = ?
+       WHERE project = ? AND type = ? AND session_id = ? AND ${UNCONSUMED_HANDOFF_SQL}`,
+    )
+    .run(now, handoff.project, handoff.type, handoff.session_id);
+  return res.changes;
 }
 
 export function renderHandoffInjection(db, project, currentCcSessionId = null) {

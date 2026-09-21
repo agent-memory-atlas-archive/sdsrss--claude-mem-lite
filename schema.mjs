@@ -191,6 +191,12 @@ export const CURRENT_SCHEMA_VERSION = 49;
 // pragma_table_info on a missing table returns zero rows (it does not throw), so
 // naming any column of the new table is a table-presence check.
 const LATEST_MIGRATION_COLUMNS = [
+  // No version tag: this one ships WITHOUT a CURRENT_SCHEMA_VERSION bump on purpose (see
+  // the ALTER's note). It is listed here for exactly the reason the list exists — to force
+  // the migration pass on a DB whose version row already says "done" — and listing it is
+  // what makes the ALTER reachable at all. Pinned by the legacy-upgrade case in
+  // tests/handoff-consume.test.mjs rather than left as an assertion in a comment.
+  { table: 'session_handoffs', column: 'consumed_at' },
   { table: 'observations', column: 'last_access_session_id' }, // v48
   { table: 'observations', column: 'decay_seen_at_first_cite' }, // v46
   { table: 'citation_surface_log', column: 'surface' }, // v45
@@ -575,6 +581,29 @@ export function initSchema(db) {
       .map((c) => c.name);
     if (!handoffCols.includes('git_sha_at_handoff')) {
       db.exec(`ALTER TABLE session_handoffs ADD COLUMN git_sha_at_handoff TEXT DEFAULT NULL`);
+    }
+    // Injecting a handoff now STAMPS it (hook-handoff.mjs::consumeHandoff) where it used to
+    // DELETE the row, so the row survives for the expiry GC to reap on age and stays
+    // available to anyone auditing what was injected. Additive + nullable: a legacy row
+    // reads NULL, which is exactly "not yet consumed".
+    //
+    // No CURRENT_SCHEMA_VERSION bump, deliberately. The version row is what locks an older
+    // code home out of this DB permanently, and nothing here needs that: the forced-migration
+    // probe below (LATEST_MIGRATION_COLUMNS) already makes this ALTER reachable on a DB whose
+    // version row says 49/done, which is the whole reason that list exists. An older build
+    // opening this DB keeps working — it simply deletes handoffs the way it always did.
+    if (!handoffCols.includes('consumed_at')) {
+      db.exec(`ALTER TABLE session_handoffs ADD COLUMN consumed_at INTEGER DEFAULT NULL`);
+    }
+    // Tree state at handoff time. `git_sha_at_handoff` has been captured since v25 but was
+    // never rendered into the injection, and the sha alone does not answer the question a
+    // resuming session actually asks first ("which branch, and is the tree dirty?") — so the
+    // other two fields of the readGitState call that was already being made are stored too.
+    if (!handoffCols.includes('git_branch')) {
+      db.exec(`ALTER TABLE session_handoffs ADD COLUMN git_branch TEXT DEFAULT NULL`);
+    }
+    if (!handoffCols.includes('git_dirty_count')) {
+      db.exec(`ALTER TABLE session_handoffs ADD COLUMN git_dirty_count INTEGER DEFAULT NULL`);
     }
   } catch {
     /* non-critical — migration retries on next open */

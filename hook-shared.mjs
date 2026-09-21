@@ -43,6 +43,7 @@ export {
   HANDOFF_ANCHOR_MAX_AGE,
   HANDOFF_MATCH_THRESHOLD,
   CONTINUE_KEYWORDS,
+  UNCONSUMED_HANDOFF_SQL,
 } from './lib/handoff-constants.mjs';
 
 import { DAY_MS, ORPHAN_EPISODE_AGE_MS } from './lib/time-constants.mjs';

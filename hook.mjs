@@ -138,6 +138,7 @@ import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
 import {
   buildAndSaveHandoff,
+  consumeHandoff,
   detectContinuationIntent,
   renderHandoffInjection,
   pickHandoffToInject,
@@ -2893,12 +2894,13 @@ function injectHandoffIfEarly(db, { project, promptText, promptNumber, ccSession
           // Pre-v2.46 wiped every exit handoff for the project on any continuation
           // intent, which made the DB effectively forgetful: 115 completed sessions
           // produced 1 persisted handoff.
+          //
+          // Consuming STAMPS the row (consumed_at) rather than deleting it: the age-based
+          // GC in auto-maintain still reaps it, but until then the row that produced this
+          // injection can be read back. Every pool that relied on the row being gone now
+          // filters on UNCONSUMED_HANDOFF_SQL instead — the list is in handoff-constants.
           try {
-            db.prepare('DELETE FROM session_handoffs WHERE project = ? AND type = ? AND session_id = ?').run(
-              project,
-              picked.type,
-              picked.session_id,
-            );
+            consumeHandoff(db, picked);
           } catch {}
         }
       }

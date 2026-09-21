@@ -27,6 +27,7 @@ import {
   effectiveQuiet,
   isQuietHooks,
   KEY_CONTEXT_LIMIT,
+  UNCONSUMED_HANDOFF_SQL,
 } from './hook-shared.mjs';
 import { extractUnfinishedSummary } from './hook-handoff.mjs';
 import { recentInjectableEvents, renderInjectableEvent } from './lib/events-injection.mjs';
@@ -752,6 +753,7 @@ export function buildSessionContextLines(
         SELECT working_on, unfinished, key_files
         FROM session_handoffs
         WHERE project = ? AND type = 'clear' AND session_id = ? AND created_at_epoch > ?
+          AND ${UNCONSUMED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 1
       `,
         )
@@ -761,7 +763,7 @@ export function buildSessionContextLines(
           `
         SELECT working_on, unfinished, key_files
         FROM session_handoffs
-        WHERE project = ? AND type = 'clear' AND created_at_epoch > ?
+        WHERE project = ? AND type = 'clear' AND created_at_epoch > ? AND ${UNCONSUMED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 1
       `,
         )

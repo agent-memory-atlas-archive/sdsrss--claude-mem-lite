@@ -233,11 +233,24 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
 
   // 4. Key files — from episode snapshot + observations
   const fileSet = new Set();
+  // Ask the BASENAME for an extension, rather than asking the string for a separator.
+  // The separator test answered "does this look like a path", which is a different
+  // question and got both halves wrong. Measured on the live DB 2026-09-21 over all 218
+  // non-null files_modified entries: 59 (27%) were repo-root filenames like `hook.mjs`,
+  // rejected for having no `/`; and 3 were extensionless slash-bearing values — project
+  // directories — accepted and then rendered as key files. `Key Files: claude-mem-lite`
+  // in a real injection was the basename of the project directory.
+  //
+  // Named cost: an extensionless FILE (Makefile, LICENSE) no longer qualifies. The only
+  // alternative is a hand-drawn list of extensionless filenames, and a hand-drawn class is
+  // the shape that has been rejected three times in this repo for rejecting real cases.
+  // Residual, equally named: a directory that happens to end in `.something` still passes.
+  // The dot may lead the basename, so `.env` and `.env.example` qualify.
+  const FILE_BASENAME_RE = /\.[A-Za-z0-9_+-]{1,10}$/;
   const isValidFile = (f) =>
     f &&
     f.length > 2 &&
-    f.includes('/') &&
-    f.indexOf('/', 1) !== -1 &&
+    FILE_BASENAME_RE.test(basename(f)) &&
     !f.startsWith('/dev/') &&
     !f.startsWith('/proc/') &&
     !f.startsWith('/tmp/');

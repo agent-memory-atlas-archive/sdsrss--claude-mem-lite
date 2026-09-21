@@ -40,10 +40,15 @@ function seedSession(db, id, project) {
 }
 
 function seedPrompt(db, sessionId, text, num) {
+  seedPromptAt(db, sessionId, text, num, Date.now());
+}
+
+/** Same, with an explicit epoch — the handoff's observation window is anchored to it. */
+function seedPromptAt(db, sessionId, text, num, epoch) {
   db.prepare(
     `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
     VALUES (?, ?, ?, datetime('now'), ?)`,
-  ).run(sessionId, text, num, Date.now());
+  ).run(sessionId, text, num, epoch);
 }
 
 let _epoch = 0;
@@ -970,13 +975,39 @@ describe('D#28 parallel-session observation scoping', () => {
   it('no CC scope keeps the unfiltered merge (legacy/test path)', () => {
     const project = 'merge-obs';
     seedSession(db, 'sess-m', project);
-    seedPrompt(db, 'sess-m', 'do the work', 1);
-    seedObsAt(db, 'sess-m', project, { title: 'first thing done', importance: 2 }, 1000);
-    seedObsAt(db, 'sess-m', project, { title: 'second thing done', importance: 2 }, 2000);
+    // Epochs are relative to the session's own first prompt now. The observation window is
+    // lower-bounded there (the /clear-path repair: a rotated CC id leaves no CC window, and
+    // running the project-scoped query unbounded reported another session's month-old
+    // decision as this one's). Observations that PREDATE a session's first prompt belong to
+    // an earlier session, so the fixture places this session's work after its own prompt —
+    // which is also the production order. The merge being asserted is still the unscoped
+    // one: both rows are reached without a CC scope.
+    const t0 = Date.now();
+    seedPromptAt(db, 'sess-m', 'do the work', 1, t0);
+    seedObsAt(db, 'sess-m', project, { title: 'first thing done', importance: 2 }, t0 + 1000);
+    seedObsAt(db, 'sess-m', project, { title: 'second thing done', importance: 2 }, t0 + 2000);
     buildAndSaveHandoff(db, 'sess-m', project, 'exit', null); // no scope → unscoped
     const row = db.prepare('SELECT completed FROM session_handoffs WHERE session_id = ?').get('sess-m');
     expect(row.completed).toMatch(/first thing/);
     expect(row.completed).toMatch(/second thing/);
+  });
+
+  it('excludes an observation that predates the session that is handing off', () => {
+    // The companion the guard above lacked: without it, "keeps the unfiltered merge" reads
+    // as "has no bound at all", which is what shipped and what the pre-ship review caught.
+    const project = 'merge-bound';
+    const t0 = Date.now();
+    seedSession(db, 'sess-b', project);
+    seedPromptAt(db, 'sess-b', 'do the work', 1, t0);
+    seedObsAt(db, 'sess-b', project, { title: 'EARLIER session work', importance: 3 }, t0 - 3600000);
+    seedObsAt(db, 'sess-b', project, { title: 'THIS session work', importance: 3 }, t0 + 1000);
+    buildAndSaveHandoff(db, 'sess-b', project, 'exit', null);
+    const row = db
+      .prepare('SELECT completed, key_decisions FROM session_handoffs WHERE session_id = ?')
+      .get('sess-b');
+    expect(row.completed).toMatch(/THIS session work/);
+    expect(row.completed).not.toMatch(/EARLIER session work/);
+    expect(row.key_decisions).not.toMatch(/EARLIER session work/);
   });
 
   it('falls back to unscoped when the CC scope has no matching prompts (MIN epoch null guard)', () => {
@@ -984,8 +1015,11 @@ describe('D#28 parallel-session observation scoping', () => {
     // window start is null → do not exclude everything; show the legacy observation.
     const project = 'legacy-obs';
     seedSession(db, 'sess-legacy', project);
-    seedPrompt(db, 'sess-legacy', 'investigate slow path', 1); // cc_session_id NULL
-    seedObsAt(db, 'sess-legacy', project, { title: 'legacy finding recorded', importance: 2 }, 1000);
+    const t0 = Date.now();
+    seedPromptAt(db, 'sess-legacy', 'investigate slow path', 1, t0); // cc_session_id NULL
+    // Inside the session's own span — see the epoch note two cases up. The guard is about
+    // the CC-scope MIN being null, not about reaching work that predates the session.
+    seedObsAt(db, 'sess-legacy', project, { title: 'legacy finding recorded', importance: 2 }, t0 + 1000);
     buildAndSaveHandoff(db, 'sess-legacy', project, 'exit', null, 'cc-X'); // scope cc-X has no prompts
     const row = db.prepare('SELECT completed FROM session_handoffs WHERE session_id = ?').get('cc-X');
     expect(row.completed).toMatch(/legacy finding/);

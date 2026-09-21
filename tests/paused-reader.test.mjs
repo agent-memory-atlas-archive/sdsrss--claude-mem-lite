@@ -117,8 +117,11 @@ describe('readPausedNote', () => {
   });
 
   it('picks the NEWEST paused file when several exist', () => {
-    writePaused('old-paused.md', '# Paused — older\n\n## Not done\n\n- stale item\n', 1000);
-    writePaused('new-paused.md', '# Paused — newer\n\n## Not done\n\n- fresh item\n', 9000);
+    // Both inside the staleness bound — mtimes now carry meaning beyond ordering, so epoch
+    // 1000 vs 9000 (1970) would just be two stale notes.
+    const nowSec = Math.floor(Date.now() / 1000);
+    writePaused('old-paused.md', '# Paused — older\n\n## Not done\n\n- stale item\n', nowSec - 3 * 86400);
+    writePaused('new-paused.md', '# Paused — newer\n\n## Not done\n\n- fresh item\n', nowSec - 60);
 
     const note = readPausedNote({ projectPath: root });
 

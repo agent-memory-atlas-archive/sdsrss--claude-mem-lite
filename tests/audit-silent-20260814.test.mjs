@@ -906,7 +906,12 @@ describe('F4 — handoff key_decisions excludes a retracted decision', () => {
     db.prepare(
       `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, created_at, created_at_epoch)
                 VALUES (?, ?, ?, datetime('now'), ?)`,
-    ).run(SESSION, 'work out the cross-region write ordering', 1, Date.now());
+      // The prompt is seeded BEFORE both observations, which is the production order: a
+      // session's work happens after its first prompt. The retracted decision used to be
+      // placed 60 s earlier than the prompt purely to order it before its replacement, and
+      // the handoff's observation window (lower-bounded at the session's first prompt since
+      // the /clear-path repair) then excluded it. Ordering preserved, assertions untouched.
+    ).run(SESSION, 'work out the cross-region write ordering', 1, Date.now() - 120000);
 
     insertObs(db, {
       sessionId: SESSION,

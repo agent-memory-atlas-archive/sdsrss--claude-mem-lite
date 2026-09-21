@@ -146,6 +146,24 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       .get(sessionId, ccScope);
     if (typeof w?.startEpoch === 'number') ccWindowStart = w.startEpoch;
   }
+  // Fall back to THIS MEM SESSION's own start when the CC window is unavailable, rather
+  // than running unbounded.
+  //
+  // `ccWindowStart` is null by construction on the /clear path: the host rotates the CC id
+  // across /clear (measured 12/12, see the note above), so the scope passed here belongs to
+  // the NEW session and has no prompts, and MIN over zero rows is null. Before the
+  // namespace widening the id predicate still bounded the pool to one session; after it,
+  // `OR project = ?` with no window pulled the project's entire recent history — a
+  // month-old decision from a different session was reported as this one's Completed AND
+  // replayed as standing Key Decisions. Found by the pre-ship defect lens, reproduced
+  // end-to-end, and invisible to the suite because every control case passed an
+  // `exit`-shaped scope that HAS prompts.
+  if (ccWindowStart === null) {
+    const w = db
+      .prepare(`SELECT MIN(created_at_epoch) AS startEpoch FROM user_prompts WHERE content_session_id = ?`)
+      .get(sessionId);
+    if (typeof w?.startEpoch === 'number') ccWindowStart = w.startEpoch;
+  }
   const obsWindowClause = ccWindowStart !== null ? 'AND created_at_epoch >= ?' : '';
   const obsWindowParams = ccWindowStart !== null ? [ccWindowStart] : [];
 
@@ -381,6 +399,15 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     match_keywords: keywords,
   });
   const safeKeyFiles = JSON.stringify([...fileSet].slice(0, 20).map((f) => scrubSecrets(String(f))));
+  // The UPSERT below resets `consumed_at`. Rewriting a handoff makes it fresh again, so it
+  // must become injectable again: the DELETE that consumeHandoff replaced did this
+  // implicitly (row gone, next build INSERTed a new one), while the UPSERT reuses the row.
+  // Without the reset, a session whose handoff was consumed by a sibling stays permanently
+  // invisible to injection however much work it does afterwards. Pre-ship defect lens.
+  //
+  // This prose lives here and not in the SQL because a backtick inside a SQL comment inside
+  // a template literal ends the literal — the same defect this repo shipped at v6.9.1, and
+  // it recurred right here while writing this fix.
   db.prepare(
     `
     INSERT INTO session_handoffs (project, type, session_id, working_on, completed, unfinished, key_files, key_decisions, match_keywords, created_at_epoch, git_sha_at_handoff, git_branch, git_dirty_count, next_steps)
@@ -396,7 +423,8 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       git_sha_at_handoff = excluded.git_sha_at_handoff,
       git_branch = excluded.git_branch,
       git_dirty_count = excluded.git_dirty_count,
-      next_steps = excluded.next_steps
+      next_steps = excluded.next_steps,
+      consumed_at = NULL
   `,
   ).run(
     project,
@@ -680,10 +708,39 @@ export function renderHandoffInjection(db, project, currentCcSessionId = null) {
 // Only a marker followed by whitespace, at a token boundary, counts — `#42`, `C#` and
 // `D#216` are ordinary in this project's prose and survive untouched.
 const ATX_HEADING_RE = /(^|\s)#{1,6}\s/g;
+const ATX_MAX_PASSES = 32;
 
-/** Defang authority tags AND section markers in one pass, for any replayed free text. */
+/**
+ * Strip ATX markers to a FIXPOINT, not in one pass.
+ *
+ * The gap is two characters wide and it is the same one format-utils' `defangToFixpoint`
+ * documents for the tag half: `(^|\s)` CONSUMES the boundary, so after removing the first
+ * `## ` the regex resumes past the second one and leaves it live. `## ## Key Decisions`
+ * came out of a single pass as a real `## Key Decisions` section inside the block — the
+ * precise property this defanging exists to hold, defeated by two extra characters. Found
+ * by the pre-ship defect lens; reproduced end-to-end before the fix.
+ *
+ * TERMINATION: every match contains at least one `#` and the replacement drops all of them,
+ * so any pass that changes the string removes at least one `#`. Self-bounded by the number
+ * of `#` in the input, and bounded again by the constant.
+ *
+ * INERT AT ANY DEPTH: still changing at the cap (≥32 nested forged layers, not reachable by
+ * accident) → drop every remaining `#`. Lossier, but the return value then provably carries
+ * no marker, which is the property callers rely on. Same fail-closed shape as the sibling.
+ */
+function stripAtxToFixpoint(s) {
+  let text = s;
+  for (let pass = 0; pass < ATX_MAX_PASSES; pass++) {
+    const next = text.replace(ATX_HEADING_RE, '$1');
+    if (next === text) return text;
+    text = next;
+  }
+  return text.replace(/#/g, '');
+}
+
+/** Defang authority tags AND section markers, for any replayed free text. */
 function safeText(value) {
-  return neutralizeContextDelimiters(String(value)).replace(ATX_HEADING_RE, '$1');
+  return stripAtxToFixpoint(neutralizeContextDelimiters(String(value)));
 }
 
 // `[bugfix] title` → `title`. Both `completed` and `key_decisions` store the observation

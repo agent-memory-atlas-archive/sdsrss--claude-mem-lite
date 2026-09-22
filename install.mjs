@@ -3053,9 +3053,10 @@ function cleanup() {
   // Reap leaked test-fixture sandboxes from temp (mem-e2e-* / mem-audit-* / cite-*
   // etc.) left by interrupted vitest runs — the §8.V4 disposal gap the audit found
   // (~795MB). 24h age here (vs 1h in the test reaper) is conservative for a manual
-  // cleanup. Scans os.tmpdir() and the Claude Code temp root, depth-1, mem-prefixes
+  // cleanup. Scans os.tmpdir(), the Claude Code temp root and ~/.cache/tmp (where
+  // `npm test` points TMPDIR, off the RAM-backed /tmp), depth-1, mem-prefixes
   // only — never touches other tools' temp dirs.
-  const fixtureRoots = [tmpdir(), join(homedir(), '.claude', 'tmp')];
+  const fixtureRoots = [tmpdir(), join(homedir(), '.claude', 'tmp'), join(homedir(), '.cache', 'tmp')];
   const swept = sweepStaleTestFixtures({ dirs: fixtureRoots, ageMs: 24 * 60 * 60 * 1000, dryRun });
   for (const p of swept.names) ok(`${dryRun ? 'Would remove' : 'Removed'}: ${p}`);
   removed += swept.removed;

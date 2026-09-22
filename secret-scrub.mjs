@@ -78,7 +78,7 @@ export const SECRET_PATTERNS = [
     /((?:\b|_)(?:password|passwd|passphrase)\s*:\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?![A-Za-z]{1,15}(?=[\s,;'"}\]]|$))[^\s,;'"}\]]{6,}/gi,
     '$1***',
   ],
-  //   1c. `:` separator, prose-ambiguous nouns → keep the lookbehind ("the token: alice"):
+  //   1c. `:` separator, prose-ambiguous nouns → keep the lookbehind ("the token: alicebob"):
   [
     /((?<![A-Za-z][ \t])(?:\b|_)(?:token|bearer|secret)\s*:\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
     '$1***',
@@ -277,11 +277,71 @@ export const SECRET_PATTERNS = [
  * @param {string} text Input text potentially containing secrets
  * @returns {string} Text with secrets replaced by '***'
  */
+// ── D#52 / D#46: one sweep is not a fixed point ─────────────────────────────
+// Three patterns carry the prose lookbehind `(?<![A-Za-z][ \t])` — "preceded by
+// letter + horizontal space means English prose, leave it alone". That guard is
+// load-bearing (#8283 / round-4 / R5): `the token: alicebob` stays readable only
+// because of it, while `token: alicebob` is scrubbed. (Not `alice` — five characters
+// is under the value class's minimum of six, so that phrase is never scrubbed at all
+// and cannot show the guard doing anything.)
+// But a /g match CONSUMES its value, so the NEXT labelled keyword on the same
+// line is preceded by that value's last character plus a space. The lookbehind
+// cannot tell that from a word, so it skipped it: `token: <v> secret: <v>` left
+// the SECOND secret in plaintext. Replacing the first one rewrites that left
+// context to `*** `, and `*` is not [A-Za-z], which is why a second sweep caught
+// what the first missed — the same fact D#46 reported as non-idempotence.
+// The leak and the drift are one defect, and a fixed point closes both; the
+// idempotence is what cmdRestore's re-scrub of five EXPORT_COLUMNS needed.
+//
+// Cost is unchanged on real content: the loop's FIRST iteration is the sweep
+// that used to be the whole function, and text the scrubber does not modify
+// exits on the `===` right after it. Measured 2026-09-22 on the live corpus:
+// of the 287 NON-EMPTY values across text/subtitle/concepts/facts/search_aliases,
+// 0 are modified at all, so the common path pays one string comparison. (A first
+// draft of this line said "0 of 452"; 452 was the NOT-NULL count, ~39% of which
+// are empty strings that nothing could modify — the zero was true and the
+// denominator was not the population.)
+//
+// TERMINATION IS THE CAP, and saying anything stronger would be a guess. A first
+// draft of this comment argued it structurally — "`***` is 3 characters and every
+// value class requires at least 6, so a replacement can never become a new match".
+// Pre-ship review measured that and it is FALSE of six patterns whose value class
+// is `+` or `*`; two of them (the PEM block and the `postgres://` DSN) demonstrably
+// re-match their own `***` output. Convergence is fast in practice — 7 sweeps was
+// the maximum over 40 000 fuzzed inputs — but the only thing that BOUNDS this loop
+// is MAX_SCRUB_PASSES, so that is what the comment is allowed to claim.
+//
+// Convergence rate, stated with the shape it is a property of: N space-adjacent
+// secrets take N+1 sweeps only when each value ends in an ASCII LETTER, because
+// that is what re-arms the prose lookbehind for the next keyword. A value ending
+// in a digit does not re-arm it, so those converge in 2 regardless of N.
+//
+// Hitting the cap leaves labelled secrets unscrubbed past the 32nd, and that is
+// the deliberate choice. The earlier draft instead re-ran the three prose-guarded
+// patterns with the guard STRIPPED — which clears the remainder, and also applies
+// to the whole string rather than the un-converged region, so prose elsewhere in
+// the same input is redacted irreversibly on the write path. Pre-ship review
+// reproduced it: a 33-deep chain turned `Reset the password: instructions are in
+// the onboarding doc` into `Reset the password: *** are in…`, which is verbatim
+// the v3.61.0 regression lines 44-50 of this file record as already undone once.
+// Past the cap the function is also no longer idempotent — the property cmdRestore's
+// re-scrub relies on holds only below it — and a second call scrubs further, which
+// is the safe direction.
+// Reaching the cap needs a deliberately constructed ~447-byte adjacent chain;
+// corrupting prose needs only to be in the same string as one. Between a partial
+// scrub of a crafted credential dump and irreversible damage to a user's text,
+// this repo has twice decided the text matters more.
+const MAX_SCRUB_PASSES = 32;
+
 export function scrubSecrets(text) {
   if (!text || typeof text !== 'string') return text || '';
   let result = stripPrivate(text);
-  for (const [pattern, replacement] of SECRET_PATTERNS) {
-    result = result.replace(pattern, replacement);
+  for (let pass = 1; ; pass++) {
+    const before = result;
+    for (const [pattern, replacement] of SECRET_PATTERNS) {
+      result = result.replace(pattern, replacement);
+    }
+    if (result === before || pass >= MAX_SCRUB_PASSES) break;
   }
   return result;
 }

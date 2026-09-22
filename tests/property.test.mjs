@@ -91,25 +91,59 @@ describe('scrubSecrets properties', () => {
   // `(?<![A-Za-z][ \t])` keys on, so `--token ghp_… secret: v` is prose on pass 1 and config
   // on pass 2.
   //
-  // Pinned rather than fixed: making the scrubber idempotent means reordering the pattern
-  // table, which changes what it catches and owes a re-measured pass over the corpus (D#46).
-  // Until then, callers must not assume it — see `importedObsTitle`, where the dedup key was
-  // resting on exactly this.
-  const NON_IDEMPOTENT = [
-    'Bash: AccountKey=https://a:b@h',
-    'Bash: curl "?sig=https://a:b@h"',
-    'AccountKey=-?postgres://@&',
-    'Bash: deploy --token ghp_1234567890abcdefghijk secret: hunter2correct',
+  // FIXED as of D#52 (2026-09-22), and the reason it stayed pinned for so long is worth
+  // keeping: the note here said idempotence "means reordering the pattern table, which
+  // changes what it catches and owes a re-measured pass over the corpus". That premise
+  // assumed reordering was the only route. It is not — `scrubSecrets` now runs the sweep
+  // to a FIXED POINT instead. The table's order is untouched, one sweep still catches
+  // exactly what it caught before, and the extra sweeps only ever scrub MORE, never less,
+  // which is the safe direction for a scrubber and is bounded by the prose negatives in
+  // tests/secret-scrub-coverage.test.mjs.
+  //
+  // What forced it was not the drift. The second mechanism below is also a LEAK: because a
+  // /g match consumes its value, the next labelled keyword on the same line is preceded by
+  // that value's last character, the prose lookbehind reads it as an English word, and
+  // `token: <v> secret: <v>` shipped the second secret in PLAINTEXT. Everything written
+  // here before described that as a drift, which is why it was queued rather than fixed.
+  //
+  // The fixtures are kept, because they are the four shapes known to reach the substitution
+  // path, and both mechanisms stay documented above — the assertions are just inverted.
+  const FORMERLY_NON_IDEMPOTENT = [
+    'Bash: AccountKey=https://a:b@h', // grower-vs-consumer (array order)
+    'Bash: curl "?sig=https://a:b@h"', // grower-vs-consumer
+    'AccountKey=-?postgres://@&', // grower-vs-consumer
+    'Bash: deploy --token ghp_1234567890abcdefghijk secret: hunter2correct', // prose lookbehind
   ];
 
-  it('is NOT idempotent, and these are the shapes that prove it', () => {
-    for (const input of NON_IDEMPOTENT) {
+  it('is idempotent, on the four shapes that used to prove it was not', () => {
+    for (const input of FORMERLY_NON_IDEMPOTENT) {
       const once = scrubSecrets(input);
       const twice = scrubSecrets(once);
-      // Premise: the fixture must still reach the substitution path at all. A pattern edit
-      // that stops scrubbing these would otherwise turn the case below into `x === x`.
+      // Premise, unchanged in intent: the fixture must still reach the substitution path,
+      // or the assertion below degenerates into `x === x` — which is exactly how the
+      // ORIGINAL idempotence test managed to be green while asserting a false property.
       expect(once, `fixture no longer scrubbed at all: ${input}`).not.toBe(input);
-      expect(twice, `scrubSecrets became idempotent for: ${input}`).not.toBe(once);
+      expect(twice, `scrubSecrets is non-idempotent again for: ${input}`).toBe(once);
+    }
+  });
+
+  it('reaches its fixed point in a bounded number of sweeps, and does not grow', () => {
+    // The grower shape (`https://u:p@` -> `https://***:***@`, 12 chars -> 16) is the reason
+    // a fixed-point loop needs this case: a replacement that is LONGER than what it replaced
+    // is the one shape that could in principle re-trigger its own pattern and never settle.
+    // MAX_SCRUB_PASSES would cap it, but a cap being hit is a silent partial scrub, so the
+    // claim to pin is that the cap is never reached, not that it exists.
+    for (const input of FORMERLY_NON_IDEMPOTENT) {
+      let cur = input;
+      let prev;
+      let sweeps = 0;
+      do {
+        prev = cur;
+        cur = scrubSecrets(cur);
+        sweeps++;
+      } while (cur !== prev && sweeps < 32);
+      expect(sweeps, `did not settle well inside the cap: ${input}`).toBeLessThan(5);
+      expect(cur.length, `output grew past a sane bound: ${input}`).toBeLessThan(input.length * 3);
     }
   });
 

@@ -85,15 +85,34 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
     expect(src).toMatch(/title: importedObsTitle\(toolUse\),/);
   });
 
-  // The case the source scan above could not be: a title on which `scrubSecrets` is NOT
-  // idempotent, so a double-scrubbed storage side and a single-scrubbed preview genuinely
-  // disagree. Measured against the pre-amendment code this imported 3 rows for 3 runs.
-  it('a title where the scrubber is not idempotent still deduplicates across runs', async () => {
+  // This case used to carry a title on which `scrubSecrets` was NOT idempotent, so a
+  // double-scrubbed storage side and a single-scrubbed preview genuinely disagreed —
+  // measured against the pre-amendment code it imported 3 rows for 3 runs.
+  //
+  // D#52 (2026-09-22) RETIRED that discriminating power on purpose. The drift came from
+  // the prose lookbehind reading the tail of a previous match's value as an English word,
+  // which also meant the SECOND labelled secret on a line shipped in plaintext; scrubbing
+  // to a fixed point closes the leak and makes this function idempotent, so no drifting
+  // input exists any more. Say the cost out loud rather than quietly keeping a green case:
+  // this file used to hold TWO independent detectors for the v6.8.0 double-scrub bug and
+  // now holds one, the structural scan above. The replacement is not here — it is the
+  // idempotence invariant itself, guarded directly in tests/secret-scrub-coverage.test.mjs
+  // ('scrubSecrets — D#52 adjacent labelled secrets on one line'), which is a stronger
+  // thing to pin than any single consequence of it.
+  //
+  // What stays here is the behavioural half that still means something: a title the
+  // scrubber REWRITES must dedup across runs.
+  it('a scrubbed title still deduplicates across runs', async () => {
     const title = 'deploy --token ghp_1234567890abcdefghijk secret: hunter2correct';
-    // Premise: this input must actually drift under a second scrub, or the case is testing
-    // nothing that the plain dedup case above does not already cover.
-    const once = scrubSecrets(`Bash: ${title.slice(0, 80)}`);
-    expect(scrubSecrets(once), 'fixture is no longer non-idempotent').not.toBe(once);
+    // Premise 1: the scrubber must actually rewrite this title, or the case degenerates
+    // into the plain dedup case below.
+    const raw = `Bash: ${title.slice(0, 80)}`;
+    const once = scrubSecrets(raw);
+    expect(once, 'fixture no longer contains anything the scrubber rewrites').not.toBe(raw);
+    // Premise 2: and it must now be STABLE under a second scrub. This is the assertion that
+    // replaces the old non-idempotence premise — if it ever fails, the v6.8.0 bug class is
+    // observable again and the detector this case gave up needs rebuilding.
+    expect(scrubSecrets(once), 'scrubSecrets is non-idempotent again (D#52 regressed)').toBe(once);
 
     const file = join(dir, 'nonidem.jsonl');
     writeFileSync(file, toolPair('Bash', { command: title }, 'u7') + '\n');

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
 import { scrubRecord } from '../lib/scrub-record.mjs';
-import { scrubSecrets } from '../secret-scrub.mjs';
+import { scrubSecrets, SECRET_PATTERNS } from '../secret-scrub.mjs';
 import { stripPrivate } from '../lib/private-strip.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
 import { saveEvent } from '../lib/activity.mjs';
@@ -667,7 +667,7 @@ describe('scrubSecrets — bare-noun `=` assignment scrubs even mid-prose (round
   // Round-4 finding: `<English-word> password=<value>` (assignment in a sentence)
   // leaked because the prose lookbehind `(?<![A-Za-z][ \t])` skipped ANY bare noun
   // preceded by "word ", regardless of separator. The prose shape the lookbehind
-  // exists to protect is `:` ("the token: alice") — an `=` is config assignment, not
+  // exists to protect is `:` ("the token: alicebob") — an `=` is config assignment, not
   // prose. Split the noun patterns: `=` always scrubs, `:` keeps the prose guard.
   it('scrubs password=/token=/secret= even when preceded by a prose word', () => {
     expect(scrubSecrets('Config has password=hunter2supersecret in env')).not.toContain('hunter2supersecret');
@@ -873,5 +873,153 @@ describe('scrubSecrets — mid-prose password scrubs credentials, not English', 
   it('keeps the #8283 prose protection for token/bearer/secret', () => {
     expect(scrubSecrets('Marker token: xyzpdq-round3.')).toBe('Marker token: xyzpdq-round3.');
     expect(scrubSecrets('the bearer: "alicewashere"')).toBe('the bearer: "alicewashere"');
+  });
+});
+
+// ─── D#52: the second space-adjacent labelled secret ships in plaintext ──────
+// Measured 2026-09-22 by a directed grid (2940 inputs, 80.3% reach). The real
+// corpus is BLIND to this — 0 of the 287 non-empty live values across
+// text/subtitle/concepts/facts/search_aliases are modified by scrubSecrets at all —
+// which is why an earlier 300k-title fuzz found nothing. Reach first, then believe
+// the green. (This line first said "0 of 452"; 452 was the NOT-NULL count, ~39% of
+// it empty strings, and was retracted in secret-scrub.mjs and the commit first.)
+//
+// Mechanism: patterns #1/#3/#8 carry the prose lookbehind `(?<![A-Za-z][ \t])`
+// ("preceded by letter+horizontal-space means PROSE, do not scrub"). With /g the
+// first match CONSUMES its value, so the next labelled keyword on the same line
+// is preceded by <that value's last char>+space — letter+space — and is read as
+// prose. The lookbehind cannot tell an English word from the tail of a credential.
+//
+// The same mechanism is D#46's non-idempotence seen from the other side: pass 1
+// rewrites the neighbour's left context to `*** `, and `*` is not [A-Za-z], so a
+// SECOND pass scrubs what the first one skipped. Leak and drift are one defect.
+//
+// Fixtures are ASSEMBLED, never written whole: a realistic credential literal in
+// THIS file once had GitHub push protection reject an entire release push.
+describe('scrubSecrets — D#52 adjacent labelled secrets on one line', () => {
+  const A = 'A'.repeat(20);
+  const B = 'B'.repeat(20);
+  const C = 'C'.repeat(20);
+
+  it('scrubs the SECOND space-adjacent labelled secret, not just the first', () => {
+    const out = scrubSecrets(`token: ${A} secret: ${B}`);
+    expect(out).not.toContain(A);
+    expect(out, 'the second labelled secret shipped in plaintext').not.toContain(B);
+  });
+
+  it('scrubs a run of three, not just the head', () => {
+    const out = scrubSecrets(`token: ${A} secret: ${B} bearer: ${C}`);
+    for (const [name, v] of [
+      ['first', A],
+      ['second', B],
+      ['third', C],
+    ]) {
+      expect(out, `the ${name} labelled secret survived`).not.toContain(v);
+    }
+  });
+
+  it('is idempotent: a second scrub changes nothing (D#46)', () => {
+    for (const input of [
+      `token: ${A} secret: ${B}`,
+      `token: ${A} secret: ${B} bearer: ${C}`,
+      `secret: ${A} secret: ${A}`,
+    ]) {
+      const once = scrubSecrets(input);
+      expect(scrubSecrets(once), `double-scrub drifted for ${JSON.stringify(input)}`).toBe(once);
+    }
+  });
+
+  // The prose guard is the thing this fix must NOT buy its way out of. These are
+  // the exact shapes #8283 / round-4 / R5 established; they stay unscrubbed.
+  it('does not buy the fix with the #8283 prose protection', () => {
+    expect(scrubSecrets('the token: somemarkervalue')).toBe('the token: somemarkervalue');
+    expect(scrubSecrets('the bearer: "alicewashere"')).toBe('the bearer: "alicewashere"');
+    expect(scrubSecrets('Marker token: xyzpdq-round3.')).toBe('Marker token: xyzpdq-round3.');
+    expect(scrubSecrets('topsecret=foobar123')).toBe('topsecret=foobar123');
+    expect(scrubSecrets('mypassword=foobar123')).toBe('mypassword=foobar123');
+  });
+});
+
+// Hitting MAX_SCRUB_PASSES is the one outcome nothing else reaches: the convergence
+// case pins settling in under 5 sweeps, so no other test ever hits the cap. What the
+// source promises there is deliberately modest — the scrub stops, labelled secrets
+// past the 32nd stay as they are, and nothing ELSE in the string is touched — and
+// these cases pin each half of that. (An earlier draft stripped the prose guard once
+// the cap was hit, to clear the remainder; it redacted ordinary English elsewhere in
+// the same string and was removed before release. The case below that feeds prose
+// alongside an overrun chain is what would catch it coming back.)
+describe('scrubSecrets — what the pass cap does and does not promise', () => {
+  // N space-adjacent secrets need N+1 sweeps when each value ends in a LETTER (that is what
+  // re-arms the prose lookbehind for the next keyword), so 40 of them overruns a cap of 32.
+  // Values must be UNIQUE (so `survivors` counts what it says) and must END IN A LETTER
+  // (a digit-terminated value does not re-arm the prose lookbehind, so the whole chain
+  // would collapse in 2 sweeps and never reach the cap). A first cut used `i % 26`, which
+  // repeats past 26 and made the survivor count ambiguous.
+  const chain = (n) => {
+    const values = Array.from({ length: n }, (_, i) => `v${i}`.padEnd(24, 'Z'));
+    return { values, input: values.map((v) => `token: ${v}`).join(' ') };
+  };
+
+  it('the 40-deep chain genuinely overruns the cap, or every case below proves nothing', () => {
+    const { input } = chain(40);
+    const oneSweep = (str) => {
+      let r = str;
+      for (const [p, rep] of SECRET_PATTERNS) r = r.replace(p, rep);
+      return r;
+    };
+    let cur = input;
+    let prev;
+    let sweeps = 0;
+    do {
+      prev = cur;
+      cur = oneSweep(cur);
+      sweeps++;
+    } while (cur !== prev && sweeps < 200);
+    expect(sweeps, 'this input no longer overruns MAX_SCRUB_PASSES (32)').toBeGreaterThan(32);
+  });
+
+  // THE PROMISE THE CAP DOES NOT MAKE. An earlier cut re-ran the three prose-guarded patterns
+  // with the guard stripped when the cap was hit, which does clear the tail — and applies to
+  // the WHOLE string, so prose elsewhere in the same input was redacted irreversibly on the
+  // write path. That is verbatim the v3.61.0 regression secret-scrub.mjs:44-50 records as
+  // already undone once, and pre-ship review reproduced it here. The tail is left unscrubbed
+  // on purpose; this case is the reason.
+  it('does not corrupt prose elsewhere in the string when the cap is overrun', () => {
+    const prose = 'Reset the password: instructions are in the onboarding doc.';
+    const out = scrubSecrets(`${chain(40).input} ${prose}`);
+    expect(out, 'the cap path redacted ordinary English (the v3.61.0 regression)').toContain(prose);
+  });
+
+  it('a chain that FITS inside the cap is still fully scrubbed', () => {
+    // The cap is a bound on work, not a hole in the ordinary guarantee: everything short of
+    // it converges. 10 needs 11 sweeps, comfortably inside 32.
+    const { values, input } = chain(10);
+    const out = scrubSecrets(input);
+    const survivors = values.filter((v) => out.includes(v));
+    expect(survivors.length, `${survivors.length}/10 labelled secrets shipped in plaintext`).toBe(0);
+  });
+
+  it('the overrun case scrubs what it reached — a residual, not a no-op', () => {
+    // Bound the honesty in both directions. Hitting the cap is a PARTIAL scrub: the sweeps
+    // that ran did their work. A regression that made the cap abandon the whole input would
+    // otherwise read the same as the deliberate residual.
+    const { values, input } = chain(40);
+    const out = scrubSecrets(input);
+    const survivors = values.filter((v) => out.includes(v));
+    expect(survivors.length, 'the cap path scrubbed nothing at all').toBeLessThan(values.length);
+    expect(out.match(/\*\*\*/g).length, 'fewer replacements than sweeps run').toBeGreaterThan(20);
+  });
+
+  // A prose negative that also carries a real secret. The ordinary prose negatives
+  // contain no secret at all, so they exit after one sweep and never exercise the loop
+  // continuing; this one makes the first sweep change something, and asserts the later
+  // sweeps still leave the prose-position keyword alone. It does NOT kill
+  // `MAX_SCRUB_PASSES = 1` (an earlier version of this comment said it did): there is
+  // only one secret here, so one sweep is enough. That mutant is killed by the D#52
+  // adjacency cases and the cap cases instead.
+  it('a real secret in the string leaves the prose-position keyword alone', () => {
+    const out = scrubSecrets('password=SUPERSECRETVALUE123 and the token: alicewashere');
+    expect(out, 'the secret leaked').not.toContain('SUPERSECRETVALUE123');
+    expect(out, 'a prose-position keyword was redacted').toContain('the token: alicewashere');
   });
 });

@@ -485,6 +485,34 @@ describe('install lifecycle checks', () => {
   // The fake `claude` here implements that removal for real, so the case measures the
   // consequence (a rewritten project file) rather than only the argv. Both are asserted:
   // the argv, because that is the decision, and the file, because that is the harm.
+  //
+  // The 90 s budget is this case's own, not the global `testTimeout: 20000`, because it is
+  // the only case in this file that runs a full `install` in a child process — it spends
+  // ~5 s of real work where the next-slowest case here spends 417 ms. Measured 2026-09-22
+  // on one box, same tree, six readings of THIS case: 4970 / 5122 / 5154 ms with the
+  // machine otherwise idle, and 23958 / 29385 / 40908 ms while two other agent sessions
+  // were running `npm test` concurrently. The spread is contention, not work: the arms that
+  // read 5 s and 41 s were taken back-to-back minutes apart with no edit between them, so
+  // neither number is the case's cost — 5 s is, and 41 s is what 5 s becomes on a busy box.
+  //
+  // It was 60 s first, sized to clear 40908 ms by 47%. That was one box's worst so far, and
+  // pre-ship review beat it within the hour: this file's sibling case in
+  // tests/doctor-survives-bad-settings.test.mjs read 67327 ms and timed out at 60 s once in
+  // about 20 full-suite runs, at load average 11-14 with two reviewers' suites running. 90 s
+  // is a budget seven other cases in this repo already carry, and clears that by 34%. It is
+  // still a guess about the next busy box, not a bound, and it is not a ruler: no assertion
+  // above is touched, and the budget still says NO, at ~18x the measured cost.
+  //
+  // The class is wider than this case and is NOT fixed here (D#25, D#50). How wide depends
+  // on the counting rule, so here is one: files matching
+  // `execFileSync\(process\.execPath|spawnSync\(process\.execPath|INSTALL_PATH` numbered 75
+  // when this budget was added (76 once this release's doctor test landed), and 13 of them
+  // give any case a literal `}, <ms>);` budget — 14 if a budget written as a named constant
+  // counts. A broader rule found 96 and 19; either way most such files run on the global
+  // 20 s. The
+  // repo has also measured the other half of this — vitest.config.mjs records one IO-heavy
+  // file running 14.4x slower on the CI runner than locally. This case passes on CI today,
+  // so what is being bought here is local-contention headroom, not CI headroom.
   it('install never edits the project-scoped .mcp.json it is standing in', () => {
     const home = makeTmpDir();
     try {
@@ -542,7 +570,7 @@ describe('install lifecycle checks', () => {
         rmSync(home, { recursive: true, force: true });
       } catch {}
     }
-  });
+  }, 90000);
 
   // The predicate the warning is built from, driven directly so the shapes that must NOT
   // warn are pinned too — a warning that fires on every project would train the user to

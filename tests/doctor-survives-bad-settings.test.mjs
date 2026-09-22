@@ -76,6 +76,14 @@ describe('doctor survives an unparseable settings.json', () => {
     expect(messages).not.toMatch(/Plugin lifecycle: hooks not configured/);
   });
 
+  // Its own 90 s budget, for the same reason as tests/install-lifecycle.test.mjs's
+  // project-scoped .mcp.json case, which carries the full argument: this is the only case
+  // here that cold-starts `install` AND `uninstall` in child processes, one after the other.
+  // The case above spawns twice as well, but `doctor` is the cheap one. Measured 2026-09-22,
+  // same box and tree: 5748 / 5758 ms of work, and 20172 / 37952 ms under concurrent load
+  // (load average 6.91 / 9.96) — the first of those would already fail the global 20 s.
+  // It was 60 s first; pre-ship review then read 67327 ms for this case at load average
+  // 11-14 and saw it time out at 60 s once, so 60 s was sized to one box's worst so far.
   it('install and uninstall still refuse, leaving the file byte-identical', () => {
     const p = writeSettings(BAD_SETTINGS);
     for (const cmd of ['install', 'uninstall']) {
@@ -85,5 +93,5 @@ describe('doctor survives an unparseable settings.json', () => {
       expect(`${stdout}${stderr}`).toMatch(/not valid JSON/);
       expect(readFileSync(p, 'utf8'), `${cmd} rewrote the file it could not parse`).toBe(before);
     }
-  });
+  }, 90000);
 });

@@ -65,6 +65,10 @@ const HOOK_PATH = join(INSTALL_DIR, 'hook.mjs');
 // imports — this pair used to be typed out in each.
 import { MARKETPLACE_KEY, PLUGIN_KEY, PLUGIN_NAME, isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
 import { doctorDbModeHint } from './lib/doctor-modes.mjs';
+// Static, matching doctor-modes above. Safe here where it would not be for a heavier
+// module: this one is a leaf over node:fs + node:child_process, so it adds no load graph
+// to the entry point that has to survive a broken install.
+import { checkHookInterpreter } from './lib/doctor-hook-interpreter.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 import {
@@ -277,59 +281,6 @@ export function buildDoctorSummary(issues, warnings) {
   if (issues === 0) return `All critical checks passed (${warnings} warning${wPlural}).`;
   const warnSuffix = warnings > 0 ? ` (+${warnings} warning${wPlural})` : '';
   return `${issues} issue(s) found.${warnSuffix}`;
-}
-
-/**
- * How many LIVE hook commands invoke `bash`, and which scripts they are.
- *
- * There are two hook registrations and only one is live per install shape, which is what
- * the first cut of doctor's interpreter check got wrong (pre-ship review P1-1). The plugin
- * shape reads `hooks/hooks.json` out of the plugin cache. The npm / npx / `git clone` shape
- * has no such file — `hooks/hooks.json` is in RELEASE_SIGNED_FILES but NOT in SOURCE_FILES,
- * so nothing deploys it to ~/.claude-mem-lite/ — and registers its hooks in settings.json
- * instead. Reading only the manifest therefore answered "zero bash hooks" on the one shape
- * where two of them are live.
- *
- * Returns THREE outcomes, never two. `count: null` means no registration could be read, and
- * that is deliberately distinct from a count of zero: zero is an answer, null is the absence
- * of one, and a diagnostic that reports them identically tells the reader to stop looking.
- *
- * @param {{manifestPath: string, settingsCommands?: string[], installDir: string}} opts
- * @returns {{count: number|null, source: 'manifest'|'settings'|null, scripts: string[]}}
- */
-export function resolveBashHookCount({ manifestPath, settingsCommands = [], installDir }) {
-  const basenames = (commands) =>
-    commands
-      .map((c) => {
-        const m = c.match(/([^/"\s]+\.sh)/);
-        return m ? m[1] : c;
-      })
-      .sort();
-
-  if (existsSync(manifestPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
-      const commands = [];
-      for (const matchers of Object.values(parsed?.hooks || {})) {
-        for (const m of matchers || []) {
-          for (const h of m?.hooks || []) commands.push(String(h?.command || ''));
-        }
-      }
-      const bash = commands.filter((c) => c.startsWith('bash '));
-      return { count: bash.length, source: 'manifest', scripts: basenames(bash) };
-    } catch {
-      // A torn manifest is not evidence of zero bash hooks. Fall through to settings.json,
-      // and if that says nothing about us either, the caller gets null.
-    }
-  }
-  // Only OUR entries: settings.json is shared with every other tool the user installs, so a
-  // foreign `bash "…"` line is not ours to report on, and — the discriminating half — a
-  // settings.json that names nothing of ours is not evidence that no hook needs bash. It is
-  // evidence we are reading the wrong registration.
-  const ours = settingsCommands.filter((c) => c.includes(installDir));
-  if (ours.length === 0) return { count: null, source: null, scripts: [] };
-  const bash = ours.filter((c) => c.startsWith('bash '));
-  return { count: bash.length, source: 'settings', scripts: basenames(bash) };
 }
 
 // Dev installs symlink server.mjs → the project's source file. Used to suppress
@@ -2586,67 +2537,19 @@ async function doctor() {
     dwarn('Hook scripts: check failed — ' + e.message);
   }
 
-  // Hook interpreter. Some hook commands are `bash "<script>"` (the PostToolUse and
-  // Agent prefilters, plus setup.sh in the plugin manifest) — the rest are `node`. If bash
-  // cannot run, those commands fail and nothing says so; the check above grades whether the
-  // FILES are present, which they are.
-  //
-  // Keyed on whether bash runs, not on process.platform === 'win32'. A Windows user with
-  // Git for Windows on PATH — the normal case, since Claude Code shells out to bash for its
-  // own Bash tool — has a working configuration and must not be warned; a stripped
-  // container with no bash has a broken one and must be, whatever its platform. This is
-  // also what issue #28's P3-19 intent asked for: `os: [darwin, linux]` was added so a
-  // Windows user "should be told rather than handed a string of silent catch blocks", and
-  // blocking the install told them nothing. This is the telling.
-  try {
-    const {
-      count: bashCommands,
-      source: countSource,
-      scripts: bashScripts,
-    } = resolveBashHookCount({
+  // Hook interpreter — see lib/doctor-hook-interpreter.mjs for what it grades and why it
+  // keys on whether bash RUNS rather than on process.platform. The two registration paths
+  // are passed in rather than recomputed there, because they appear verbatim in the
+  // "could not read either registration" message and that text is asserted on.
+  checkHookInterpreter(
+    { ok, dwarn },
+    {
       manifestPath: join(PROJECT_DIR, 'hooks', 'hooks.json'),
+      settingsPath: join(homedir(), '.claude', 'settings.json'),
       settingsCommands: settingsHookCommands(homedir()),
       installDir: INSTALL_DIR,
-    });
-    if (bashCommands === null) {
-      // NOT `ok`. Pre-ship review (P1-1) found the first cut printing "no hook command needs
-      // bash" here, on a shape where two of them are registered — a green line that ends the
-      // reader's search is worse than the silence this check exists to remove.
-      dwarn(
-        'Hook interpreter: could not read either hook registration — neither ' +
-          `${join(PROJECT_DIR, 'hooks', 'hooks.json')} nor a claude-mem-lite entry in ` +
-          `${join(homedir(), '.claude', 'settings.json')} — so whether any hook needs bash is unknown.`,
-      );
-    } else if (bashCommands === 0) {
-      ok(`Hook interpreter: no hook command needs bash (per the ${countSource})`);
-    } else {
-      let bashOk = false;
-      try {
-        execFileSync('bash', ['-c', 'exit 0'], { stdio: 'ignore', timeout: 5000 });
-        bashOk = true;
-      } catch {
-        /* not resolvable, or not runnable — either way the hooks that need it cannot fire */
-      }
-      if (bashOk) {
-        ok(`Hook interpreter: bash present (${bashCommands} hook command(s) need it)`);
-      } else {
-        // dwarn, not an issue: everything else works. Saying "broken" about an install
-        // whose MCP server and node hooks are fine would be the mirror of the defect that
-        // sent this round's reporter looking at their disk and their network.
-        // The scripts are NAMED from the live registration rather than described from
-        // memory — the first cut wrote "(episode Read-tracking and the subagent prefilter)",
-        // a two-item gloss on a count of three (P3-1).
-        dwarn(
-          `Hook interpreter: bash not found on PATH — the ${bashCommands} hook command(s) that ` +
-            `invoke it cannot fire (${bashScripts.join(', ')}). The MCP server and the node ` +
-            'hooks are unaffected. On Windows, install Git for Windows or use WSL; elsewhere ' +
-            'this means a stripped PATH.',
-        );
-      }
-    }
-  } catch (e) {
-    dwarn('Hook interpreter: check failed — ' + e.message);
-  }
+    },
+  );
 
   // Stale temp files
   try {

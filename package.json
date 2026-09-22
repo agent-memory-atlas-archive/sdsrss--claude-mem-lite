@@ -74,6 +74,7 @@
     "lib/startup-dashboard.mjs",
     "lib/doctor-benchmark.mjs",
     "lib/doctor-drift.mjs",
+    "lib/doctor-hook-interpreter.mjs",
     "lib/cli-project.mjs",
     "lib/stats-quality.mjs",
     "lib/low-signal-patterns.mjs",

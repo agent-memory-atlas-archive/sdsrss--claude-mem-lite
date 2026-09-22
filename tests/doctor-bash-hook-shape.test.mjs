@@ -34,7 +34,7 @@ import {
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { resolveBashHookCount } from '../install.mjs';
+import { resolveBashHookCount } from '../lib/doctor-hook-interpreter.mjs';
 
 const dirs = [];
 afterEach(() => {

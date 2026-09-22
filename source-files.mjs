@@ -72,6 +72,7 @@ export const SOURCE_FILES = [
   'lib/startup-dashboard.mjs',
   'lib/doctor-benchmark.mjs',
   'lib/doctor-drift.mjs',
+  'lib/doctor-hook-interpreter.mjs',
   // DB-aware project pick for terminal-invoked CLI commands. Statically imported by
   // mem-cli.mjs, cli/activity.mjs and cli/doctor.mjs — ship it or every CLI command
   // throws ERR_MODULE_NOT_FOUND in installed/tarball runtimes.

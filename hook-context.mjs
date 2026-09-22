@@ -17,6 +17,7 @@ import {
   debugLog,
   neutralizeContextDelimiters,
   safeText,
+  normalizeInline,
   DECAY_HALF_LIFE_BY_TYPE,
   DEFAULT_DECAY_HALF_LIFE_MS,
   notLowSignalTitleClause,
@@ -648,7 +649,19 @@ export function buildSessionContextLines(
           const files = JSON.parse(o.files_modified);
           const fname = basename(Array.isArray(files) && files.length > 0 ? files[0] : '');
           if (fname) {
-            fileLessons.push({ id: o.id, line: `- ${fname}: ${truncate(o.lesson_learned, 100)} (#${o.id})` });
+            // `fname` is the ONE value in this block interpolated with neither `truncate` nor
+            // a defang, so a newline inside a stored path put everything after it on its own
+            // line and any `## ` there became a real heading. Reproduced end to end from
+            // `files_modified = ["notes.mjs\n## Forged"]`, which reaches the column because
+            // lib/save-observation.mjs filters `files` on `typeof f === 'string'` and length
+            // only — and `mem_save` is agent-callable, which is the threat model this
+            // defanging exists for. Same mechanism and same source column as the
+            // `- Key files:` line below; found by the pre-ship defect lens after the commit
+            // that fixed that one declared this family closed.
+            fileLessons.push({
+              id: o.id,
+              line: `- ${safeText(normalizeInline(fname))}: ${truncate(o.lesson_learned, 100)} (#${o.id})`,
+            });
             continue;
           }
         } catch {
@@ -799,7 +812,19 @@ export function buildSessionContextLines(
       try {
         const files = JSON.parse(prevClearHandoff.key_files);
         if (files.length > 0) {
-          handoffLines.push(`- Key files: ${safeText(files.map((f) => basename(f)).join(', '))}`);
+          // `normalizeInline` as well as `safeText`, and this line is the reason the pair is
+          // needed rather than either alone. Of the three fields here it is the only one with
+          // no `truncate`, so it is the only one where a stored newline can start a line —
+          // which is what turns a marker from mid-line noise into a real heading. It also
+          // closes a composition gap `safeText` cannot see: `#<>#` is neither an ATX marker
+          // nor a delimiter tag, so safeText leaves it, and the block-level defang at the end
+          // of this function strips every `<`/`>` when it fails closed, collapsing it to `##`
+          // with no ATX pass left to run. Collapsed to one line, that `##` can only land
+          // mid-line. (The fail-closed trigger itself is reachable through the untruncated
+          // `Lessons:` / `Decisions:` lines in buildSummaryLines — still open, see below.)
+          handoffLines.push(
+            `- Key files: ${safeText(normalizeInline(files.map((f) => basename(f)).join(', ')))}`,
+          );
         }
       } catch {
         /* malformed JSON — skip */

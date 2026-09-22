@@ -45,6 +45,7 @@ export {
   formatErrorRecallHints,
   neutralizeContextDelimiters,
   safeText,
+  normalizeInline,
 } from './format-utils.mjs';
 export { computeMinHash, estimateJaccardFromMinHash, jaccardSimilarity } from './hash-utils.mjs';
 export {

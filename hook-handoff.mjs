@@ -4,6 +4,7 @@
 import { basename } from 'path';
 import {
   truncate,
+  normalizeInline,
   extractMatchKeywords,
   tokenizeHandoff,
   isSpecificTerm,
@@ -104,25 +105,52 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // Scrub BEFORE truncate. A secret straddling the 200-char cut is shortened below the
   // length floor its own pattern requires, stops matching entirely, and the retained head is
   // then stored verbatim — the exact failure the persistence-boundary comment below
-  // prescribes against, in the three call sites that sit above it. Measured on a
-  // 244-cut-point sweep across five credential families (the cut walked through the token one
-  // character at a time): 33 cut points leak ≥12 characters under truncate-then-scrub and 0
-  // under this order. FIXED-LENGTH families are the worst case, because a short read matches
-  // nothing at all rather than matching less — `ghp_`+36 retained 28 of its 36 entropy
-  // characters and `AKIA`+16 retained 14 of 16, while variable-length `sk-ant-api03-`
-  // retained 0. The destination is not a log line: this column is persisted and replayed
-  // into a later session's prompt by both renderers.
+  // prescribes against, in the three call sites that sit above it.
+  //
+  // Measured 2026-09-22 on this machine, one fixture set for every number below (the first
+  // draft used two probes with two different `xoxb-` tokens, so its denominator and its
+  // table described different fixtures): five credential families, the cut walked through
+  // the token one character at a time, 244 cut points. Under truncate-then-scrub **38** cut
+  // points leak ≥12 characters (33 leak ≥13); under this order, 0. FIXED-LENGTH families are
+  // the worst case, because a short read matches nothing at all rather than matching less —
+  // longest head the old order still stored, minus the prefix:
+  //
+  //   ghp_ + 36          29 of 36 entropy chars
+  //   AKIA + 16          15 of 16
+  //   xoxb- (12-12-24)    9 of 50
+  //   password= + 32      4 of 32   (the appended `…` counts toward the `{6,}` value class)
+  //   sk-ant-api03- + 80  1 of 80   (the `ant` alternation lets `api03-AA` satisfy `{8,}`)
+  //
+  // The variable-length row is the contrast case and it is 1, not 0. The destination is not
+  // a log line: this column is persisted and replayed into a later session's prompt by both
+  // renderers.
   //
   // `working_on` is consequently the one column scrubbed TWICE — here, and again at the
-  // persistence boundary via scrubRecord, which stays as-is because `completed` /
-  // `unfinished` reach that call from STORED ROWS rather than from prompts. scrubSecrets is
-  // a fixpoint on its own output for every family that reaches this path; that property is
-  // pinned in tests/handoff-working-on-scrub-order.test.mjs rather than assumed here, since
-  // D#46 is open on idempotence by CONTRACT.
+  // persistence boundary via scrubRecord, which stays as-is because `completed` and
+  // `unfinished` do NOT come from prompts: `completed` is a stored-row query (:218), and
+  // `unfinished` is the in-memory episode snapshot or the on-disk task list under
+  // `~/.claude/tasks/`, with observation narrative appended (:246-:289). An earlier draft of
+  // this sentence said both "reach that call from STORED ROWS", which is the load-bearing
+  // half of why those two columns were left alone, and it was wrong about `unfinished`.
+  // scrubSecrets is a fixpoint on its own output for every family that reaches this path;
+  // that property is pinned in tests/handoff-working-on-scrub-order.test.mjs rather than
+  // assumed here, since D#46 is open on idempotence by CONTRACT.
+  // `normalizeInline` FIRST, and it is not cosmetic. `truncate` used to run before
+  // `scrubSecrets` and collapsed newlines on the way; moving the scrub earlier handed it raw
+  // newlines, which flips every line-start credential noun from the scrubber's prose arm to
+  // its config arm and irreversibly redacts ordinary English. That corruption is recorded at
+  // secret-scrub.mjs:45-57 as one a prior pre-tag review already undone once. See
+  // normalizeInline's own docblock for the measured grid. The scrubber now sees exactly the
+  // one-line shape it saw before the reorder; only the LENGTH cut moved.
+  //
+  // Dedup keys on the SCRUBBED line, deliberately, and this is a behaviour change from the
+  // pre-reorder code: two prompts differing only in their credential both render as
+  // `deploy with key ***`, and keying on the raw text would replay that identical sentence
+  // twice. The key is what the resuming session is actually shown. Pinned by a case.
   const seen = new Set();
   const safePromptLines = [];
   for (const p of sourcePrompts) {
-    const line = truncate(scrubSecrets(String(p.prompt_text ?? '')), 200);
+    const line = truncate(scrubSecrets(normalizeInline(p.prompt_text)), 200);
     if (seen.has(line)) continue;
     seen.add(line);
     safePromptLines.push(line);
@@ -145,7 +173,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       // Same order as the prompt arm above. Titles are scrubbed on write TODAY, so this is
       // defense-in-depth for rows that predate that — which is not hypothetical: D#49 still
       // has three bare credential-shaped values backfilled in a sibling column.
-      workingOn = `(carry-forward subject) ${truncate(scrubSecrets(String(fallback.title)), 180)}`;
+      workingOn = `(carry-forward subject) ${truncate(scrubSecrets(normalizeInline(fallback.title)), 180)}`;
     }
   }
 
@@ -444,11 +472,17 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // D#46 is open about." That still holds for `completed` and `unfinished`. It is now FALSE
   // for `workingOn`, which arrives here ALREADY scrubbed, because the prompt arm above had
   // to scrub before truncating to stop a boundary-straddling secret from being stored as a
-  // verbatim head. So `workingOn` passes scrubSecrets twice on this derivation and a third
-  // time through scrubRecord. Idempotence is therefore a property this file now DEPENDS on
-  // rather than merely tolerates — measured and pinned in
-  // tests/handoff-working-on-scrub-order.test.mjs, not asserted here. D#46 stays open on
-  // idempotence by CONTRACT; what is closed is idempotence for the families reaching here.
+  // verbatim head.
+  //
+  // The chain depth is TWO, on each of the two derivations, and it is worth spelling out
+  // because a draft of this block said "twice on this derivation and a third time through
+  // scrubRecord" — which counts one value as three and no value is:
+  //   match_keywords : prompt arm -> the `allText` map below            = 2
+  //   working_on     : prompt arm -> scrubRecord at the INSERT          = 2
+  // Idempotence is therefore a property this file now DEPENDS on rather than merely
+  // tolerates — measured and pinned in tests/handoff-working-on-scrub-order.test.mjs, not
+  // asserted here. D#46 stays open on idempotence by CONTRACT; what is closed is
+  // idempotence for the eleven families that test pins.
   const safeFiles = scrubFilePaths([...fileSet]);
   // The nullish guard mirrors what join() already did with a nullish element. Without it
   // String(undefined) would put the literal token "undefined" into the term set — a behaviour

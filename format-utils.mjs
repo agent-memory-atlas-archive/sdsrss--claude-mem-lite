@@ -3,18 +3,53 @@ import { DAY_MS } from './lib/time-constants.mjs';
 // Extracted from utils.mjs for focused responsibility
 
 /**
+ * Collapse a value to ONE line: newlines to spaces, then trim. Non-strings and nullish
+ * become ''.
+ *
+ * Named and exported because it is a PRECONDITION two other transforms silently relied on
+ * `truncate` to provide, and both broke when they were reordered around it:
+ *
+ * - `scrubSecrets` — three SECRET_PATTERNS arms carry the prose-position lookbehind
+ *   `(?<![A-Za-z][ \t])`, whose class is HORIZONTAL whitespace on purpose. A credential
+ *   noun at the start of a line therefore reads as CONFIG position to raw text and as PROSE
+ *   position to collapsed text, and the config arm redacts any 6+ char value. Scrubbing
+ *   before truncating (2026-09-21) fed it raw newlines and reinstated a corruption
+ *   secret-scrub.mjs:45-57 records as deliberately undone: `"Reset the\npassword:
+ *   instructions are in the onboarding doc"` stored as `password: *** are in…`, irreversibly.
+ *   Measured 2026-09-22 on a 90-cell grid (6 credential nouns x 5 previous-line endings x 3
+ *   value shapes): 12 cells over-redact and 0 leak. The COUNT is grid-dependent and is
+ *   stated here once with its population rather than repeated elsewhere — the pre-ship lens
+ *   read 9 on a 90-cell grid of the same shape with different value fixtures. What does not
+ *   move between grids: every affected cell needs the previous line to end in a LETTER, the
+ *   direction is uniformly over-redaction rather than leakage, and with this normalization
+ *   restored all 90 cells are byte-identical to the pre-reorder output.
+ * - single-line RENDER sites — a `\n` inside an interpolated value starts a new line in the
+ *   assembled block, so any `## ` after it is a real heading rather than mid-line noise.
+ *
+ * So: any site that scrubs-then-truncates, or that interpolates free text into one line of a
+ * markdown block, normalizes HERE first. `truncate` calls it, which is what kept the two
+ * behaviours coupled while nothing named the coupling.
+ *
+ * @param {*} str Input (any type; coerced)
+ * @returns {string} One-line form, trimmed
+ */
+export function normalizeInline(str) {
+  // Defense-in-depth: a non-string (e.g. an LLM that returned title as an array/number)
+  // would throw `str.replace is not a function` and abort the caller. Coerce to '' rather
+  // than crash; the real type-guarding happens at the call site.
+  if (!str || typeof str !== 'string') return '';
+  return str.replace(/\n/g, ' ').trim();
+}
+
+/**
  * Truncate a string to a maximum length, replacing newlines with spaces.
  * @param {string} str Input string
  * @param {number} [max=80] Maximum character length
  * @returns {string} Truncated string with ellipsis if needed
  */
 export function truncate(str, max = 80) {
+  str = normalizeInline(str);
   if (!str) return '';
-  // Defense-in-depth: a non-string (e.g. an LLM that returned title as an array/number)
-  // would throw `str.replace is not a function` and abort the caller. Coerce to '' rather
-  // than crash; the real type-guarding happens at the call site.
-  if (typeof str !== 'string') return '';
-  str = str.replace(/\n/g, ' ').trim();
   if (str.length <= max) return str;
   // Never split a UTF-16 surrogate pair: slicing between the high and low half emits a
   // lone surrogate (invalid UTF-16) that then gets persisted to the DB. If the last kept

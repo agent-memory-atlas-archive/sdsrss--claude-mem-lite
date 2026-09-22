@@ -3,16 +3,28 @@
 // BEFORE truncation, so a secret straddling the truncation boundary doesn't fall below
 // scrubSecrets's regex length floors"). The three call sites that build `working_on`
 // — the dedup key, the join, and the carry-forward fallback — each took `truncate()`
-// first, so the rule sat two dozen lines below the code that broke it.
+// first, and the rule sits ~330 lines further down the same function. (A draft of this
+// header said "two dozen lines", which was a guess dressed as a measurement; the sites are
+// at :106/:111/:126 pre-change and the rule at :453-:454.)
 //
 // Why truncating first LEAKS rather than merely mangling: a pattern with a FIXED length
 // stops matching entirely once the value is cut short, so the retained head is stored
-// verbatim. Measured on a 244-cut-point sweep across five credential families (the cut
-// point walked through the token one character at a time): 33 cut points leak >=12
-// characters under truncate-then-scrub and 0 under scrub-then-truncate. Worst cases are
-// the fixed-length families — `ghp_`+36 retained 28 of its 36 entropy characters and
-// `AKIA`+16 retained 14 of 16, because a short read matches nothing at all. Variable
-// length families leak only the prefix (`sk-ant-api03-` retained 0 entropy characters).
+// verbatim. Measured 2026-09-22, ONE fixture set for every number here — the first draft
+// took the denominator and the table from two probes with two different `xoxb-` tokens, so
+// they described different fixtures and disagreed. Five credential families, the cut point
+// walked through the token one character at a time, 244 cut points: 38 leak >=12 characters
+// under truncate-then-scrub (33 leak >=13, which is the number the first draft printed
+// against a >=12 label), and 0 under scrub-then-truncate. Longest head the old order still
+// stored, minus the prefix:
+//
+//   ghp_ + 36          29 of 36        AKIA + 16           15 of 16
+//   xoxb- (12-12-24)    9 of 50        password= + 32       4 of 32
+//   sk-ant-api03- + 80  1 of 80
+//
+// Fixed-length families are the worst case, because a short read matches nothing at all.
+// The variable-length row is the contrast case and it retains 1, not 0: the `ant`
+// alternation lets `api03-AA` satisfy `{8,}`. Every row of the first draft's table was one
+// low.
 //
 // The destination is not a log line: `session_handoffs.working_on` is persisted and then
 // replayed into a later session's prompt by both renderers.
@@ -153,6 +165,67 @@ describe('working_on is scrubbed BEFORE it is truncated', () => {
 
     const stored = workingOnOf(db);
     expect(stored).toBe(prose.trim().slice(0, CUT) + '…');
+  });
+
+  it('leaves line-start credential nouns in PROSE position (multi-line control)', () => {
+    // The regression the first draft of this fix shipped, caught by the pre-ship defect lens.
+    // `truncate` collapses newlines, so before the reorder `scrubSecrets` always saw one line.
+    // Scrubbing first handed it raw newlines, and the prose-position lookbehind
+    // `(?<![A-Za-z][ \t])` is HORIZONTAL whitespace by design — so `password:` at the start of
+    // a line reads as CONFIG position and the config arm redacts any 6+ char value.
+    // secret-scrub.mjs:45-57 records this exact sentence as a corruption a prior pre-tag
+    // review already undone once. The single-line control below cannot see it: newline
+    // position is the only axis on which the reorder changes ordinary prose.
+    const prose = 'Reset the\npassword: instructions are in the onboarding doc';
+    seedSession(db);
+    addPrompt(db, prose);
+    buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
+
+    expect(workingOnOf(db)).toBe('Reset the password: instructions are in the onboarding doc');
+  });
+
+  it('still redacts a real credential in that same multi-line shape (control)', () => {
+    // The other direction: the fix must not buy prose fidelity by weakening the config arm.
+    seedSession(db);
+    addPrompt(db, 'Reset the\npassword: S3cretValue123');
+    buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
+
+    const stored = workingOnOf(db);
+    expect(stored).not.toContain('S3cretValue123');
+    expect(stored).toContain('***');
+  });
+
+  it('dedups on the SCRUBBED line, so two prompts differing only in their key collapse', () => {
+    // Pinning a deliberate behaviour change, not an accident: the dedup key moved from the
+    // raw text to the scrubbed text when the scrub moved earlier. Both prompts render as
+    // `deploy with key ***`, so keying on the raw text would replay one identical sentence
+    // twice. The key is what the resuming session is actually shown.
+    seedSession(db);
+    addPrompt(db, 'deploy with key ' + GH_TOKEN, 1);
+    addPrompt(db, 'deploy with key ' + 'ghp_' + 'b'.repeat(36), 2);
+    buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
+
+    const stored = workingOnOf(db);
+    expect(stored.split(' → ')).toHaveLength(1);
+    expect(stored).toBe('deploy with key ***');
+  });
+
+  it('collapses newlines in the carry-forward title too, not just in the prompt arm', () => {
+    // The fallback arm needs its OWN newline case: a per-site mutation showed that dropping
+    // `normalizeInline` there killed nothing, because every other case on this arm is
+    // single-line. One mutation per call site is what surfaced it — a shared-helper mutation
+    // would have gone red on the prompt arm and left this one unmeasured.
+    seedSession(db);
+    addPrompt(db, '继续'); // meta trigger → the fallback arm runs
+    db.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, title, importance, narrative, created_at, created_at_epoch)
+       VALUES (?, ?, 'change', ?, 3, NULL, datetime('now'), ?)`,
+    ).run(SESSION, PROJECT, 'Reset the\npassword: instructions are in the onboarding doc', 1100);
+    buildAndSaveHandoff(db, SESSION, PROJECT, 'exit', null);
+
+    const stored = workingOnOf(db);
+    expect(stored, 'premise: the fallback arm did not run').toContain('(carry-forward subject)');
+    expect(stored).toBe('(carry-forward subject) Reset the password: instructions are in the onboarding doc');
   });
 
   it('scrubs the carry-forward fallback title before truncating it', () => {

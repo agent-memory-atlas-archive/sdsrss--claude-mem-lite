@@ -69,6 +69,13 @@ import { doctorDbModeHint } from './lib/doctor-modes.mjs';
 // module: this one is a leaf over node:fs + node:child_process, so it adds no load graph
 // to the entry point that has to survive a broken install.
 import { checkHookInterpreter } from './lib/doctor-hook-interpreter.mjs';
+import {
+  classifyEpisodeFile,
+  EPISODE_AGE_LABEL,
+  isEpisodeResidue,
+  isUpdateResidue,
+  scanStaleTempFiles,
+} from './lib/doctor-stale-temp.mjs';
 const NPM_INSTALL_CMD = 'npm install --omit=dev --no-audit --no-fund';
 
 import {
@@ -88,7 +95,6 @@ import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
-import { ORPHAN_EPISODE_AGE_MS } from './lib/time-constants.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { isMemHook, launcherEntryPath } from './lib/hook-prune.mjs';
@@ -2551,32 +2557,35 @@ async function doctor() {
     },
   );
 
-  // Stale temp files
+  // Stale temp files. The rules live in lib/doctor-stale-temp.mjs because this scanner and
+  // cleanup's deleter are the same question asked twice and had drifted twice — see that
+  // file. Counting is all that differs here; the classification is shared, so "what doctor
+  // calls stale" and "what cleanup removes" agree on the age gate, which is the axis they
+  // last diverged on. Not on every axis: cleanup skips update residue entirely while
+  // install.lock is held and the scanner has no such gate, so mid-self-update doctor still
+  // counts a file cleanup will decline. That one is milder than D#53 — cleanup SAYS it is
+  // skipping rather than answering "No stale files found" — and it predates this change.
   try {
-    // hook-update + the episode workers write runtime/ + staging under DB_DIR
-    // (= MEM_DATA_DIR, env-aware), NOT the homedir code dir — scan there so doctor
-    // sees the real residue under relocation. MEM_RUNTIME_DIR rather than
-    // join(MEM_DATA_DIR,'runtime'): `pending-*` / `ep-flush-*` are written through
-    // hook-shared.mjs's override-aware RUNTIME_DIR, and `cleanup()` below deletes them from
-    // MEM_RUNTIME_DIR — v3.93.0 moved the deleter and left this scanner behind, so under the
-    // override doctor reported "none" while the cleanup it recommends removed files.
-    const runtimeDir = MEM_RUNTIME_DIR;
-    let staleCount = 0;
-    const stalePatterns = ['.update-staging-', '.update-backup-'];
-    if (existsSync(MEM_DATA_DIR)) {
-      for (const f of readdirSync(MEM_DATA_DIR)) {
-        if (stalePatterns.some((p) => f.startsWith(p))) staleCount++;
-      }
-    }
-    if (existsSync(runtimeDir)) {
-      for (const f of readdirSync(runtimeDir)) {
-        if (f.startsWith('pending-') || f.startsWith('ep-flush-')) staleCount++;
-      }
-    }
-    if (staleCount > 0) {
-      dwarn(`Stale temp files: ${staleCount} found (run: node install.mjs cleanup)`);
+    const { stale, inFlight } = scanStaleTempFiles({
+      dataDir: MEM_DATA_DIR,
+      runtimeDir: MEM_RUNTIME_DIR,
+    });
+    if (stale > 0) {
+      dwarn(`Stale temp files: ${stale} found (run: node install.mjs cleanup)`);
     } else {
       ok('Stale temp files: none');
+    }
+    // D#53: reported as a DETAIL, not a warning. An episode file younger than the gate is
+    // work in progress — after a Stop that hands an episode to the summarizer it exists for
+    // up to ~60s, the worst-case round trip — so warning about it
+    // put a permanent ⚠ on healthy machines and sent them to a command that answers "No
+    // stale files found." Still said out loud rather than hidden, because a bare "none"
+    // next to a runtime dir that visibly holds files is the kind of green line that ends
+    // the reader's search. Mirrors cleanup's own "Kept N …" line.
+    if (inFlight > 0) {
+      log(
+        `  ${inFlight} episode file(s) newer than ${EPISODE_AGE_LABEL} are in flight, not stale — cleanup keeps these.`,
+      );
     }
   } catch {
     dwarn('Stale temp files: check failed');
@@ -2973,13 +2982,12 @@ function cleanup() {
   // and the window is long — it spans the source-compile fallback, up to five minutes —
   // while doctor is actively telling the user to run cleanup. Non-blocking: if an installer
   // holds the lock we skip only these two patterns, not the rest of cleanup.
-  const stalePatterns = ['.update-staging-', '.update-backup-'];
   const updateLock = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
   if (!updateLock) {
     warn('Update residue skipped: install in progress (install.lock held)');
   } else if (existsSync(MEM_DATA_DIR)) {
     for (const f of readdirSync(MEM_DATA_DIR)) {
-      if (stalePatterns.some((p) => f.startsWith(p))) {
+      if (isUpdateResidue(f)) {
         if (dryRun) {
           ok(`Would remove: ${f}`);
           removed++;
@@ -3011,20 +3019,13 @@ function cleanup() {
   // the conservative one.
   const runtimeDir = MEM_RUNTIME_DIR;
   if (existsSync(runtimeDir)) {
-    const epCutoff = Date.now() - ORPHAN_EPISODE_AGE_MS;
+    const now = Date.now();
     let inFlight = 0;
     for (const f of readdirSync(runtimeDir)) {
-      if (f.startsWith('pending-') || f.startsWith('ep-flush-')) {
-        // Unreadable mtime → treat as in-flight and skip. Failing safe here costs one
-        // stale file until the next sweep; failing open costs an episode.
-        let mtimeMs;
-        try {
-          mtimeMs = statSync(join(runtimeDir, f)).mtimeMs;
-        } catch {
-          inFlight++;
-          continue;
-        }
-        if (mtimeMs > epCutoff) {
+      if (isEpisodeResidue(f)) {
+        // The gate itself lives in lib/doctor-stale-temp.mjs, so doctor's count and this
+        // deletion cannot disagree about which files are in flight (D#53).
+        if (classifyEpisodeFile(runtimeDir, f, { now }) === 'in-flight') {
           inFlight++;
           continue;
         }
@@ -3044,7 +3045,7 @@ function cleanup() {
     }
     if (inFlight > 0) {
       log(
-        `  Kept ${inFlight} episode file(s) newer than 1h — possibly in flight, they sweep automatically once stale.`,
+        `  Kept ${inFlight} episode file(s) newer than ${EPISODE_AGE_LABEL} — possibly in flight, they sweep automatically once stale.`,
       );
     }
   }

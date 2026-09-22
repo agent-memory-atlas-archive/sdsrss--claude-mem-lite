@@ -1739,14 +1739,55 @@ export async function optimizeRun(
             // Both pools drain (each is idempotent via the column it fills), so the
             // ordering decides which drains first, not which gets served at all.
             const half = Math.max(1, Math.floor(budget.reenrich / 2));
+            // D#51: `half` is the fill passes' CAP, not their entitlement — and the main
+            // scope's remainder used to evaporate whenever main's own pool held fewer rows
+            // than its share. The comment above states the symmetric case ("a
+            // zero-candidate aliases pass costs nothing and the main scope keeps its full
+            // budget") and neither stated nor implemented the reverse.
+            //
+            // The unit is ONE RUN, not one project. The daily path (handleLLMOptimize)
+            // calls this once per machine per day with no `project`, so every pool here is
+            // a union over all projects; only normalize fans out per project. Measured
+            // read-only on the live DB 2026-09-22: the union read wide 0 / aliases 0 against
+            // a concepts backlog of 74 (78 on a re-read later that day — every session adds
+            // rows), so the daily run idled 3 of its 6 slots and the backlog drained at 3 a
+            // day; it now drains at 6. (A first draft of this comment summed eight
+            // per-project shares into "26 slots a day" — arithmetic about eight runs that
+            // never happen. The ledger's original union reading was the right one.)
+            //
+            // Main is MEASURED first and still RUNS first. That distinction is the whole
+            // safety argument: this is a SELECT, and the execution order below — which is
+            // load-bearing for a reason the next comment gives — is untouched.
+            //
+            // Nor can this reopen the starvation the ordering comment forbids. The fill
+            // passes take at most `fillCap`, so mainBudget >= budget.reenrich - fillCap =
+            // min(budget.reenrich - half, mainPool): when main's pool is at or below its old
+            // floor it now receives ALL of it, and when the pool is larger the arithmetic is
+            // byte-for-byte what it was. So THIS CHANGE introduces no input on which a fill
+            // pass takes a slot the main scope could have spent — which is the comparative
+            // claim, and the only one that holds. An earlier draft said it absolutely ("there
+            // is no input..."), and pre-ship review brute-forced 129,654 inputs and found
+            // 98,713 counter-examples to the absolute: at R=6 with mainPool=4, half=3 and
+            // fillCap=3, main could have spent 4 and gets 3. That is PRE-EXISTING — the old
+            // arithmetic gives 3 there too — so the comparative reading is sound and the
+            // unqualified one was never true of this code. Pinned by "does not take the main
+            // scope below what its own pool can use" and by "measures the main pool with the
+            // scope it is about to RUN".
+            const mainPool = findReenrichCandidates(db, budget.reenrich, {
+              scope: reenrichScope,
+              project,
+            }).length;
+            const fillCap = Math.max(half, budget.reenrich - mainPool);
             const aliasBudget = Math.min(
-              half,
-              findReenrichCandidates(db, half, { scope: 'aliases', project }).length,
+              fillCap,
+              findReenrichCandidates(db, fillCap, { scope: 'aliases', project }).length,
             );
             const conceptsBudget = Math.min(
-              half - aliasBudget,
-              findReenrichCandidates(db, Math.max(0, half - aliasBudget), { scope: 'concepts', project })
-                .length,
+              fillCap - aliasBudget,
+              findReenrichCandidates(db, Math.max(0, fillCap - aliasBudget), {
+                scope: 'concepts',
+                project,
+              }).length,
             );
             const scopesBudget = Math.min(
               budget.reenrich,

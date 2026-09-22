@@ -575,6 +575,158 @@ describe('re-enrich pass ordering (main runs before the fill-only passes)', () =
   });
 });
 
+// D#51: the main scope's reserved share idled whenever its pool held fewer rows than
+// the share. The split caps the fill passes at `half` and hands main the remainder,
+// but nothing returned main's remainder when main had nothing to spend it on.
+// Measured read-only on the live DB 2026-09-22: all 8 projects read narrow 0 / wide 0 /
+// aliases 0 with a concepts backlog (20/16/11/11/6/6/3/1). The daily path runs ONCE per
+// machine with no project, so what matters is the union — main 0, concepts 74 at that
+// reading — and it idled 3 of its 6 slots a day. (This header first said "26 slots a
+// day", summing eight per-project runs that do not exist; only normalize fans out.)
+//
+// The shape that produces it is save-enrich's output: it writes search_aliases (always)
+// + lesson_learned + scope on every manual save, which are narrow's, wide's, aliases'
+// and scopes' predicates, so the row lands in the concepts pool ALONE. That is the same
+// observation D#6 was created from.
+describe("re-enrich returns the main scope's unusable budget to the fill passes (D#51)", () => {
+  let db;
+  const substantive =
+    'The worker pool deadlocked when every connection was checked out and a callback tried to acquire another one, so the pool never drained.';
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    callModelJSONAsync.mockReset();
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  const enriched = {
+    type: 'bugfix',
+    title: 'Fixed deadlock in the connection pool',
+    narrative: 'Re-enriched narrative body',
+    concepts: ['deadlock', 'pool'],
+    facts: [],
+    importance: 2,
+    lesson_learned: 'Never acquire a second pool connection inside a callback holding the first',
+    search_aliases: ['connection deadlock'],
+    scope: 'module',
+  };
+
+  // Concepts-pool-only rows: aliases + lesson present (excludes narrow, wide, aliases),
+  // scope present (excludes scopes), concepts empty.
+  function seedConceptsOnly(n) {
+    for (let i = 0; i < n; i++) {
+      insertObs(db, {
+        title: `Fixed a deadlock in worker ${i}`,
+        narrative: substantive,
+        text: 'deadlock connection pool worker timeout',
+        type: 'bugfix',
+        importance: 2,
+        lessonLearned: 'hold one connection at a time',
+        searchAliases: 'connection deadlock',
+      });
+    }
+    db.prepare("UPDATE observations SET scope = 'module' WHERE scope IS NULL").run();
+  }
+
+  it('drains the fill pool at the whole budget when the main pool is empty', async () => {
+    const { optimizeRun, findReenrichCandidates } = await import('../hook-optimize.mjs');
+    seedConceptsOnly(5);
+    // Premise: the exact pool shape measured on the live DB. Without it the split
+    // decides nothing and the assertion below passes for the wrong reason.
+    for (const scope of ['narrow', 'wide', 'aliases', 'scopes']) {
+      expect(findReenrichCandidates(db, 10, { scope }).length, `${scope} pool is not empty`).toBe(0);
+    }
+    expect(findReenrichCandidates(db, 10, { scope: 'concepts' }).length).toBe(5);
+
+    callModelJSONAsync.mockResolvedValue(enriched);
+    const result = await optimizeRun(db, { tasks: ['re-enrich'], maxItems: 6 });
+
+    // budget.reenrich = 6, so half = 3. Before this fix concepts was capped at `half`
+    // and the other three slots went nowhere while five rows waited.
+    expect(
+      result.reenrich.byScope.concepts.processed,
+      "the main scope's idle share was not returned to the fill pass",
+    ).toBe(5);
+  });
+
+  // P2-1 from the v6.11.0 pre-ship review. The two cases around this one cannot say NO about
+  // the `scope: reenrichScope` argument that carries the whole safety argument: in BOTH of
+  // them the aliases pool coincidentally holds exactly as many rows as the main pool (0 and 0;
+  // 1 and 1), so hard-coding `scope: 'aliases'` on the mainPool SELECT changes no arithmetic
+  // and survives the entire suite. That is a property of those fixtures, not of the code.
+  //
+  // This case uses 'wide' because that is the scope the DAILY unattended path passes
+  // explicitly (see the comment at the top of the re-enrich branch). It is not the only
+  // scope that can discriminate. An earlier version of this comment said 'narrow' could
+  // not, because narrow requires `search_aliases IS NULL` and so "every narrow candidate is
+  // an aliases candidate" — false: aliases ALSO requires a >100-char narrative and a
+  // non-low-signal title, and narrow requires neither, so three short-narrative rows read
+  // narrow 3 / aliases 0. On that shape the mutant UNDER-reads the main pool and widens
+  // fillCap, which is the unsafe direction, not a more conservative one.
+  it('measures the main pool with the scope it is about to RUN, not another pool', async () => {
+    const { optimizeRun, findReenrichCandidates } = await import('../hook-optimize.mjs');
+    // search_aliases present + lesson absent: in the wide pool, OUT of the aliases pool.
+    for (let i = 0; i < 6; i++) {
+      insertObs(db, {
+        title: `Fixed a deadlock in worker ${i}`,
+        narrative: substantive,
+        text: 'deadlock connection pool worker timeout',
+        type: 'bugfix',
+        importance: 2,
+        searchAliases: 'connection deadlock',
+      });
+    }
+    seedConceptsOnly(8);
+    // Premise, and the axis the other two fixtures accidentally pinned: the aliases pool must
+    // be EMPTY while the main pool is deep, or substituting one for the other proves nothing.
+    expect(findReenrichCandidates(db, 20, { scope: 'aliases' }).length, 'aliases pool not empty').toBe(0);
+    expect(findReenrichCandidates(db, 20, { scope: 'wide' }).length).toBe(6);
+    expect(findReenrichCandidates(db, 20, { scope: 'concepts' }).length).toBeGreaterThan(6);
+
+    callModelJSONAsync.mockResolvedValue(enriched);
+    const result = await optimizeRun(db, { tasks: ['re-enrich'], maxItems: 6, reenrichScope: 'wide' });
+
+    // budget 6, half 3. mainPool=6 >= budget-half, so fillCap stays at `half` and the main
+    // scope keeps its floor of 3. Measuring mainPool against the aliases pool (0) instead
+    // would widen fillCap to 6 and hand every slot to the fill pass.
+    expect(
+      result.reenrich.byScope.wide.processed,
+      'the main scope was starved because its pool was measured with the wrong scope',
+    ).toBe(3);
+  });
+
+  it('does not take the main scope below what its own pool can use', async () => {
+    // The floor the old arithmetic enforced, which this one must keep. It is not
+    // bookkeeping: narrow's predicate includes `concepts IS NULL`, and the concepts
+    // pass WRITES that column, so a row sitting in both pools is evicted from narrow
+    // PERMANENTLY if the fill pass reaches it first. Widening the fill budget is
+    // exactly the change that could have caused that, so it is pinned here.
+    const { optimizeRun, findReenrichCandidates } = await import('../hook-optimize.mjs');
+    // One row in narrow AND concepts (nothing set), plus four concepts-only rows.
+    insertObs(db, {
+      title: 'Fixed deadlock in the connection pool',
+      narrative: substantive,
+      text: 'deadlock connection pool worker timeout',
+      type: 'bugfix',
+      importance: 2,
+    });
+    seedConceptsOnly(4);
+    // Premise: the overlap this case is about exists, and the fill pool is deep enough
+    // that a widened fill budget could have swallowed the overlapping row.
+    expect(findReenrichCandidates(db, 10, { scope: 'narrow' }).length).toBe(1);
+    expect(findReenrichCandidates(db, 10, { scope: 'concepts' }).length).toBe(5);
+
+    callModelJSONAsync.mockResolvedValue(enriched);
+    const result = await optimizeRun(db, { tasks: ['re-enrich'], maxItems: 6 });
+
+    expect(result.reenrich.byScope.narrow.processed, 'the widened fill budget starved the main scope').toBe(
+      1,
+    );
+  });
+});
+
 // D#12. R10 P3-3 put a live-row guard on the general re-enrich UPDATE because a
 // BG_LLM_TIMEOUT_MS (45 s) round-trip sits between the SELECT that chose the row and
 // the write, and a concurrent hook can retire or compress it inside that window. The

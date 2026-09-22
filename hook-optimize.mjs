@@ -1752,6 +1752,17 @@ export async function optimizeRun(
               budget.reenrich,
               findReenrichCandidates(db, budget.reenrich, { scope: 'scopes', project }).length,
             );
+            // ORDER IS LOAD-BEARING: the main scope runs FIRST. The budget half of the
+            // invariant above ("adding a pool cannot starve the lesson enrichment that is
+            // the point of the pass") is enforced by the arithmetic; this statement's
+            // POSITION is the other half. The three pools overlap — a narrow candidate with
+            // a >100-char narrative and a signal-bearing title is also an aliases candidate
+            // and a concepts candidate — and narrow's WHERE requires `search_aliases IS
+            // NULL`, which is the column the aliases pass fills. So serving aliases first
+            // evicts that row from narrow PERMANENTLY: the starvation the comment forbids.
+            // Pinned behaviourally by tests/hook-optimize.test.mjs
+            // "re-enrich pass ordering (main runs before the fill-only passes)". A 2026-09
+            // external review read this block and proposed the swap; it is a regression.
             const mainRes = await executeReenrich(db, budget.reenrich - aliasBudget - conceptsBudget, {
               scope: reenrichScope,
               project,

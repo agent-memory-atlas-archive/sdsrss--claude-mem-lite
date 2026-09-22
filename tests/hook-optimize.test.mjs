@@ -502,6 +502,79 @@ describe("re-enrich scope='concepts' (D#6 concepts backfill)", () => {
   });
 });
 
+// The main scope runs BEFORE the two fill-only passes, and that order is the EXECUTION
+// face of the budget invariant stated at hook-optimize.mjs:1731 — "the main scope still
+// gets at least half the budget, so adding a pool cannot starve the lesson enrichment that
+// is the point of the pass". The budget half of that invariant is enforced by arithmetic;
+// the ordering half was enforced by nothing, and an external reviewer read the same code in
+// 2026-09 and concluded the opposite (that the fill-only passes hold the priority) with a
+// patch that swaps the two.
+//
+// The pools OVERLAP by predicate: a narrow candidate — concepts, facts, lesson_learned,
+// search_aliases and optimized_at all empty — whose narrative clears 100 chars and whose
+// title is not low-signal is ALSO an aliases candidate and a concepts candidate. So
+// whichever pass runs first claims the row. Running aliases first evicts it from narrow
+// PERMANENTLY, because narrow's WHERE requires `search_aliases IS NULL` and the aliases
+// pass fills exactly that column — which is the starvation the budget comment forbids.
+//
+// Two discriminators, both behavioural, no source-text scan: `byScope` names the pass that
+// processed the row, and `optimized_at` is stamped by the generic UPDATE (:559) and by
+// neither fill-only pass (:237). Swapping the two statements turns this red on both.
+describe('re-enrich pass ordering (main runs before the fill-only passes)', () => {
+  let db;
+  const substantive =
+    'The worker pool deadlocked when every connection was checked out and a callback tried to acquire another one, so the pool never drained.';
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    callModelJSONAsync.mockReset();
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  it('gives a row sitting in all three pools to the generic pass, not to the backfills', async () => {
+    const { optimizeRun, findReenrichCandidates } = await import('../hook-optimize.mjs');
+    // insertObs defaults lessonLearned and searchAliases to null, and leaves concepts,
+    // facts and optimized_at empty — so this row is a narrow candidate, and the
+    // >100-char narrative plus a signal-bearing title put it in the other two pools too.
+    insertObs(db, {
+      title: 'Fixed deadlock in the connection pool',
+      narrative: substantive,
+      text: 'deadlock connection pool worker timeout',
+      type: 'bugfix',
+      importance: 2,
+    });
+    // Premise: the overlap this case is about actually exists on this fixture. Without
+    // it the ordering decides nothing and every assertion below passes vacuously.
+    expect(findReenrichCandidates(db, 10, { scope: 'narrow' }).length).toBe(1);
+    expect(findReenrichCandidates(db, 10, { scope: 'aliases' }).length).toBe(1);
+    expect(findReenrichCandidates(db, 10, { scope: 'concepts' }).length).toBe(1);
+
+    callModelJSONAsync.mockResolvedValue({
+      type: 'bugfix',
+      title: 'Fixed deadlock in the connection pool',
+      narrative: 'Re-enriched narrative body',
+      concepts: ['deadlock'],
+      facts: [],
+      importance: 2,
+      lesson_learned: 'Never acquire a second pool connection inside a callback holding the first',
+      search_aliases: ['connection deadlock', 'pool hang'],
+      scope: 'module',
+    });
+    const result = await optimizeRun(db, { tasks: ['re-enrich'], maxItems: 10 });
+
+    // The generic pass claimed it; both backfills found an empty pool behind it.
+    expect(result.reenrich.byScope.narrow.processed).toBe(1);
+    expect(result.reenrich.byScope.aliases.processed).toBe(0);
+    expect(result.reenrich.byScope.concepts.processed).toBe(0);
+    // Persistence-side face of the same fact: only the generic UPDATE stamps this.
+    const obs = db.prepare('SELECT optimized_at, lesson_learned FROM observations LIMIT 1').get();
+    expect(obs.optimized_at).not.toBeNull();
+    expect(obs.lesson_learned).toBeTruthy();
+  });
+});
+
 // D#12. R10 P3-3 put a live-row guard on the general re-enrich UPDATE because a
 // BG_LLM_TIMEOUT_MS (45 s) round-trip sits between the SELECT that chose the row and
 // the write, and a concurrent hook can retire or compress it inside that window. The

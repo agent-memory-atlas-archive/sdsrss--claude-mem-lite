@@ -36,6 +36,41 @@ text differs in kind.
 
 ## Test-case count — history and why it is partly generated
 
+### Superseded row moved from CLAUDE.md 2026-09-22 (v6.10.3)
+
+Verbatim, as it stood in CLAUDE.md's Baselines table until v6.11.0 replaced it:
+
+> | Tests | **420 files / 6492**, 0 skipped (1 skips without git hooks) | `main` @ `f829e85`, 2026-09-22, v6.10.2 tree |
+> | Knip | **32** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree, knip 6.35.1 |
+> | Coverage | **85.77** stmts · **80.04** branches · **91.03** funcs · **86.98** lines | same tree, vitest 5.0.0 |
+
+**Unlike the entry below, this test-count delta IS attributed, per commit.** Each commit
+between v6.10.3 and the replacing row carries, in its own body, the pre-commit gate's reading
+of that commit's own tree. Every number here was read off that commit's run, none computed
+from a baseline:
+
+| Commit | Change | Files | Cases | Δ |
+|--------|--------|-------|-------|---|
+| `4a4e422` | v6.10.3 release | 420 | 6492 | — |
+| `e12564b` | two subprocess cases get their own time budget | 420 | 6492 | 0 |
+| `4d8393c` | D#52: scrub to a fixed point | 420 | 6502 | +10 |
+| `d409c8c` | D#51: re-enrich returns main's unusable budget | 420 | 6505 | +3 |
+| `91493ad` | doctor's hook-interpreter check moves to `lib/` | 421 | 6515 | +10 (9 written + 1 generated) |
+| `9c41144` | D#53: doctor and cleanup share one classifier | 422 | 6528 | +13 (12 written + 1 generated) |
+
+The first row was first inferred — the superseded row above was measured at `f829e85`, and
+`git diff --stat f829e85 4a4e422 -- tests/ lib/ benchmark/ scripts/ '*.mjs' '*.js'` is empty,
+so nothing between them can move the count — and pre-ship review then read it directly on an
+extracted `4a4e422` tree: 420 / 6492. "Generated" is `tests/obs-id-caliber-sync.test.mjs`
+emitting one case per `.mjs` under `lib/`: each new `lib/` module adds a case nobody wrote.
+
+The other two columns are NOT attributed per commit, and say less. Knip read 32 / 0 / 3 on
+the doctor-split commit — on an earlier build of it that differs from `91493ad` only in
+comments — and on the release tree, and those NAME SETS — symbol and file — are identical to
+each other and to the reading taken before the series; it was not read on the three commits
+before it. Coverage moved +0.05 / +0.03 / +0.02 / +0.03 on one
+reading of the final tree against the row above; no claim is made about which commit moved it.
+
 ### Superseded row moved from CLAUDE.md 2026-09-22 (v6.9.0)
 
 Verbatim, as it stood in CLAUDE.md's Baselines table until v6.10.3 replaced it:

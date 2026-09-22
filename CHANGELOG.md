@@ -2,6 +2,90 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.11.0 — the second secret on a line, a budget that sat idle, and two faces of one install that disagreed
+
+**Upgrade note.** No schema change, no migration, no config. One default behaviour changes,
+and it is why this is a minor: re-enrich now spends the part of its budget the main scope
+cannot use on the backfill passes, instead of leaving it idle. The daily unattended pass runs
+**once per machine per day, over all projects together** — not once per project — so on a
+machine whose main re-enrich pool is empty, that pass now makes up to **6** of these LLM calls
+a day where it made **3**. A separately budgeted pass that classifies each row's scope can add
+up to 6 more short calls; it is unchanged. A manual `claude-mem-lite optimize --run` or
+`mem_optimize` goes through the same code and behaves the same way. The declared budget was
+always 6 — this is the code no longer under-spending it — but the bill is real. Details below.
+
+**Security: a second labelled secret on a line could be stored in plaintext (D#52).** The
+secret scrubber on the write path ran its patterns in one sweep. Three of them guard against
+redacting ordinary English — `the token: alicebob` stays readable while `token: alicebob` is
+scrubbed — by treating "a letter, then a space" before the keyword as prose. But a match
+consumes its value, so the next keyword on the same line is preceded by that value's last
+character and a space, which reads exactly like prose. So in some combinations — for example
+`token: <v> secret: <v>`, when the first value ends in a letter — the first value was
+scrubbed and the second stored as written; a run of three leaked two. When the second label
+was `password`, `passwd` or `passphrase`, only a letters-only value of 15 characters or fewer
+leaked: a second rule catches any other password value. Values ending in a digit, and values
+on separate lines, were not affected. The scrubber
+now repeats its sweep until nothing changes, capped at 32 sweeps; one sweep still catches
+exactly what it caught before, and the extra sweeps only ever redact more. On the live corpus
+it was measured against, 0 of 287 non-empty stored values are modified by the change.
+
+Two limits, stated plainly. **This fixes the write path only**: rows stored by earlier
+versions are not rewritten, so such a credential from a past session may still be in your
+local database as it was typed, and no automatic backfill is included. And the cap is a real
+bound: a single line carrying more than 32 of these adjacent labelled values — at least
+about 430 bytes, deliberately constructed — still stores the ones past the 32nd. That is the
+chosen trade: an
+earlier draft cleared the remainder by dropping the prose guard, and it redacted ordinary
+English elsewhere in the same text, irreversibly.
+
+**The re-enrich budget no longer idles (D#51).** v6.10.3's notes listed this as known and
+deliberately deferred, because fixing it changes model-call volume. Re-enrich reserves half
+its budget for two backfill passes and gives the main scope the rest — but when the main scope
+had fewer rows to enrich than its share, the remainder was simply not spent. Measured on one
+machine on 2026-09-22: the daily pass's main pool read empty against a backlog of 74 rows
+waiting for concepts, so 3 of its 6 slots went unused every day and the backlog drained at 3
+a day. It now drains at 6. The main scope is still measured first and still runs first, and
+this change introduces no input on which a backfill takes a slot the main scope could have
+spent.
+
+**`doctor` no longer sends a healthy machine to a command that says there is nothing to do
+(D#53).** After a session turn that hands an episode to the summarizer, its file sits in the
+runtime directory for up to about a minute. `doctor` counted those as stale and warned
+`Stale temp files: 3 found (run: node install.mjs cleanup)`; `cleanup`, which correctly
+refuses to delete in-flight work, answered `No stale files found.` Both now use one shared
+classifier, so outside a self-update (see below) the stale temp files `doctor` counts are the
+ones `cleanup` removes. (`cleanup` also reaps leftover test sandboxes, which `doctor` does not count, so its total can
+be higher.) In-flight files are still reported, as a detail line rather than a warning.
+
+This is the second time these two disagreed — v3.93.0 moved one to a new directory and left
+the other behind — and both times the fix aligned one copy with the other and left two
+copies. This time the rule lives in one module. One edge was aligned in the same change: a
+file aged EXACTLY the one-hour gate was deleted by `cleanup` but kept by the automatic sweep.
+`cleanup` now keeps it too, as its own comment always said it should. That tie is one
+millisecond wide.
+
+Stated so it is not read wider: `doctor` and `cleanup` share the classifier; the automatic
+sweep and the summarizer's wait still apply the same one-hour window in their own code. And
+during a self-update, `doctor` can still count update residue that `cleanup` declines to
+touch while the install lock is held. That predates this release, and `cleanup` says it is
+skipping rather than reporting nothing.
+
+**Internal.** `doctor`'s hook-interpreter check moved from `install.mjs` into
+`lib/doctor-hook-interpreter.mjs`, where the coverage report can see it (install.mjs is
+excluded from the coverage population by name, so that code had no reading at all); every
+user-facing string is byte-identical. Two end-to-end tests that each start a full `install`
+in a child process now carry their own 90 s time budget rather than the suite's 20 s: they do
+about 5 s of real work, and read up to 67 s on a machine running other test suites
+concurrently.
+
+**Baselines.** 422 test files / 6528 cases (was 420 / 6492), coverage 85.82 / 80.07 / 91.05 /
+87.01 (was 85.77 / 80.04 / 91.03 / 86.98), knip unchanged at 32 / 0 / 3. The test delta is attributed commit by commit in
+`docs/measurement/baselines.md`.
+
+**Known and not fixed in this release.** Most test files that start a Node child process
+still run on the suite's global 20 s budget; the two fixed here were the ones failing, not
+the whole class (D#25, D#50).
+
 ## v6.10.3 — a dependency release, and a pass order that was holding an invariant nobody checked
 
 **Upgrade note.** Nothing to do. No schema change, no migration, no config, and no change

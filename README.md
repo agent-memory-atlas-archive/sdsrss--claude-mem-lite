@@ -237,6 +237,25 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.11.0
+
+**One default changes: re-enrich stops leaving part of its budget idle.** It reserves half of
+each run's budget for two backfill passes and gives its main scope the rest. When the main
+scope had fewer rows to enrich than its share, the remainder went unspent; it now goes to the
+backfills. The daily unattended pass runs once per machine per day, over all projects
+together, so with an empty main pool it now makes up to 6 of these LLM calls a day where it
+made 3. The ceiling of 6 is unchanged — it was always the declared budget — and a separately
+budgeted scope-classification pass, also unchanged, can add up to 6 more short calls. A manual
+`claude-mem-lite optimize --run` or `mem_optimize` behaves the same way. No schema change and
+no migration: an older build still opens the database, so reverting is pinning
+`claude-mem-lite@6.10.3`.
+
+**One security fix does not reach data you already have.** In some combinations of two
+labelled credentials on one line — `token: <v> secret: <v>` is one, when the first value ends
+in a letter — earlier versions redacted the first and stored the second as typed. Values on
+separate lines were never affected. This release fixes the write path; nothing already in
+your database is rewritten.
+
 <!-- normalize-per-project-note:start -->
 ## Upgrading to 6.8.0
 

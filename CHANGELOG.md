@@ -2,6 +2,50 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.10.3 — a dependency release, and a pass order that was holding an invariant nobody checked
+
+**Upgrade note.** Nothing to do. No schema change, no migration, no config, and no change
+to how anything behaves at runtime.
+
+**What reaches you: `zod` 4.5.4 → 4.6.5.** That is the whole of the user-facing payload.
+It is a transitive-safe minor with no API surface this project touches, and it can only
+reach npm users through a release, which is why this one exists. The development tree also
+moved (`fast-check` 4.9.0 → 4.10.0, `knip` 6.35.0 → 6.35.1); neither ships.
+
+**The re-enrich pass order is now pinned by a test, because it was carrying an invariant
+that only prose enforced.** `optimizeRun`'s re-enrich branch runs the main scope before the
+aliases and concepts backfills. The comment above it states the guarantee — *the main scope
+still gets at least half the budget, so adding a pool cannot starve the lesson enrichment
+that is the point of the pass* — and the budget half of that is enforced by arithmetic. The
+ordering half was enforced by nothing at all.
+
+The three pools overlap by predicate. A narrow candidate — `concepts`, `facts`,
+`lesson_learned`, `search_aliases` and `optimized_at` all empty — whose narrative clears 100
+characters and whose title is not low-signal is simultaneously an aliases candidate and a
+concepts candidate, so whichever pass runs first claims the row. Because narrow's `WHERE`
+requires `search_aliases IS NULL` and the aliases pass fills exactly that column, serving
+aliases first would evict the row from narrow permanently: the starvation the comment
+forbids. An external review read this block in 2026-09 and proposed swapping the two on the
+opposite premise, that the backfills hold the priority. Re-measured here, the premise is
+inverted and the swap is a regression, so the order stands and a behavioural guard now says
+so — `byScope` names the pass that processed the row, `optimized_at` is stamped by the
+generic UPDATE and by neither backfill, and applying the review's own patch turns the case
+red on the intended assertion.
+
+**CLAUDE.md's Baselines table was four releases stale and is re-measured.** 420 files /
+6492 cases (was 406 / 6350), coverage 85.77 / 80.04 / 91.03 / 86.98 (was 85.51 / 79.82 /
+90.89 / 86.75), knip unchanged at 32 / 0 / 3. The row it replaced is preserved verbatim in
+`docs/measurement/baselines.md`, and the growth is recorded there **without** an
+attribution: it spans five releases, no name set was diffed across them, so the numbers
+support "+142 cases" and nothing finer.
+
+**Known and deliberately not fixed in this release.** When the main pool is empty its
+reserved half of the budget is not returned to the backfills, so on a corpus like the one
+measured here — narrow 0, wide 0, aliases 0, concepts 73 of 111 live rows — the concepts
+backlog drains at three of six slots per cycle with no self-correction. Fixing it changes
+per-cycle model call volume, which is a user-visible default, so it needs its own round
+rather than a seat on a dependency release.
+
 ## v6.10.2 — the scrub order fix, and the prose it was quietly corrupting
 
 **Upgrade note.** Nothing to do. No schema change, no migration, no config.

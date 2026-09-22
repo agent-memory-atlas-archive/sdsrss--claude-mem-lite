@@ -2,6 +2,37 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.10.2 — the scrub order fix, and the prose it was quietly corrupting
+
+**Upgrade note.** Nothing to do. No schema change, no migration, no config.
+
+**A credential straddling the 200-character cut was stored with its head intact.**
+`session_handoffs.working_on` was truncated before it was scrubbed, which is the opposite of
+the order the code's own persistence comment prescribes. A secret cut short falls below the
+length floor its pattern requires and then matches nothing, so the retained head was stored
+verbatim — and the column is persisted and replayed into a later session's prompt. Measured on
+a 244-cut-point sweep across five credential families: 38 cut points leak 12 or more characters
+under the old order and 0 under the new one. Fixed-length families are the worst case, because
+a short read matches nothing at all rather than matching less: a GitHub PAT retained 29 of its
+36 entropy characters and an AWS key id 15 of 16. Nothing left the machine — handoff rows are
+not in any export path — but the redaction was irreversible in your local database.
+
+**The same reorder was corrupting ordinary English, and that is fixed in the same release.**
+Scrubbing before truncating handed the scrubber raw newlines, and its prose-position guard
+deliberately only looks at horizontal whitespace. A credential noun starting a line therefore
+read as configuration rather than prose, so `"Reset the\npassword: instructions are in the
+onboarding doc"` was stored as `password: *** are in…`. Both halves now run in the right
+order: one line first, then scrub, then cut.
+
+**Two places that replay stored text into your context could carry a forged section heading.**
+The `### Working State (from /clear)` block and `### File Lessons` interpolate stored values
+into the injected context, and neither stripped markdown heading markers — the sibling
+renderer has stripped them since a real injection arrived carrying its own `## `. A filename
+or a prompt could therefore open a section inside the block, which is the point at which the
+block's structure and replayed text become indistinguishable to whatever reads it next. Both
+now defang per field, and the shared helper lives in one place so the two surfaces cannot
+drift apart again.
+
 ## v6.10.1 — the path scrubber was eating the filenames it was meant to protect
 
 **Upgrade note.** Nothing to do. No schema change, no migration, no config. Handoff rows

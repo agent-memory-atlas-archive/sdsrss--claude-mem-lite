@@ -36,6 +36,29 @@ text differs in kind.
 
 ## Test-case count — history and why it is partly generated
 
+### Superseded row moved from CLAUDE.md 2026-09-22 (v6.9.0)
+
+Verbatim, as it stood in CLAUDE.md's Baselines table until v6.10.3 replaced it:
+
+> | Tests | **406 files / 6350**, 0 skipped (1 skips without git hooks) | `converge/20260914-setup-sh-runtime-dir` @ 2026-09-14, v6.9.0 tree |
+> | Knip | **32** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree |
+> | Coverage | **85.51** stmts · **79.82** branches · **90.89** funcs · **86.75** lines | same tree, vitest 5.0.0 |
+
+**The delta to the replacing row is NOT attributed, and must not be read as if it were.**
+406 → 420 files and 6350 → 6492 cases spans everything between the v6.9.0 tree and
+`main` @ `f829e85` — v6.9.1, v6.10.0, v6.10.1, v6.10.2 and one case added by v6.10.3
+itself. No name set was diffed across that span and no per-file arithmetic was run, so
+this pair of readings supports "the suite grew by 142 cases over five releases" and
+nothing finer (rule 4: a count is a smoke alarm, the NAME SET is the evidence). Anyone
+needing the attribution has to re-derive it per release from `git archive`, per
+[[feedback-baseline-read-after-own-edits]] — measuring from the current tree gives the
+wrong answer because the current tree already contains the change being attributed.
+
+Knip is unchanged at 32 / 0 / 3 across the same span, and that pair of readings WAS
+name-set diffed, once, on 2026-09-22 across the knip 6.35.0 → 6.35.1 bump: the 32 names
+are identical, `diff` empty. That says the ruler change moved nothing; it says nothing
+about the five releases, where only the counts are known.
+
 ### Superseded rows moved from CLAUDE.md 2026-09-08 (v6.5.0 → v4.0.0, newest first)
 
 Verbatim, byte-for-byte, as they stood in CLAUDE.md's Baselines table. The section below

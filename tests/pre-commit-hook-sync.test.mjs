@@ -17,7 +17,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -126,8 +127,9 @@ describe('pre-commit hook sync (P1-11)', () => {
 // filled it and the Bash tool died with no output. 6e5439c moved `npm test` / `test:coverage`
 // to an on-disk TMPDIR, but the pre-commit hook still ran bare `npx vitest run`, so each
 // commit wrote one full-suite cache to /tmp. One home for the TMPDIR choice: the package.json scripts. The population
-// below is the git hook and the CI workflows; `npm run audit:baseline` spawns vitest from
-// scripts/audit-metrics.mjs and is not covered (a manual dev tool, tracked separately).
+// below is the git hook, the CI workflows, and `npm run audit:baseline`, which spawns the suite
+// from scripts/audit-metrics.mjs (D#60 — it used to run `node_modules/.bin/vitest` with the
+// inherited environment, so every baseline wrote its cache to /tmp).
 describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
   const callers = [
     'scripts/pre-commit.sh',
@@ -157,6 +159,43 @@ describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
     const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
     for (const script of ['test', 'test:coverage']) {
       expect(pkg.scripts[script], script).toMatch(/TMPDIR="\$HOME\/\.cache\/tmp" vitest run/);
+    }
+  });
+
+  it("audit:baseline runs the suite through the repo's test:coverage script (D#60)", () => {
+    // Behavioural rather than a scan of audit-metrics.mjs: point it at a fixture repo whose
+    // `test:coverage` records the arguments it was handed. Spawning vitest any other way
+    // finds no `node_modules/.bin/vitest` here and parses nothing.
+    const fx = mkdtempSync(join(tmpdir(), 'mem-d60-'));
+    try {
+      writeFileSync(
+        join(fx, 'package.json'),
+        JSON.stringify({ name: 'fx', version: '0.0.0', scripts: { 'test:coverage': 'node rec.mjs' } }),
+      );
+      writeFileSync(
+        join(fx, 'rec.mjs'),
+        "import { writeFileSync } from 'node:fs';\n" +
+          "writeFileSync('argv.json', JSON.stringify(process.argv.slice(2)));\n" +
+          "console.log(' Test Files  1 passed (1)\\n      Tests  2 passed (2)');\n",
+      );
+      const out = execFileSync(
+        process.execPath,
+        [join(REPO, 'scripts', 'audit-metrics.mjs'), '--run-tests'],
+        {
+          env: { ...process.env, AUDIT_METRICS_REPO: fx },
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      const { vitest } = JSON.parse(out);
+      expect(vitest.status).toBe(0);
+      expect(vitest.tests).toBe('Tests 2 passed');
+      // The reporters coverageSummary() reads must still be requested.
+      expect(JSON.parse(readFileSync(join(fx, 'argv.json'), 'utf8'))).toEqual(
+        expect.arrayContaining(['--coverage.reporter=json-summary']),
+      );
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
     }
   });
 });

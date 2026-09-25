@@ -125,8 +125,9 @@ describe('pre-commit hook sync (P1-11)', () => {
 // 12 GB tmpfs. 627 of them filled it and the Bash tool died with no output. 6e5439c moved
 // `npm test` / `test:coverage` to an on-disk TMPDIR, but the pre-commit hook still ran bare
 // `npx vitest run`, so every commit kept writing to /tmp (17 caches in 15 minutes on
-// 2026-09-25). One home for the TMPDIR choice: the package.json scripts. Every automated
-// caller goes through them.
+// 2026-09-25). One home for the TMPDIR choice: the package.json scripts. The population
+// below is the git hook and the CI workflows; `npm run audit:baseline` spawns vitest from
+// scripts/audit-metrics.mjs and is not covered (a manual dev tool, tracked separately).
 describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
   const callers = [
     'scripts/pre-commit.sh',
@@ -141,7 +142,8 @@ describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
         .split('\n')
         .forEach((line, i) => {
           if (/^\s*#/.test(line)) return;
-          if (/\b(npx\s+)?vitest\s+run\b/.test(line) && !/'[^']*vitest run[^']*'/.test(line))
+          // `npx vitest` with no `run` also runs the suite once outside a TTY (pre-ship review P3-7).
+          if (/\b(npx\s+vitest|vitest\s+run)\b/.test(line) && !/'[^']*vitest[^']*'/.test(line))
             bare.push(`${rel}:${i + 1}`);
         });
     }

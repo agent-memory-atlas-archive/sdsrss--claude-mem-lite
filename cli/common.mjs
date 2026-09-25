@@ -420,7 +420,9 @@ export const KNOWN_CLI_FLAGS = new Set([
 /**
  * Flags exactly ONE subcommand reads, mapped to that command. KNOWN_CLI_FLAGS is a union, so
  * without this `recent --apply` was accepted in silence while `--apply` did nothing there.
- * Every other command now reports such a flag as ignored. Only flags with a single reader
+ * Every other command mem-cli dispatches now reports such a flag, and the typo suggester stops
+ * offering it there. Install-family commands (doctor, status, …) route to install.mjs and are
+ * not covered. Only flags with a single reader
  * belong here; tests/cli-flag-allowlist.test.mjs derives that from the sources.
  */
 export const COMMAND_SCOPED_FLAGS = new Map([
@@ -474,6 +476,8 @@ export function suggestUnknownFlags(flags, cmd) {
     let best = null,
       bestDist = 3;
     for (const known of KNOWN_CLI_FLAGS) {
+      const knownOwner = COMMAND_SCOPED_FLAGS.get(known);
+      if (cmd && knownOwner && knownOwner !== cmd) continue;
       const d = editDistance(key, known);
       if (d < bestDist) {
         bestDist = d;

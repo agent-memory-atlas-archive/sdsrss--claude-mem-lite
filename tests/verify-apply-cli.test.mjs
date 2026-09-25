@@ -320,8 +320,10 @@ describe('verify-apply CLI', () => {
     const before = snapshot();
     const r = runCli(['recent', '--apply', '--digest', 'abc']);
     expect(r.exitCode).toBe(0);
-    expect(r.stderr).toMatch(/--apply is read only by verify-apply — ignored by recent/);
-    expect(r.stderr).toMatch(/--digest is read only by verify-apply — ignored by recent/);
+    expect(r.stderr).toMatch(/--apply is read only by verify-apply; recent does not read it/);
+    expect(r.stderr).toMatch(/--digest is read only by verify-apply; recent does not read it/);
+    // No "it had no effect": a value-taking flag can swallow the next word (P3-1).
+    expect(r.stderr).not.toMatch(/--apply[^\n]*no effect/);
     expect(snapshot()).toBe(before);
   });
 

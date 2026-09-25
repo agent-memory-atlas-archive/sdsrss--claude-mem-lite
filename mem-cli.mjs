@@ -3695,7 +3695,7 @@ async function runDispatch(argv) {
   for (const { flag, suggestion, owner } of suggestUnknownFlags(parseArgs(cmdArgs).flags, cmd)) {
     process.stderr.write(
       owner
-        ? `[mem] --${flag} is read only by ${owner} — ignored by ${cmd}, it had no effect.\n`
+        ? `[mem] --${flag} is read only by ${owner}; ${cmd} does not read it.\n`
         : suggestion
           ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
           : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,

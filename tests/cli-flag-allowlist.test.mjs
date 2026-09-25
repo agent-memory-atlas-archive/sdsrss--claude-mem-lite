@@ -146,8 +146,24 @@ describe('COMMAND_SCOPED_FLAGS', () => {
       expect(OWNER_MODULE[owner], `no module registered for owner ${owner}`).toBeTruthy();
       expect(KNOWN_CLI_FLAGS.has(flag), `${flag} must stay in KNOWN_CLI_FLAGS for its owner`).toBe(true);
       const forms = [`flags.${flag}`, `flags['${flag}']`, `flags["${flag}"]`, `'--${flag}'`, `"--${flag}"`];
-      const readers = cliSources()
-        .filter((f) => forms.some((form) => stripComments(readFileSync(f, 'utf8')).includes(form)))
+      // Also the list-iteration reader (`for (const f of ['apply']) flags[f]`) and any
+      // lib/ module: pre-ship review of v6.12.1 (P3-3) added a second reader in each shape
+      // and this case stayed green.
+      const listReads = (src) =>
+        [...src.matchAll(/for \(const \w+ of \[([^\]]*)\]\)/g)].some((m) =>
+          new RegExp(`['"]${flag}['"]`).test(m[1]),
+        );
+      const population = [
+        ...cliSources(),
+        ...readdirSync(join(ROOT, 'lib'))
+          .filter((e) => e.endsWith('.mjs'))
+          .map((e) => join(ROOT, 'lib', e)),
+      ];
+      const readers = population
+        .filter((f) => {
+          const src = stripComments(readFileSync(f, 'utf8'));
+          return forms.some((form) => src.includes(form)) || listReads(src);
+        })
         .map((f) => f.slice(ROOT.length + 1));
       expect(readers, `readers of --${flag}`).toEqual([OWNER_MODULE[owner]]);
     }
@@ -158,6 +174,18 @@ describe('COMMAND_SCOPED_FLAGS', () => {
       { flag: 'apply', suggestion: null, owner: 'verify-apply' },
     ]);
     expect(suggestUnknownFlags({ digest: 'abc', limit: 5 }, 'search').map((r) => r.flag)).toEqual(['digest']);
+  });
+
+  // Pre-ship review of v6.12.1, P3-2: the typo suggester still ranked the scoped flags for
+  // every command, so `recent --aply` said "did you mean --apply?" and the next run called
+  // that flag ignored.
+  it('never suggests a scoped flag to a command that does not read it', () => {
+    // Another real flag may still be the nearest (`--all`); it must just not be the scoped one.
+    expect(suggestUnknownFlags({ aply: true }, 'recent')[0].suggestion).not.toBe('apply');
+    expect(suggestUnknownFlags({ digets: 'x' }, 'stats')[0].suggestion).not.toBe('digest');
+    expect(suggestUnknownFlags({ aply: true }, 'verify-apply')).toEqual([
+      { flag: 'aply', suggestion: 'apply' },
+    ]);
   });
 
   it('stays quiet when the owner reads it, and when no command is known', () => {

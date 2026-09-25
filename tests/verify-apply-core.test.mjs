@@ -474,11 +474,20 @@ describe('runVerifyApply — backup, apply, record', () => {
 
   it('removes its own backup when the apply aborts, so "nothing written" is true on disk too', () => {
     const a = seed(db);
-    const { entries } = parseProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);
+    const b = seed(db, { title: 'b' });
+    const { entries } = parseProposals([
+      { id: a, action: 'retire', verdict: 'STALE', evidence: 'x' },
+      { id: b, action: 'replace', verdict: 'STALE', narrative: 'ok', evidence: 'x' },
+    ]);
     const { plan } = planVerifyApply(db, entries, { project: P });
-    db.prepare("UPDATE observations SET superseded_at = 1, superseded_by = 'auto-dedup' WHERE id = ?").run(a);
-    expect(() => runVerifyApply(db, plan, { backupDir: dir })).toThrow(/no longer live/);
+    // A failure INSIDE the transaction, after the backup is on disk: saveObservation refuses a
+    // whitespace-only body (parse would have refused it; the plan is tampered with here only to
+    // reach that throw). The retire before it must roll back with it.
+    plan[1].narrative = '   ';
+    const before = snapshot(db);
+    expect(() => runVerifyApply(db, plan, { backupDir: dir })).toThrow(/empty/);
     expect(readdirSync(dir)).toEqual([]);
+    expect(snapshot(db)).toBe(before);
   });
 
   it('gives two runs in the same millisecond two different backup files', () => {
@@ -610,15 +619,78 @@ describe('undoVerifyBackup — only undoes what the apply left untouched', () =>
     expect(snapshot(db)).toBe(before);
   });
 
-  it('refuses a document that is not one of ours, or has no record of what was applied', () => {
-    const id = seed(db);
+  it('refuses a document that is not one of ours, or has no record of what was applied — writing nothing', () => {
+    const { r, run } = threeActions();
     const before = snapshot(db);
     expect(
-      undoVerifyBackup(db, { kind: 'something-else', rows: [{ row: { id } }] }).errors.join(' '),
+      undoVerifyBackup(db, { kind: 'something-else', rows: [{ row: { id: r } }] }).errors.join(' '),
     ).toMatch(/backup/);
-    const { run } = threeActions();
     expect(undoVerifyBackup(db, { ...run.backup, applied: null }).errors.join(' ')).toMatch(/applied/);
+    expect(snapshot(db)).toBe(before);
     expect(existsSync(run.backupPath)).toBe(true);
-    void before;
+  });
+});
+
+describe('re-review of dcc8f72 — the remaining gaps', () => {
+  let db;
+  let dir;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'manual-p', project: P });
+    dir = mkdtempSync(join(tmpdir(), 'mem-verify-rr-'));
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses to apply — no backup, no write — when a target changed after the dry run the digest describes', () => {
+    const a = seed(db);
+    const { plan } = planVerifyApply(
+      db,
+      parseProposals([{ id: a, action: 'edit', verdict: 'PARTIAL', set: { narrative: 'n' }, evidence: 'x' }])
+        .entries,
+      { project: P },
+    );
+    db.prepare("UPDATE observations SET title = 'a hook wrote this after the dry run' WHERE id = ?").run(a);
+    const before = snapshot(db);
+    expect(() => runVerifyApply(db, plan, { backupDir: dir })).toThrow(
+      new RegExp(`#${a}: changed since the dry run`),
+    );
+    expect(snapshot(db)).toBe(before);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('reads back ok when saveObservation scrubs an original file edge that carried a credential', () => {
+    const url = 'https://deploy:' + 'hunter2'.repeat(3) + '@git.example.com/repo.git';
+    const r = seed(db, { filesModified: JSON.stringify(['lib/foo.mjs', url]) });
+    const { plan } = planVerifyApply(
+      db,
+      parseProposals([{ id: r, action: 'replace', verdict: 'STALE', narrative: 'c', evidence: 'x' }]).entries,
+      { project: P },
+    );
+    const results = applyVerifyPlan(db, plan);
+    const [check] = readBackVerifyPlan(db, plan, results);
+    expect(check.problems).toEqual([]);
+  });
+
+  it('the digest also covers the type and branch a replacement copies', () => {
+    const a = seed(db);
+    const doc = [{ id: a, action: 'replace', verdict: 'STALE', narrative: 'c', evidence: 'x' }];
+    const planFor = () => planVerifyApply(db, parseProposals(doc).entries, { project: P }).plan;
+    const d1 = planDigest(planFor(), P);
+    db.prepare("UPDATE observations SET branch = 'other-branch' WHERE id = ?").run(a);
+    const d2 = planDigest(planFor(), P);
+    expect(d2).not.toBe(d1);
+    db.prepare("UPDATE observations SET type = 'decision' WHERE id = ?").run(a);
+    expect(planDigest(planFor(), P)).not.toBe(d2);
+  });
+
+  it('get names the cause of a /verify retirement instead of "auto-dedup or merge"', async () => {
+    const { supersededNotice } = await import('../lib/get-core.mjs');
+    const notice = (by) => supersededNotice({ superseded_at: 1, superseded_by: by, compressed_into: 0 });
+    expect(notice(VERIFY_RETIRED_MARKER)).toMatch(/\/verify/);
+    expect(notice('verify-undone')).toMatch(/undo/);
+    expect(notice('auto-dedup')).toMatch(/auto-dedup or merge/);
   });
 });

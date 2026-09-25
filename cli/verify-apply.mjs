@@ -29,7 +29,10 @@ const USAGE =
   '       claude-mem-lite verify-apply --undo <backup.json>';
 
 const SNIPPET_CONTEXT = 60;
-const SNIPPET_MAX = 400;
+// The commands this prints must run as printed. `claude-mem-lite` is on PATH only after an
+// optional global npm install (which may also be a different, stale code home), so name the
+// node binary and THIS cli.mjs — the one that produced the plan.
+const SELF = process.argv[1] ? `node ${process.argv[1]}` : 'claude-mem-lite';
 
 function readJson(path, what) {
   try {
@@ -39,9 +42,11 @@ function readJson(path, what) {
   }
 }
 
-const clip = (s) => (s.length > SNIPPET_MAX ? `${s.slice(0, SNIPPET_MAX)}…` : s);
-
-/** The changed region of a field, with context — enough to approve, short enough to read. */
+/**
+ * The changed region of a field, with context. The changed part is printed IN FULL, never
+ * clipped: the digest covers the whole text, so any cap here would let the user approve text
+ * they were never shown (re-review of dcc8f72, P2-2). Only unchanged context is elided.
+ */
 function snippet(before, after) {
   const a = before === null || before === undefined ? '' : String(before);
   const b = String(after);
@@ -58,8 +63,8 @@ function snippet(before, after) {
   const lead = from > 0 ? '…' : '';
   const tail = (s, end) => (end + SNIPPET_CONTEXT < s.length ? '…' : '');
   return [
-    `    - ${lead}${clip(a.slice(from, Math.min(a.length, endA + SNIPPET_CONTEXT)))}${tail(a, endA)}`,
-    `    + ${lead}${clip(b.slice(from, Math.min(b.length, endB + SNIPPET_CONTEXT)))}${tail(b, endB)}`,
+    `    - ${lead}${a.slice(from, Math.min(a.length, endA + SNIPPET_CONTEXT))}${tail(a, endA)}`,
+    `    + ${lead}${b.slice(from, Math.min(b.length, endB + SNIPPET_CONTEXT))}${tail(b, endB)}`,
   ];
 }
 
@@ -84,7 +89,6 @@ function undo(db, path) {
   const { errors, restored } = undoVerifyBackup(db, value);
   if (restored.length === 0 && errors.length)
     return fail(`[mem] Undo refused, nothing written:\n  ${errors.join('\n  ')}`);
-  atomicWriteFileSync(path, JSON.stringify(markUndone(value), null, 1));
   for (const r of restored) {
     out(
       `  #${r.id} restored${r.replacementRetired ? ` (replacement #${r.replacementRetired} retired)` : ''}`,
@@ -92,11 +96,24 @@ function undo(db, path) {
   }
   if (errors.length) return fail(`[mem] Undo read-back found problems:\n  ${errors.join('\n  ')}`);
   out(`[mem] Undo complete: ${restored.length} row(s) restored.`);
+  // The restore is committed; marking the file only stops a second run early. If the mark
+  // cannot be written, a second undo is still refused (the rows no longer match the apply's
+  // record), so this is a warning, not a failure of the undo that already happened.
+  try {
+    atomicWriteFileSync(path, JSON.stringify(markUndone(value), null, 1));
+  } catch (e) {
+    process.stderr.write(
+      `[mem] Warning: undo is done, but ${path} could not be marked as undone: ${e.message}\n`,
+    );
+  }
 }
 
 export function cmdVerifyApply(db, args) {
   const { positional, flags } = parseArgs(args);
   if (rejectBareStringFlags(flags, ['project', 'undo', 'digest'])) return;
+  // The project verify-apply targets when --project is omitted, printed so /verify can export
+  // exactly that project (export's --project matching is fuzzy; this is not).
+  if (flags['print-project'] === true) return out(inferProject());
   // Boolean means boolean: `--apply=false` / `--apply no` must not apply.
   if (flags.apply !== undefined && flags.apply !== true)
     return fail(`[mem] --apply takes no value.\n${USAGE}`);
@@ -125,7 +142,7 @@ export function cmdVerifyApply(db, args) {
     for (const p of plan) for (const line of describe(p)) out(line);
     out(`[mem] Plan digest: ${digest}`);
     out('[mem] Dry run — nothing written. After the user approves exactly this plan, run:');
-    out(`  claude-mem-lite verify-apply ${file} --project ${project} --apply --digest ${digest}`);
+    out(`  ${SELF} verify-apply ${file} --project ${project} --apply --digest ${digest}`);
     return;
   }
 
@@ -143,6 +160,13 @@ export function cmdVerifyApply(db, args) {
   try {
     run = runVerifyApply(db, plan, { backupDir: join(DB_DIR, 'backups') });
   } catch (e) {
+    // One failure happens AFTER the commit: the undo record could not be written. The changes
+    // are in the database then, and saying "nothing written" would be false.
+    if (e.message.startsWith('applied, but')) {
+      return fail(
+        `[mem] APPLIED — the changes are in the database, but ${e.message.slice('applied, but '.length)}`,
+      );
+    }
     return fail(`[mem] ${e.message}`);
   }
   for (const c of run.checks) {
@@ -151,9 +175,7 @@ export function cmdVerifyApply(db, args) {
     );
   }
   out(`[mem] Backup: ${run.backupPath}`);
-  out(
-    `[mem] To undo (only while these rows are untouched): claude-mem-lite verify-apply --undo ${run.backupPath}`,
-  );
+  out(`[mem] To undo (only while these rows are untouched): ${SELF} verify-apply --undo ${run.backupPath}`);
   if (run.checks.some((c) => !c.ok)) {
     fail('[mem] Applied, but read-back found mismatches — show the MISMATCH lines above to the user.');
   }

@@ -5,7 +5,7 @@
 // backup BEFORE the change and prints the undo command, exit codes carry the outcome.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -241,5 +241,58 @@ describe('verify-apply CLI', () => {
     expect(mixed.exitCode).toBe(1);
     expect(mixed.stderr).toMatch(/Usage/);
     expect(snapshot()).toBe(before);
+  });
+
+  it('the dry run shows the whole new text — the tail too, however long', () => {
+    const a = seed();
+    const long =
+      'Fixed in abc123. ' +
+      'Context sentence to pad the correction. '.repeat(14) +
+      'HIDDEN-TAIL: the last clause.';
+    expect(long.length).toBeGreaterThan(500); // premise: past any display cap
+    const file = writeProposals([
+      { id: a, action: 'replace', verdict: 'STALE', narrative: long, evidence: 'abc123' },
+    ]);
+    const r = runCli(['verify-apply', file]);
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(r.stdout).toContain('HIDDEN-TAIL: the last clause.');
+  });
+
+  it('--print-project prints the project verify-apply resolves from the working directory, and writes nothing', () => {
+    const before = snapshot();
+    const r = runCli(['verify-apply', '--print-project']);
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe(PROJECT);
+    expect(snapshot()).toBe(before);
+  });
+
+  it('prints runnable commands (node + this cli.mjs), not a bare binary that may not be on PATH', () => {
+    const a = seed();
+    const file = writeProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);
+    const r = runCli(['verify-apply', file]);
+    expect(r.stdout).toContain(`node ${CLI_PATH} verify-apply ${file} --project ${PROJECT} --apply --digest`);
+  });
+
+  it('an undo whose backup cannot be marked still succeeds, warns, and cannot run a second time', () => {
+    const a = seed();
+    const file = writeProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);
+    const digest = digestOf(runCli(['verify-apply', file]).stdout);
+    const applied = runCli(['verify-apply', file, '--apply', '--digest', digest]);
+    expect(applied.exitCode, applied.stderr).toBe(0);
+    const backupPath = join(backupsDir(), readdirSync(backupsDir())[0]);
+    chmodSync(backupsDir(), 0o555); // the mark (an atomic rename into this dir) will fail
+    try {
+      const u = runCli(['verify-apply', '--undo', backupPath]);
+      expect(u.exitCode, u.stderr).toBe(0);
+      expect(u.stderr).toMatch(/could not be marked as undone/);
+      expect(
+        db.prepare('SELECT superseded_at FROM observations WHERE id = ?').get(a).superseded_at,
+      ).toBeNull();
+      const again = runCli(['verify-apply', '--undo', backupPath]);
+      expect(again.exitCode).toBe(1);
+      expect(again.stderr).toMatch(/changed since the apply/);
+    } finally {
+      chmodSync(backupsDir(), 0o755);
+    }
   });
 });

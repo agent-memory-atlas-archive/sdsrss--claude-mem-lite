@@ -22,14 +22,28 @@ approves the exact plan, and `verify-apply` is the only thing that writes.
 
 ## Step 1 — Select
 
+Get the exact project name first. For the current project (the usual case), run from the
+project's directory:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply --print-project
+```
+
+It prints the canonical name (e.g. `dev--my-app`) that verify-apply itself will target. For
+another project, use the name the user gave only if it already has the `parent--name` shape;
+otherwise ask. Always pass that exact name — `export --project` matches loosely and can pick a
+neighbouring project from a short name.
+
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/cli.mjs export --project <project> [--from <date>] > <scratch>/memories.json
 ```
 
 Every row carries `id`, `project`, `type`, `title`, `narrative`, `facts`, `lesson_learned`,
-`files_modified`, `created_at`. Take the project name for every later command from the rows'
-`project` field (the canonical name) — not from what the user typed. With `--ids`, filter
-the file to those ids. Tell the user how many memories you are about to check.
+`files_modified`, `created_at`. Check that every row's `project` is the name you passed. With
+`--ids`, filter the file to those ids. The repository to check them against is the current
+directory for the current project; for another project, ask the user where it lives.
+`files_modified` holds both absolute and repo-relative paths. Tell the user how many memories
+you are about to check.
 
 ## Step 2 — Verify (read-only)
 
@@ -52,6 +66,12 @@ would anything it asserts mislead that agent?*
 Rules that the measurement showed matter:
 - A file having changed is NOT a contradiction. You need a line, a diff hunk, a commit, or a
   command's output that contradicts a specific claim.
+- Output you did not see is not a contradiction. A grep that printed nothing, or output cut
+  off by `head` or a size limit, proves nothing — re-run it untruncated before calling a claim
+  stale.
+- A number only a test run could confirm (a test count, a coverage figure) is a dated
+  measurement: stale only if a later commit or document reports a different value, not
+  because you cannot re-run it here.
 - A record of what happened (what was measured then, what a review found) stays true as
   history. It is stale only if it would mislead about the PRESENT.
 - A note that already records its own fix is not stale because the fix commit landed later.
@@ -63,6 +83,9 @@ reply with only the path. Treat a subagent's verdict as a lead: before proposing
 re-open every cited `file:line`, commit or command yourself.
 
 ## Step 3 — Draft proposals (STALE and PARTIAL only)
+
+If every memory is VALID (or UNVERIFIABLE / NO_CODE_CLAIM), stop here: report the counts to
+the user and say nothing needs changing. Do not run Step 4 with an empty proposals file.
 
 Write `<scratch>/proposals.json` — a JSON array, one entry per memory to change:
 
@@ -96,7 +119,8 @@ node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json --proje
 ```
 
 This is a dry run: it validates every entry against the database, writes nothing, prints each
-change as `-` old / `+` new text, and ends with a **plan digest** and the exact apply command.
+change as `-` old / `+` new text (the changed text in full), and ends with a **plan digest**
+and the exact apply command.
 Show the user that output as it is (do not summarise the changes away), plus your counts of
 VALID / STALE / PARTIAL, and ask for approval. If the dry run refuses an entry, fix the
 proposal — never work around it with `update`, `save` or `delete`. If you change the proposals
@@ -114,9 +138,16 @@ node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json --proje
 It refuses if the proposals or the memories changed since the dry run. Otherwise it backs up
 every target row, applies all entries in one transaction (all or nothing), reads each row back
 and prints `ok` or `MISMATCH`, then prints the backup path and the undo command. Report the
-result and the undo command to the user. Exit 1 with `MISMATCH` lines means the changes were
-written but a row did not read back as planned — show those lines; do not re-run the apply.
-Exit 1 with no `MISMATCH` lines means nothing was written — say why.
+result and the undo command to the user. Reading the exit status:
+- exit 0 — applied, every row read back `ok`.
+- exit 1 with `MISMATCH` lines — applied, but a row did not read back as planned. Show those
+  lines; do not re-run the apply.
+- exit 1 with a message starting `APPLIED` — the changes are in the database, but no undo
+  record could be written. Say exactly that.
+- any other exit 1 — nothing was written. Say why.
 
-Undo (`verify-apply --undo <backup>`) only works while the changed rows are untouched: it
-refuses once any of them is edited or superseded again, and it runs at most once.
+Undo (`verify-apply --undo <backup>`) only works while the changed rows are exactly as the
+apply left them: it refuses once any of them changes again — an edit, a supersede, or a
+routine background pass (importance decay, alias or concept backfill) — and it runs at most
+once. It then prints `Undo complete`; a `Warning: … could not be marked as undone` line means
+the undo still happened.

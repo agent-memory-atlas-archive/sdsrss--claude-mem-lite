@@ -3213,6 +3213,7 @@ Commands:
     --digest D          Required with --apply: the digest the approved dry run printed
     --project P         Project the targets must belong to (default: current)
     --undo <backup>     Restore the rows from a backup written by --apply
+    --print-project     Print the project name used when --project is omitted
 
   compress              Compress old low-value observations
     --execute           Execute compression (preview by default)

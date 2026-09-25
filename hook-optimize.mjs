@@ -468,7 +468,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         const res = db
           .prepare(
             `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ?
-             WHERE id = ? AND ${liveObsFilterSql('')}`,
+             WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL`,
           )
           .run(Date.now(), cand.id);
         if (res.changes === 0) {
@@ -552,13 +552,19 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // scopes branch already guards with `AND scope IS NULL`; this is the same idea.
       // 0 changes is a skip, not a success: it must not count as processed and must not
       // rebuild a vector for a row that is no longer live.
+      // `optimized_at IS NULL` is the same idea for the pool's OTHER predicate: narrow and wide
+      // select only unstamped rows, and a /verify approval stamps the row it approves. Without
+      // the re-check an edit approved during the call was overwritten — narrow wrote model
+      // text over it, wide wrote back the pre-edit narrative it read before the call
+      // (tests/verify-reenrich-race.test.mjs). It also stops two overlapping runs rewriting a
+      // row twice.
       const res = db
         .prepare(
           `
         UPDATE observations SET type=?, title=?, narrative=?, concepts=?, facts=?,
           text=?, importance=?, lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
           scope=COALESCE(?, scope)
-        WHERE id = ? AND ${liveObsFilterSql('')}
+        WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL
       `,
         )
         .run(
@@ -1248,6 +1254,17 @@ Return ONLY valid JSON:
         .prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`)
         .get(keeper.id);
       if (!keeperLive) return false;
+      // findMergeCandidates selects only rows with optimized_at NULL; one stamped since then
+      // was approved by /verify (or rewritten by another pass) during the model call, and
+      // folding it into a model summary would overwrite exactly what was approved
+      // (tests/verify-reenrich-race.test.mjs). Abort the whole cluster rather than merge part.
+      const clusterIds = cluster.map((o) => o.id);
+      const stamped = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM observations WHERE id IN (${clusterIds.map(() => '?').join(',')}) AND optimized_at IS NOT NULL`,
+        )
+        .get(...clusterIds).n;
+      if (stamped > 0) return false;
 
       // Snapshot the keeper's pre-merge row BEFORE overwriting it, so its original
       // full text survives as a recoverable compressed_into child (mirroring
@@ -1296,7 +1313,11 @@ Return ONLY valid JSON:
       return true;
     })();
     if (!mergeApplied) {
-      debugLog('DEBUG', 'llm-optimize', `cluster-merge aborted: keeper #${keeper.id} no longer live`);
+      debugLog(
+        'DEBUG',
+        'llm-optimize',
+        `cluster-merge aborted: keeper #${keeper.id} no longer live, or a member changed during the call`,
+      );
       return { merged: false };
     }
 

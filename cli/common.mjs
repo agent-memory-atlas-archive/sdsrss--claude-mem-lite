@@ -404,6 +404,7 @@ export const KNOWN_CLI_FLAGS = new Set([
   // it had no effect" beside its own read-back. Pinned by tests/verify-apply-cli.test.mjs.
   'apply',
   'digest',
+  'print-project',
   'undo',
   // Entries here MUST be read by a `claude-mem-lite` subcommand. A flag that no
   // command reads is worse than an absent one: it converts the "ignored, it had no

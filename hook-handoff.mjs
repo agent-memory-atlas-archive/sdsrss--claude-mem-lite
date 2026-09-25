@@ -400,7 +400,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     SELECT title, type FROM observations
     WHERE (memory_session_id = ? OR project = ?) AND COALESCE(importance, 1) >= 2
       AND ${liveObsFilterSql('')} ${obsWindowClause}
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
   `,
     )
     .iterate(sessionId, project, ...obsWindowParams)) {

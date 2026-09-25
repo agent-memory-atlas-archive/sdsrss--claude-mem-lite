@@ -75,4 +75,12 @@ describe('Key Decisions: the low-signal filter runs before the limit (D#40)', ()
     for (let i = 0; i < 3; i++) obs(`Modified file-${i}.mjs`, 2, 2_000 + i);
     expect(keyDecisions()).toEqual([6, 5, 4, 3, 2].map((i) => `[decision] real decision ${i}`));
   });
+
+  it('breaks a created_at_epoch tie newest-id-first, so the cap keeps the latest writes', () => {
+    // Two inserts share a millisecond often enough that the tie is the common case for a
+    // batch of saves. Without `id DESC` SQLite returns the tie in ascending rowid, so the cap
+    // of five kept the OLDEST five of seven.
+    for (let i = 0; i < 7; i++) obs(`real decision ${i}`, 3, 1_000);
+    expect(keyDecisions()).toEqual([6, 5, 4, 3, 2].map((i) => `[decision] real decision ${i}`));
+  });
 });

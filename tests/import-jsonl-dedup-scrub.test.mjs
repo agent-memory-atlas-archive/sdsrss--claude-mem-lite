@@ -150,6 +150,62 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
     expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n).toBe(1);
   });
 
+  // The same cut-then-scrub order sat on the three other length caps in this file (pre-ship
+  // review, v6.12.2): the tool input and an array-shaped tool result are each cut to 4000
+  // characters for the body (`text` + `narrative`, both search-indexed), and a prompt to
+  // 10000. Each case puts the token across its own cap.
+  describe('the body and prompt caps scrub before they cut', () => {
+    const token = 'gh' + 'p_' + 'A1b2C3d4'.repeat(4) + 'Z9x8';
+    const LEAK = /gh[p]_[A-Za-z0-9]{8,}/;
+    const straddle = (cap, lead = 0) => `${'x'.repeat(cap - 20 - lead)} ${token} tail`;
+
+    it('tool input straddling 4000', async () => {
+      // JSON.stringify adds `{"command":"` (12 chars) before the command text.
+      const cmd = straddle(4000, 12);
+      expect(JSON.stringify({ command: cmd }).slice(0, 4000), 'premise: the cut splits it').toMatch(LEAK);
+      const file = join(dir, 'in.jsonl');
+      writeFileSync(file, toolPair('Bash', { command: cmd }, 'b1') + '\n');
+      await importJsonl(db, file, { project: 'proj' });
+      const row = db.prepare('SELECT text, narrative FROM observations').get();
+      expect(row.text).not.toMatch(LEAK);
+      expect(row.narrative).not.toMatch(LEAK);
+    });
+
+    it('array-shaped tool result straddling 4000', async () => {
+      const content = [{ type: 'text', text: straddle(4000, 22) }];
+      expect(JSON.stringify(content).slice(0, 4000), 'premise: the cut splits it').toMatch(LEAK);
+      const file = join(dir, 'res.jsonl');
+      const [use, res] = toolPair('Bash', { command: 'cat log' }, 'b2').split('\n');
+      const r = JSON.parse(res);
+      r.message.content[0].content = content;
+      writeFileSync(file, `${use}\n${JSON.stringify(r)}\n`);
+      await importJsonl(db, file, { project: 'proj' });
+      const row = db.prepare('SELECT text, narrative FROM observations').get();
+      expect(row.text).not.toMatch(LEAK);
+      expect(row.narrative).not.toMatch(LEAK);
+    });
+
+    it('user prompt straddling 10000', async () => {
+      const text = straddle(10000);
+      expect(text.slice(0, 10000), 'premise: the cut splits it').toMatch(LEAK);
+      const file = join(dir, 'prompt.jsonl');
+      writeFileSync(
+        file,
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'scrub-1',
+          timestamp: '2026-09-11T00:00:00Z',
+          message: { content: text },
+        }) + '\n',
+      );
+      await importJsonl(db, file, { project: 'proj' });
+      const row = db.prepare('SELECT prompt_text FROM user_prompts').get();
+      expect(row, 'premise: the prompt imported').toBeTruthy();
+      expect(row.prompt_text).not.toMatch(LEAK);
+      expect(row.prompt_text.length, 'the cap still bounds it').toBeLessThanOrEqual(10000);
+    });
+  });
+
   it('control: a secret past the cut leaves the kept 80 characters byte-identical', async () => {
     // The axis the reorder moves is "which text the scrubber sees"; it now sees text beyond
     // the cut, so pin that nothing inside the kept window changes because of it.

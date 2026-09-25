@@ -9,7 +9,7 @@ Memories go stale: a bug recorded as open gets fixed, a measurement gets retract
 mechanism is replaced. Measured on 118 live memories across 7 repos, ~10% were STALE and
 ~14% PARTIAL, and most went stale within a day of being saved. No automatic pass catches
 this — cheap single-shot models misjudged it (precision 0.36) and model-written corrections
-were false 40% of the time. What works is YOU reading the code: you propose, the user
+were false in 28 of 72 cases. What works is YOU reading the code: you propose, the user
 approves the exact plan, and `verify-apply` is the only thing that writes.
 
 (If another plugin also defines `/verify`, this one is `/claude-mem-lite:verify`.)
@@ -26,7 +26,7 @@ Get the exact project name first. For the current project (the usual case), run 
 project's directory:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply --print-project
+node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" verify-apply --print-project
 ```
 
 It prints the canonical name (e.g. `dev--my-app`) that verify-apply itself will target. For
@@ -35,7 +35,7 @@ otherwise ask. Always pass that exact name — `export --project` matches loosel
 neighbouring project from a short name.
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/cli.mjs export --project <project> [--from <date>] > <scratch>/memories.json
+node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" export --project <project> [--from <date>] > <scratch>/memories.json
 ```
 
 Every row carries `id`, `project`, `type`, `title`, `narrative`, `facts`, `lesson_learned`,
@@ -115,7 +115,7 @@ Write `<scratch>/proposals.json` — a JSON array, one entry per memory to chang
 ## Step 4 — Show the plan and get approval
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json --project <project>
+node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" verify-apply <scratch>/proposals.json --project <project>
 ```
 
 This is a dry run: it validates every entry against the database, writes nothing, prints each
@@ -132,7 +132,7 @@ the old one will be refused.
 Run exactly the command the dry run printed:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json --project <project> --apply --digest <digest>
+node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" verify-apply <scratch>/proposals.json --project <project> --apply --digest <digest>
 ```
 
 It refuses if the proposals or the memories changed since the dry run. Otherwise it backs up
@@ -146,9 +146,11 @@ result and the undo command to the user. Reading the exit status:
   record could be written. Say exactly that.
 - any other exit 1 — nothing was written. Say why.
 
-Undo (`verify-apply --undo <backup>`) only works while the changed rows are exactly as the
-apply left them: it refuses once any of them changes again — an edit, a supersede, or a
-routine background pass (importance decay, alias or concept backfill) — and it runs at most
-once. It then prints `Undo complete`; a `Warning: … could not be marked as undone` line means
+Undo (`verify-apply --undo <backup>`) only works while the changed rows' content and state are
+as the apply left them (usage counters such as access counts do not count): it refuses once any
+of them changes again — an edit, a supersede, or a routine background pass (importance decay,
+alias or concept backfill) — and it runs at most once. It then prints `Undo complete`; a `Warning: … could not be marked as undone` line means
 the undo still happened. After an undo, the earlier apply command is refused: applying the
-same changes again needs a new dry run and the user's approval of its new digest.
+same changes again needs a new dry run and the user's approval of its new digest. That refusal
+rests on the backup file: once it is deleted, the earlier command would match again, so never
+re-run an apply command from an earlier approval.

@@ -124,7 +124,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     // deliberately NOT gated on optimized_at, so a lesson-less row can still be
     // picked up by wide scope for lesson enrichment afterward.
     const stmt = db.prepare(`
-      SELECT id, title, narrative, type, subtitle, concepts, facts, text, search_aliases, importance, project
+      SELECT id, title, narrative, type, subtitle, concepts, facts, text, search_aliases, importance, project, optimized_at
       FROM observations
       WHERE ${liveObsFilterSql('')}
         AND (search_aliases IS NULL OR search_aliases = '')
@@ -157,7 +157,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     // strand exactly those rows — the R10 P2-2 shape, where one pass's bookkeeping
     // evicts a row from a backfill it never visited.
     const stmt = db.prepare(`
-      SELECT id, title, narrative, type, subtitle, concepts, facts, text, importance, project
+      SELECT id, title, narrative, type, subtitle, concepts, facts, text, importance, project, optimized_at
       FROM observations
       WHERE ${liveObsFilterSql('')}
         AND (concepts IS NULL OR concepts = '')
@@ -354,12 +354,25 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         // D#6. This was the one branch of the four without it. `changes === 0` is a SKIP,
         // not a success: it must not count as processed. (It also used to guard a vector
         // rebuild on a dead row; that rebuild is gone, the liveness reason is not.)
+        // `text IS ? AND optimized_at IS ?`: the new text is the text read BEFORE the call plus
+        // the aliases, so it may only land on a row still holding that text. A /verify approval
+        // during the call rebuilds text and stamps optimized_at; without the compare the stale
+        // text came back and the corrected row matched searches for the claim it had just
+        // dropped (pre-ship review of 9786874, P2-2). A skip here is retried next cycle,
+        // against the row as it is then.
         const res = db
           .prepare(
             `UPDATE observations SET search_aliases = ?, text = ?, scope = COALESCE(?, scope)
-             WHERE id = ? AND ${liveObsFilterSql('')}`,
+             WHERE id = ? AND ${liveObsFilterSql('')} AND text IS ? AND optimized_at IS ?`,
           )
-          .run(safe.search_aliases, safe.text, normalizeScope(parsed.scope), cand.id);
+          .run(
+            safe.search_aliases,
+            safe.text,
+            normalizeScope(parsed.scope),
+            cand.id,
+            cand.text,
+            cand.optimized_at,
+          );
         if (res.changes === 0) {
           skipped++;
           continue;
@@ -395,7 +408,12 @@ facts: 1-4 specific, checkable statements the narrative actually asserts. Omit r
           skipped++;
           continue;
         }
-        const factArr = pickStrings(parsed && parsed.facts);
+        // Model facts only on a row no pass has stamped. `facts` is displayed as the memory's
+        // own claims, and a stamped row is either one the general re-enrich pass already wrote
+        // facts for, or one a user approved through /verify — where this pass replaced the
+        // approved facts with model text (pre-ship review of 9786874, P1-1). Concepts are
+        // search keywords and still fill.
+        const factArr = cand.optimized_at === null ? pickStrings(parsed && parsed.facts) : [];
         const conceptsOnly = conceptArr.slice(0, 10).join(' ');
         const factsOnly = factArr.slice(0, 10).join(' ');
         const appendedText = [
@@ -416,12 +434,15 @@ facts: 1-4 specific, checkable statements the narrative actually asserts. Omit r
         // concurrent hook to supersede or compress the row (R10 P3-3) or for save-enrich
         // to fill it. `facts` rides along with preserve-on-empty for the same reason the
         // general pass preserves it — a partial answer must not wipe a filled column.
+        // `text IS ? AND optimized_at IS ?` for the reason the alias branch gives, and one
+        // more: it is what makes the facts decision above still true at write time.
         const res = db
           .prepare(
             `UPDATE observations SET concepts = ?, facts = COALESCE(NULLIF(?, ''), facts), text = ?
-             WHERE id = ? AND (concepts IS NULL OR concepts = '') AND ${liveObsFilterSql('')}`,
+             WHERE id = ? AND (concepts IS NULL OR concepts = '') AND ${liveObsFilterSql('')}
+               AND text IS ? AND optimized_at IS ?`,
           )
-          .run(safe.concepts, safe.facts, safe.text, cand.id);
+          .run(safe.concepts, safe.facts, safe.text, cand.id, cand.text, cand.optimized_at);
         if (res.changes === 0) {
           skipped++;
           continue;
@@ -1352,7 +1373,7 @@ export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) 
   const cutoff = Date.now() - ageDays * DAY_MS;
   const projectClause = project ? 'AND project = ?' : '';
   const stmt = db.prepare(`
-    SELECT id, title, narrative, lesson_learned, project, type, created_at_epoch
+    SELECT id, title, narrative, lesson_learned, project, type, created_at_epoch, optimized_at
     FROM observations
     -- liveObsFilterSql, not compressed_into alone (audit 2026-09-02 P0-3): auto-dedup losers
     -- carry superseded_at with compressed_into=0 and match this predicate exactly (imp=1,
@@ -1509,6 +1530,15 @@ export async function executeSmartCompressCluster(db, observations, project) {
     const medianEpoch = epochs[Math.floor(epochs.length / 2)];
 
     const summaryId = db.transaction(() => {
+      // The summary was written from the members as they were BEFORE the Sonnet call. A member
+      // stamped since then was approved through /verify (or rewritten by another pass) during
+      // the call, and hiding it behind a summary of its pre-approval text would put the stale
+      // claim back as a live row and bury the correction (pre-ship review of 9786874, P2-1).
+      // Abort the whole cluster, as cluster-merge does.
+      const stampNow = db.prepare('SELECT optimized_at FROM observations WHERE id = ?');
+      if (observations.some((o) => (stampNow.get(o.id)?.optimized_at ?? null) !== (o.optimized_at ?? null))) {
+        return null;
+      }
       const sessionId = `compress-${project}`;
       const now = new Date();
       db.prepare(
@@ -1580,6 +1610,10 @@ export async function executeSmartCompressCluster(db, observations, project) {
       return sId;
     })();
 
+    if (summaryId === null) {
+      debugLog('DEBUG', 'llm-optimize', 'smart-compress aborted: a member changed during the call');
+      return { compressed: false };
+    }
     debugLog(
       'DEBUG',
       'llm-optimize',

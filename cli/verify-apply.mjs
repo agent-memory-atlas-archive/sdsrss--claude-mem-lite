@@ -34,7 +34,9 @@ const BACKUP_DIR = join(DB_DIR, 'backups');
 // The commands this prints must run as printed. `claude-mem-lite` is on PATH only after an
 // optional global npm install (which may also be a different, stale code home), so name the
 // node binary and THIS cli.mjs — the one that produced the plan.
-const SELF = process.argv[1] ? `node ${process.argv[1]}` : 'claude-mem-lite';
+/** A path as one shell word: as-is when it is plain, single-quoted otherwise. */
+const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+const SELF = process.argv[1] ? `node ${shellWord(process.argv[1])}` : 'claude-mem-lite';
 
 function readJson(path, what) {
   try {
@@ -151,7 +153,9 @@ export function cmdVerifyApply(db, args) {
     for (const p of plan) for (const line of describe(p)) out(line);
     out(`[mem] Plan digest: ${digest}`);
     out('[mem] Dry run — nothing written. After the user approves exactly this plan, run:');
-    out(`  ${SELF} verify-apply ${file} --project ${project} --apply --digest ${digest}`);
+    out(
+      `  ${SELF} verify-apply ${shellWord(file)} --project ${shellWord(project)} --apply --digest ${digest}`,
+    );
     return;
   }
 
@@ -184,7 +188,9 @@ export function cmdVerifyApply(db, args) {
     );
   }
   out(`[mem] Backup: ${run.backupPath}`);
-  out(`[mem] To undo (only while these rows are untouched): ${SELF} verify-apply --undo ${run.backupPath}`);
+  out(
+    `[mem] To undo (only while these rows are untouched): ${SELF} verify-apply --undo ${shellWord(run.backupPath)}`,
+  );
   if (run.checks.some((c) => !c.ok)) {
     fail('[mem] Applied, but read-back found mismatches — show the MISMATCH lines above to the user.');
   }

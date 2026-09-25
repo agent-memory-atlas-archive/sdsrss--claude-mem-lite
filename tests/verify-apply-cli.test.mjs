@@ -236,6 +236,35 @@ describe('verify-apply CLI', () => {
     );
   });
 
+  it('the printed apply and undo commands run as printed when a path contains a space', () => {
+    const a = seed();
+    const spaced = join(tmpHome, 'my proposals');
+    mkdirSync(spaced);
+    const file = join(spaced, 'p.json');
+    writeFileSync(file, JSON.stringify([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]));
+    const env = {
+      ...process.env,
+      HOME: tmpHome,
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PROJECT_DIR: projectDir,
+      MEM_NO_AUTO_ADOPT: '1',
+    };
+    delete env.CLAUDE_MEM_HOOK_RUNNING;
+    const sh = (cmd) =>
+      spawnSync('bash', ['-c', cmd], { encoding: 'utf8', env, cwd: projectDir, timeout: 15000 });
+    const dry = runCli(['verify-apply', file]);
+    const applyCmd = dry.stdout
+      .split('\n')
+      .find((l) => l.includes('--apply --digest'))
+      .trim();
+    const applied = sh(applyCmd);
+    expect(applied.status, applied.stderr).toBe(0);
+    const undoCmd = applied.stdout.match(/To undo[^:]*: (.*)$/m)[1];
+    const undone = sh(undoCmd);
+    expect(undone.status, undone.stderr).toBe(0);
+    expect(undone.stdout).toMatch(/Undo complete/);
+  });
+
   it("--apply refuses without the dry run's digest, or with a stale one, and writes nothing", () => {
     const a = seed();
     const file = writeProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);

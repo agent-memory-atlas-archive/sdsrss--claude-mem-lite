@@ -9,6 +9,15 @@ import { tmpdir } from 'os';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 let writes = 0;
+let unlinkFails = false;
+vi.mock('fs', async (orig) => {
+  const real = await orig();
+  const unlinkSync = (...args) => {
+    if (unlinkFails) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    return real.unlinkSync(...args);
+  };
+  return { ...real, default: { ...real, unlinkSync }, unlinkSync };
+});
 vi.mock('../lib/atomic-write.mjs', async (orig) => {
   const real = await orig();
   return {
@@ -24,6 +33,7 @@ import {
   parseProposals,
   planVerifyApply,
   runVerifyApply,
+  priorVerifyApplies,
   VERIFY_RETIRED_MARKER,
 } from '../lib/verify-apply-core.mjs';
 
@@ -32,6 +42,7 @@ describe('runVerifyApply when the post-apply record cannot be written', () => {
   let dir;
   beforeEach(() => {
     writes = 0;
+    unlinkFails = false;
     db = createTestDb();
     insertSession(db, { id: 'manual-p', project: 'p' });
     dir = mkdtempSync(join(tmpdir(), 'mem-verify-io-'));
@@ -59,5 +70,33 @@ describe('runVerifyApply when the post-apply record cannot be written', () => {
     );
     const [file] = readdirSync(dir);
     expect(JSON.parse(readFileSync(join(dir, file), 'utf8')).applied).toBeNull();
+  });
+
+  it('an abort whose backup cannot be removed names the leftover file, which does not count as an apply', () => {
+    const [a, b] = ['t1', 't2'].map((title) =>
+      Number(insertObs(db, { sessionId: 'manual-p', project: 'p', title, narrative: 'n' }).lastInsertRowid),
+    );
+    const { plan } = planVerifyApply(
+      db,
+      parseProposals([
+        { id: a, action: 'retire', verdict: 'STALE', evidence: 'x' },
+        { id: b, action: 'replace', verdict: 'STALE', narrative: 'ok', evidence: 'x' },
+      ]).entries,
+      { project: 'p' },
+    );
+    plan[1].narrative = '   '; // saveObservation throws inside the transaction (see the core test)
+    unlinkFails = true;
+    let err = null;
+    try {
+      runVerifyApply(db, plan, { backupDir: dir });
+    } catch (e) {
+      err = e;
+    }
+    const [left] = readdirSync(dir);
+    expect(left).toMatch(/^verify-.*\.json$/); // premise: the removal really failed
+    expect(err.message).toMatch(/nothing written to the database/);
+    expect(err.message).toContain(join(dir, left));
+    expect(err.message).toMatch(/could not be removed/);
+    expect(priorVerifyApplies(dir, [a, b])).toEqual([]);
   });
 });

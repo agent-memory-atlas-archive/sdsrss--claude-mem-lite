@@ -148,3 +148,91 @@ describe('cluster-merge does not fold away an approval that landed during its mo
     ]);
   });
 });
+
+// Pre-ship review of 9786874: the passes above were covered, and four more model passes were
+// not. The concepts and aliases backfills are deliberately NOT gated on optimized_at (see
+// findReenrichCandidates), so they still reach an approved row: the concepts pass replaced a
+// replacement's approved facts with model facts, and both passes wrote back a `text` they had
+// read before their model call. Smart-compress hid a row approved during its call, behind a
+// summary built from the pre-approval text.
+describe('backfills and smart-compress do not undo an approval', () => {
+  it('the concepts backfill adds concepts to an approved replacement but leaves its facts alone', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    const id = seed();
+    const { entries } = parseProposals([
+      {
+        id,
+        action: 'replace',
+        verdict: 'STALE',
+        narrative: APPROVED,
+        facts: 'USERFACT bounded',
+        evidence: 'x',
+      },
+    ]);
+    const { plan } = planVerifyApply(db, entries, { project: P });
+    const newId = runVerifyApply(db, plan, { backupDir: dir }).results[0].newId;
+    callModelJSONAsync.mockImplementation(async () => ({
+      concepts: ['locking'],
+      facts: ['MODELFACT unbounded'],
+    }));
+    await executeReenrich(db, 10, { scope: 'concepts' });
+    expect(callModelJSONAsync).toHaveBeenCalledTimes(1); // premise: the replacement WAS a candidate
+    const row = db.prepare('SELECT facts, concepts, text FROM observations WHERE id = ?').get(newId);
+    expect(row.concepts).toBe('locking');
+    expect(row.facts).toBe('USERFACT bounded');
+    expect(row.text).not.toContain('MODELFACT');
+  });
+
+  it('control: a row nobody approved still gets the model facts', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    const id = seed();
+    callModelJSONAsync.mockImplementation(async () => ({
+      concepts: ['locking'],
+      facts: ['MODELFACT unbounded'],
+    }));
+    await executeReenrich(db, 10, { scope: 'concepts' });
+    expect(db.prepare('SELECT facts FROM observations WHERE id = ?').get(id).facts).toBe(
+      'MODELFACT unbounded',
+    );
+  });
+
+  it.each([
+    ['concepts', { concepts: ['locking'], facts: ['MODELFACT from the stale text'] }],
+    ['aliases', { search_aliases: ['stalealias'] }],
+  ])('the %s backfill skips a row approved during its model call', async (scope, answer) => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    const id = seed();
+    let approvedRow = null;
+    callModelJSONAsync.mockImplementation(async () => {
+      approveEdit(id);
+      approvedRow = db.prepare('SELECT * FROM observations WHERE id = ?').get(id);
+      return answer;
+    });
+    const res = await executeReenrich(db, 10, { scope });
+    expect(callModelJSONAsync).toHaveBeenCalledTimes(1);
+    expect(approvedRow.narrative).toBe(APPROVED); // premise: the approval landed mid-call
+    expect(res.processed).toBe(0);
+    expect(db.prepare('SELECT * FROM observations WHERE id = ?').get(id)).toEqual(approvedRow);
+  });
+
+  it('smart-compress does not hide a row approved during its model call', async () => {
+    const { executeSmartCompress } = await import('../hook-optimize.mjs');
+    const DAY = 86400000;
+    const ids = [0, 1, 2].map((i) =>
+      seed({ importance: 1, title: `Race in balance deduction ${i}`, epochOffset: -40 * DAY + i * 1000 }),
+    );
+    const before = db.prepare('SELECT MAX(id) AS m FROM observations').get().m;
+    callModelJSONAsync.mockImplementation(async () => {
+      approveEdit(ids[0]);
+      return { should_compress: true, title: 'MODEL summary', narrative: 'MODEL summary of the stale text' };
+    });
+    const res = await executeSmartCompress(db, 5, {});
+    expect(callModelJSONAsync).toHaveBeenCalledTimes(1); // premise: the three rows formed a cluster
+    expect(res.compressed).toBe(0);
+    const rows = db
+      .prepare('SELECT id, COALESCE(compressed_into, 0) AS c FROM observations WHERE id IN (?, ?, ?)')
+      .all(...ids);
+    expect(rows.map((r) => r.c)).toEqual([0, 0, 0]);
+    expect(db.prepare('SELECT MAX(id) AS m FROM observations').get().m).toBe(before); // no summary row
+  });
+});

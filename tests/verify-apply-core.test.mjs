@@ -2,10 +2,11 @@
 // docs/superpowers/specs/2026-09-25-mem-verify-design.md). The agent decides WHAT is stale;
 // this module is the only thing that writes, so every property the spec promises about a
 // write is pinned here: validation before any write, one transaction, a read-back that can
-// say NO, and an undo that restores the backed-up row byte-for-byte.
+// say NO, and an undo that restores the backed-up row (its text re-scrubbed for secrets, since
+// 690d53f — so byte-for-byte only for a row that carried none).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -692,5 +693,96 @@ describe('re-review of dcc8f72 — the remaining gaps', () => {
     expect(notice(VERIFY_RETIRED_MARKER)).toMatch(/\/verify/);
     expect(notice('verify-undone')).toMatch(/undo/);
     expect(notice('auto-dedup')).toMatch(/auto-dedup or merge/);
+  });
+});
+
+describe('pre-ship review of 9786874', () => {
+  let db;
+  let dir;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'manual-p', project: P });
+    dir = mkdtempSync(join(tmpdir(), 'mem-verify-psr-'));
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('the undo record is what the apply transaction committed, not what the row holds after it', () => {
+    // A write committed by another process just after the apply's COMMIT, before the record is
+    // read, used to be recorded as the apply's own result — and --undo then restored over it.
+    // A Proxy runs that write the moment the IMMEDIATE transaction returns.
+    const id = seed(db);
+    let hook = () => db.prepare('UPDATE observations SET importance = 3 WHERE id = ?').run(id);
+    const proxy = new Proxy(db, {
+      get(t, k) {
+        if (k === 'transaction')
+          return (fn) => {
+            const tx = t.transaction(fn);
+            const w = (...a) => tx(...a);
+            w.immediate = (...a) => {
+              const r = tx.immediate(...a);
+              if (hook) {
+                const h = hook;
+                hook = null;
+                h();
+              }
+              return r;
+            };
+            return w;
+          };
+        const v = t[k];
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    });
+    const { plan } = planVerifyApply(
+      proxy,
+      parseProposals([{ id, action: 'edit', verdict: 'STALE', set: { narrative: 'fixed' }, evidence: 'x' }])
+        .entries,
+      { project: P },
+    );
+    const { backupPath } = runVerifyApply(proxy, plan, { backupDir: dir });
+    expect(hook).toBeNull(); // premise: the other write ran, after the commit
+    const res = undoVerifyBackup(db, JSON.parse(readFileSync(backupPath, 'utf8')));
+    expect(res.restored).toEqual([]);
+    expect(res.errors.join('\n')).toMatch(/changed since the apply \(importance\)/);
+    expect(db.prepare('SELECT importance FROM observations WHERE id = ?').get(id).importance).toBe(3);
+  });
+
+  it("refuses an edit that would copy a row's stored text into its empty narrative", () => {
+    // rebuildObservationDerived promotes the body of an import-shaped row (empty narrative, the
+    // payload in `text`) into `narrative` on ANY update — a write the dry run never showed.
+    const id = seed(db, { narrative: '', text: 'IMPORTBODY raw payload that is not in the title' });
+    const { plan, errors } = planVerifyApply(
+      db,
+      parseProposals([{ id, action: 'edit', verdict: 'PARTIAL', set: { title: 't2' }, evidence: 'x' }])
+        .entries,
+      { project: P },
+    );
+    expect(plan).toEqual([]);
+    expect(errors.join('\n')).toMatch(new RegExp(`#${id}: .*no narrative`));
+    // With the narrative in the set, the edit writes exactly what it shows.
+    const ok = planVerifyApply(
+      db,
+      parseProposals([
+        { id, action: 'edit', verdict: 'PARTIAL', set: { title: 't2', narrative: 'body' }, evidence: 'x' },
+      ]).entries,
+      { project: P },
+    );
+    expect(ok.errors).toEqual([]);
+  });
+
+  it('writes the backup readable by its owner only, like the database', () => {
+    const id = seed(db);
+    const { plan } = planVerifyApply(
+      db,
+      parseProposals([{ id, action: 'retire', verdict: 'STALE', evidence: 'x' }]).entries,
+      { project: P },
+    );
+    const backupDir = join(dir, 'backups');
+    const { backupPath } = runVerifyApply(db, plan, { backupDir });
+    expect(statSync(backupPath).mode & 0o777).toBe(0o600);
+    expect(statSync(backupDir).mode & 0o777).toBe(0o700);
   });
 });

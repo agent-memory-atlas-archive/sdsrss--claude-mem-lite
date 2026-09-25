@@ -33,7 +33,7 @@ describe('cli-path single source of truth', () => {
     expect(CLI_PATH.startsWith('/')).toBe(true); // absolute, never a tilde
     expect(CLI_PATH).not.toContain('~');
     expect(existsSync(CLI_PATH)).toBe(true); // the whole point: it exists
-    expect(CLI_INVOKE).toBe(`node ${CLI_PATH}`);
+    expect(CLI_INVOKE).toBe(`node ${shellWord(CLI_PATH)}`);
   });
 });
 
@@ -304,6 +304,37 @@ describe('source + manifest guards', () => {
     // Premise: the sweep sees the quoted population (hook registration, the binding hints,
     // CLI_INVOKE, the doctor remedies), so an empty offender list is a reading, not blindness.
     expect(quoted).toBeGreaterThanOrEqual(12);
+    expect(offenders).toEqual([]);
+  });
+
+  // The template sweep above cannot see string concatenation: pre-ship review of v6.12.1
+  // found `'… -- node ' + SERVER_PATH` in install.mjs and a `cd ${root}` remedy in
+  // lib/install-shape.mjs, both printed with the path bare.
+  const CONCAT_NODE = /'[^']*node '\s*\+|"[^"]*node "\s*\+|`[^`]*node `\s*\+/;
+  const BARE_CD = /\bcd \$\{/;
+  // Prose that happens to end a fragment on the word "node" — not a command.
+  const PROSE = ['The MCP server and the node `'];
+
+  test('the concatenation and `cd` detectors fire on the shapes they exist for', () => {
+    expect(CONCAT_NODE.test("warn('Try manually: claude mcp add -- node ' + SERVER_PATH);")).toBe(true);
+    expect(CONCAT_NODE.test("warn('Try manually: claude mcp add -- node \"' + SERVER_PATH + '\"');")).toBe(
+      false,
+    );
+    expect(BARE_CD.test('repair: `cd ${root} && npm install --omit=dev`,')).toBe(true);
+    expect(BARE_CD.test('repair: `cd "${root}" && npm install --omit=dev`,')).toBe(false);
+  });
+
+  test('no shipped module prints `node ` + path or `cd ${path}` with the path unquoted', () => {
+    const offenders = [];
+    for (const f of walkShipped()) {
+      readFileSync(f, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (/^\s*(\/\/|\*)/.test(line) || PROSE.some((p) => line.includes(p))) return;
+          if (CONCAT_NODE.test(line) || BARE_CD.test(line))
+            offenders.push(`${f.slice(ROOT.length + 1)}:${i + 1}`);
+        });
+    }
     expect(offenders).toEqual([]);
   });
 

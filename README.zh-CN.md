@@ -129,7 +129,7 @@ v5.1.0 到 v6.1.0 之间，`package.json` 声明的是 `os: ["darwin", "linux"]`
 
 插件模式会管理自己的运行时与钩子。SessionStart 时它现在只会**检查并提示**新版本，不会直接覆盖插件目录中的文件。插件模式请通过 Claude 的插件更新流程完成升级。
 
-> **插件安装本身即完整** —— hooks、MCP 工具、以及捆绑的 slash 命令（`/mem`、`/lesson`、`/bug`、`/adopt`）全部从插件内运行，无需第二步。slash 命令以从插件目录解析出的绝对路径调用捆绑 CLI（`${CLAUDE_PLUGIN_ROOT}/cli.mjs <cmd>`），因此不依赖 `PATH` 上的任何东西。全局 `claude-mem-lite` **shell** 命令（用于你自己在终端里跑查询）是**可选**的 —— `npm i -g claude-mem-lite` —— 且是**独立**的 npm 安装：插件的自动更新**不会**刷新它，想保持同步就重新跑 `npm i -g claude-mem-lite@latest`。插件要完整工作**并不需要**它。
+> **插件安装本身即完整** —— hooks、MCP 工具、以及捆绑的 slash 命令（`/mem`、`/lesson`、`/bug`、`/adopt`）全部从插件内运行，无需第二步。slash 命令以从插件目录解析出的绝对路径调用捆绑 CLI（`node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" <cmd>`），因此不依赖 `PATH` 上的任何东西。全局 `claude-mem-lite` **shell** 命令（用于你自己在终端里跑查询）是**可选**的 —— `npm i -g claude-mem-lite` —— 且是**独立**的 npm 安装：插件的自动更新**不会**刷新它，想保持同步就重新跑 `npm i -g claude-mem-lite@latest`。插件要完整工作**并不需要**它。
 
 ### 方式二：npx（一行命令）
 

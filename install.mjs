@@ -723,7 +723,7 @@ function registerMcpServer() {
       ok('MCP server registered: mem-lite');
     } catch (e) {
       fail('MCP registration failed: ' + e.message);
-      warn('Try manually: claude mcp add -s user -t stdio mem-lite -- node ' + SERVER_PATH);
+      warn('Try manually: claude mcp add -s user -t stdio mem-lite -- node "' + SERVER_PATH + '"');
     }
   }
 }

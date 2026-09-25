@@ -125,7 +125,7 @@ const NB_MANUAL_CMD =
 // INSTALL_DIR (import.meta.url) so it works on a plugin-only install, where
 // bare `claude-mem-lite` is not on PATH and ~/.claude-mem-lite/ holds no source.
 // cli.mjs routes `repair` → install.mjs. (review #3)
-const CLI_REPAIR = `node ${join(INSTALL_DIR, 'cli.mjs')} repair`;
+const CLI_REPAIR = `node "${join(INSTALL_DIR, 'cli.mjs')}" repair`;
 
 // Last-resort recovery string for users whose `cli.mjs repair` path
 // itself failed (install.mjs missing / repair errored / retry still drifting).

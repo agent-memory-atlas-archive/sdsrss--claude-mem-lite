@@ -9,11 +9,14 @@
 //   • plugin MANIFEST files (commands/*.md)  → literal ${CLAUDE_PLUGIN_ROOT}
 
 import { describe, test, expect } from 'vitest';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join, dirname } from 'node:path';
 
-import { CLI_PATH, CLI_INVOKE } from '../cli-path.mjs';
+import { CLI_PATH, CLI_INVOKE, shellWord } from '../cli-path.mjs';
+import { walkShipped } from './shipped-tree.mjs';
 import { tools } from '../tool-schemas.mjs';
 import { buildServerInstructions } from '../search-scoring.mjs';
 import { getDetailDoc, buildClaudeMdBlock } from '../adopt-content.mjs';
@@ -254,6 +257,54 @@ describe('source + manifest guards', () => {
       }
     }
     expect(seen).toBeGreaterThanOrEqual(16);
+  });
+
+  // A printed `node <path> …` is only runnable if the path stays ONE shell word. Before
+  // shellWord, a home directory with a space split CLI_INVOKE (the MCP instructions and every
+  // "Equivalent CLI" hint) and nine doctor/repair remedy lines into two arguments.
+  test('shellWord round-trips any path through bash as one word, and leaves a plain one byte-identical', () => {
+    for (const p of [
+      '/plain/p-1_x/cli.mjs',
+      '/home/John Smith/cli.mjs',
+      "/it's/here/cli.mjs",
+      '/a$b`c"d/cli.mjs',
+    ]) {
+      const r = spawnSync('bash', ['-c', `printf %s ${shellWord(p)}`], { encoding: 'utf8' });
+      expect(r.stdout, p).toBe(p);
+    }
+    expect(shellWord('/plain/p-1_x/cli.mjs')).toBe('/plain/p-1_x/cli.mjs');
+  });
+
+  test('CLI_INVOKE computed at a path with a space still names cli.mjs as one word', async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), 'cml-cli-path-')), 'dir with space');
+    mkdirSync(dir);
+    try {
+      copyFileSync(join(ROOT, 'cli-path.mjs'), join(dir, 'cli-path.mjs'));
+      const mod = await import(pathToFileURL(join(dir, 'cli-path.mjs')).href);
+      expect(mod.CLI_PATH).toBe(join(dir, 'cli.mjs'));
+      expect(mod.CLI_INVOKE.startsWith('node ')).toBe(true);
+      const r = spawnSync('bash', ['-c', `printf '%s|' ${mod.CLI_INVOKE.slice(5)}`], { encoding: 'utf8' });
+      expect(r.stdout).toBe(`${join(dir, 'cli.mjs')}|`);
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
+  });
+
+  test('no shipped module prints `node ${path}` with the path unquoted', () => {
+    const offenders = [];
+    let quoted = 0;
+    for (const f of walkShipped()) {
+      const lines = readFileSync(f, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        if (/^\s*(\/\/|\*)/.test(line)) return;
+        quoted += (line.match(/node "\$\{|node \$\{shellWord\(/g) || []).length;
+        if (/node \$\{(?!shellWord\()/.test(line)) offenders.push(`${f.slice(ROOT.length + 1)}:${i + 1}`);
+      });
+    }
+    // Premise: the sweep sees the quoted population (hook registration, the binding hints,
+    // CLI_INVOKE, the doctor remedies), so an empty offender list is a reading, not blindness.
+    expect(quoted).toBeGreaterThanOrEqual(12);
+    expect(offenders).toEqual([]);
   });
 
   test('cli-path.mjs is registered for shipping (SOURCE_FILES + package.json files)', () => {

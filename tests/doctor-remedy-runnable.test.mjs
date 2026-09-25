@@ -68,7 +68,7 @@ describe('doctor remedies name commands that can run', () => {
 
     const unrunnable = [];
     for (const line of lines) {
-      for (const m of line.matchAll(/node (\S+\.mjs) repair/g)) {
+      for (const m of line.matchAll(/node "?(\S+?\.mjs)"? repair/g)) {
         if (!existsSync(m[1])) unrunnable.push(`${m[1]}  ← from: ${line.slice(0, 120)}`);
       }
     }
@@ -88,7 +88,7 @@ describe('doctor remedies name commands that can run', () => {
 
     const lines = messages(doctorIn(home)).join('\n');
 
-    expect(lines).toMatch(/install\.mjs install/);
+    expect(lines).toMatch(/install\.mjs"? install/);
     expect(lines).toMatch(/no (claude-mem-lite )?(code|install)/i);
   });
 

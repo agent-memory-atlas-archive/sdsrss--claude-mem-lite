@@ -422,7 +422,7 @@ describe('doctor surfaces orphan hooks (v2.79)', () => {
 
       expect(output).toMatch(/Orphan hooks:.*settings\.json/);
       expect(output).toContain('/tmp/nonexistent-claude-mem-lite-doctor/hook.mjs');
-      expect(output).toMatch(/Repair:.*install\.mjs uninstall/);
+      expect(output).toMatch(/Repair:.*install\.mjs"? uninstall/);
     } finally {
       try {
         rmSync(home, { recursive: true, force: true });

@@ -23,6 +23,7 @@ import {
   markUndone,
 } from '../lib/verify-apply-core.mjs';
 import { parseArgs, out, fail, rejectBareStringFlags } from './common.mjs';
+import { shellWord } from '../cli-path.mjs';
 
 const USAGE =
   '[mem] Usage: claude-mem-lite verify-apply <proposals.json> [--project P]          (dry run)\n' +
@@ -34,8 +35,6 @@ const BACKUP_DIR = join(DB_DIR, 'backups');
 // The commands this prints must run as printed. `claude-mem-lite` is on PATH only after an
 // optional global npm install (which may also be a different, stale code home), so name the
 // node binary and THIS cli.mjs — the one that produced the plan.
-/** A path as one shell word: as-is when it is plain, single-quoted otherwise. */
-const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 const SELF = process.argv[1] ? `node ${shellWord(process.argv[1])}` : 'claude-mem-lite';
 
 function readJson(path, what) {

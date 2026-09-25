@@ -1755,8 +1755,9 @@ async function doctor() {
       return;
     }
     const last = checks[checks.length - 1];
-    // A detail before any check has nothing to attach to — same as today's drop, but the
-    // human face would show it, so this is the one line the two faces cannot share.
+    // Unreachable today: the Node-version check at the top of doctor() always records a
+    // check before the first log(). Kept as a guard — a detail with no check to attach to is
+    // dropped under --json, where the human face would have printed it.
     if (!last) return;
     (last.details ??= []).push(msg.trim());
   };

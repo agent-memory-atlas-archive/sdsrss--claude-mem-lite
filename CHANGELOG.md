@@ -2,6 +2,39 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.12.1 — commands that survive a space in the install path, and flags that say when they do nothing
+
+**Upgrade note.** No schema change, no migration, no config. Bugfixes only.
+
+**Commands printed for you to run now work when the install path contains a space.** The
+path was printed bare, so a home directory like `/home/Jane Doe` split it into two
+arguments:
+- The MCP server instructions and every tool's "Equivalent CLI" hint (`node <path>/cli.mjs`)
+  now quote the path, but only when it needs quoting. On an ordinary path the text the model
+  reads is byte-identical to v6.12.0.
+- The `doctor` and repair remedies (`install`, `uninstall`, `repair`, `rebuild-binding`, the
+  `cd … && npm install` binding fix), the hook launcher's repair line, the native-binding hint,
+  and the manual `claude mcp add` line now quote it with double quotes. Those still break on a
+  path containing `$`, a backtick or a UNC `\\`, which we have left as a known limit.
+- The bundled slash commands (`/mem`, `/lesson`, `/bug`, `/adopt`, `/unadopt`) run
+  `node "${CLAUDE_PLUGIN_ROOT}/cli.mjs"`; `/verify` already did.
+
+**A flag that only `verify-apply` reads now says so when you pass it to another command.**
+`recent --apply` (or `--digest`, `--undo`, `--print-project`) used to be accepted silently
+while doing nothing. The commands the memory CLI dispatches now print "`--apply` is read only
+by verify-apply; recent does not read it." They also stop suggesting those flags as typo fixes.
+Install-family commands (`doctor`, `status`, …) are not covered.
+
+**Recall before a Read or Edit prefers the newer memory on a tie.** When two memories about the
+same file were saved in the same millisecond, the older one took the single slot a Read gets.
+Both queries now break the tie by id. A read-only count on one real database found no such
+ties today (0 of 103 observations, 0 of 2681 events in the 60-day window).
+
+**For contributors.** The pre-commit hook runs the suite through `npm test`, so its vitest cache
+(45 MB for a full-suite run) goes to `~/.cache/tmp` instead of a RAM-backed `/tmp`. A
+secret-scrubbing test that could not fail was replaced. New guards cover each change, and each
+was checked by breaking what it protects.
+
 ## v6.12.0 — /verify: check memories against the code, and correct the stale ones you approve
 
 **Upgrade note.** No schema change, no migration, no config. One new command, and it only

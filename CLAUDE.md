@@ -2,7 +2,7 @@
 
 Lightweight persistent memory for Claude Code. MCP server + hooks plugin.
 
-- **Version**: 6.12.0 — **this exact string is a release guard.**
+- **Version**: 6.12.1 — **this exact string is a release guard.**
   `tests/install-e2e.test.mjs` asserts CLAUDE.md contains `**Version**: <v>` matching
   `package.json`, `plugin.json` and `marketplace.json`. Do not reformat this line.
 - **Runtime**: Node >=22 (20 dropped in v4.0.0), ESM · npm · better-sqlite3 + FTS5
@@ -105,9 +105,9 @@ scratch file there — moves the headline.
 
 | Baseline | Value | Tree / date |
 |----------|-------|-------------|
-| Tests | **427 files / 6613**, 0 skipped (1 skips without git hooks) | `feat/mem-verify` @ `404941b`, 2026-09-25, v6.12.0 tree |
+| Tests | **428 files / 6628**, 0 skipped (1 skips without git hooks) | `main` @ `c8cfab5`, 2026-09-25, v6.12.1 tree |
 | Knip | **32** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree, knip 6.35.1 |
-| Coverage | **85.33** stmts · **79.74** branches · **90.72** funcs · **86.57** lines | same tree, vitest 5.0.0 |
+| Coverage | **85.34** stmts · **79.75** branches · **90.72** funcs · **86.58** lines | same tree, vitest 5.0.0 |
 
 Coverage `include` is a **denylist** — staying out costs a named `exclude`. Outside by
 design: `install.mjs`, `server.mjs`, `hook.mjs`, `cli.mjs`, `benchmark/**`, `scripts/**`

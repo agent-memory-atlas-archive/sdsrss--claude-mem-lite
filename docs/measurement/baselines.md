@@ -36,6 +36,35 @@ text differs in kind.
 
 ## Test-case count — history and why it is partly generated
 
+### Superseded row moved from CLAUDE.md 2026-09-25 (v6.12.0)
+
+Verbatim, as it stood in CLAUDE.md's Baselines table until v6.12.1 replaced it:
+
+> | Tests | **427 files / 6613**, 0 skipped (1 skips without git hooks) | `feat/mem-verify` @ `404941b`, 2026-09-25, v6.12.0 tree |
+> | Knip | **32** unused exports, **0** unused files, **3** unlisted binaries | same tree, primary working tree, knip 6.35.1 |
+> | Coverage | **85.33** stmts · **79.74** branches · **90.72** funcs · **86.57** lines | same tree, vitest 5.0.0 |
+
+**The test-count delta is attributed per commit** from each commit's own pre-commit full-suite
+run (`npm test` on a clean tree equal to that commit, 2026-09-25). The commit bodies were
+later rewritten by a message-only rebase; every tree was checked equal
+(`git rev-parse <old>^{tree}` = `<new>^{tree}` for all nine), so the new SHAs are listed.
+
+| Commit | Change | Files | Cases | Δ |
+|--------|--------|-------|-------|---|
+| `7ea114e` | base (v6.12.0 release) | 427 | 6613 | — |
+| `f0cf027` | scoped verify-apply flags; commands/*.md quoting | 427 | 6618 | +5 |
+| `7a81507` | `node <path>` stays one shell word | 427 | 6621 | +3 |
+| `b631522` | pre-commit runs `npm test` (D#55) | 427 | 6623 | +2 |
+| `1ede5ca` | scrub assertion that could not fail (D#54) | 427 | 6623 | 0 |
+| `bbf1490` | pre-tool-recall id tiebreak (D#36), new test file | 428 | 6625 | +2 |
+| `b8d5d4a` | review repair: concatenated `node` + `cd` remedies | 428 | 6627 | +2 |
+| `83a38d9` | review repair: scoped-flag notice and suggester | 428 | 6628 | +1 |
+| `6ec2388` | review repair: D#55 guard forms | 428 | 6628 | 0 |
+| `c8cfab5` | claims-review corrections (comments, docs) | 428 | 6628 | 0 |
+
+Sum of deltas +15 = 6628 − 6613; residual 0. Coverage moved +0.01 on statements, branches
+and lines and 0.00 on functions (text reporter, same caliber as the row above).
+
 ### Superseded row moved from CLAUDE.md 2026-09-25 (v6.11.0)
 
 Verbatim, as it stood in CLAUDE.md's Baselines table until v6.12.0 replaced it:

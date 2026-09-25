@@ -150,4 +150,5 @@ Undo (`verify-apply --undo <backup>`) only works while the changed rows are exac
 apply left them: it refuses once any of them changes again — an edit, a supersede, or a
 routine background pass (importance decay, alias or concept backfill) — and it runs at most
 once. It then prints `Undo complete`; a `Warning: … could not be marked as undone` line means
-the undo still happened.
+the undo still happened. After an undo, the earlier apply command is refused: applying the
+same changes again needs a new dry run and the user's approval of its new digest.

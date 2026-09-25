@@ -17,6 +17,7 @@ import {
   parseProposals,
   planVerifyApply,
   planDigest,
+  priorVerifyApplies,
   runVerifyApply,
   undoVerifyBackup,
   markUndone,
@@ -29,6 +30,7 @@ const USAGE =
   '       claude-mem-lite verify-apply --undo <backup.json>';
 
 const SNIPPET_CONTEXT = 60;
+const BACKUP_DIR = join(DB_DIR, 'backups');
 // The commands this prints must run as printed. `claude-mem-lite` is on PATH only after an
 // optional global npm install (which may also be a different, stale code home), so name the
 // node binary and THIS cli.mjs — the one that produced the plan.
@@ -135,7 +137,14 @@ export function cmdVerifyApply(db, args) {
   const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
   const { plan, errors } = planVerifyApply(db, parsed.entries, { project });
   if (errors.length) return fail(`[mem] Refused, nothing written:\n  ${errors.join('\n  ')}`);
-  const digest = planDigest(plan, project);
+  const digest = planDigest(
+    plan,
+    project,
+    priorVerifyApplies(
+      BACKUP_DIR,
+      plan.map((p) => p.id),
+    ),
+  );
 
   if (!flags.apply) {
     out(`[mem] verify-apply plan — project ${project}, ${plan.length} change(s):`);
@@ -158,7 +167,7 @@ export function cmdVerifyApply(db, args) {
 
   let run;
   try {
-    run = runVerifyApply(db, plan, { backupDir: join(DB_DIR, 'backups') });
+    run = runVerifyApply(db, plan, { backupDir: BACKUP_DIR });
   } catch (e) {
     // One failure happens AFTER the commit: the undo record could not be written. The changes
     // are in the database then, and saying "nothing written" would be false.

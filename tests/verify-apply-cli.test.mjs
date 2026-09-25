@@ -207,6 +207,35 @@ describe('verify-apply CLI', () => {
     expect(again.stderr).toMatch(/already undone/);
   });
 
+  it('an apply that was undone cannot be replayed with its old digest; a fresh dry run can be approved', () => {
+    // Undo restores the rows exactly, so a digest of "plan + row state" alone comes back true
+    // after an undo, and the earlier approval would re-apply what the user just took back.
+    const a = seed();
+    const file = writeProposals([
+      { id: a, action: 'edit', verdict: 'STALE', set: { narrative: 'fixed in abc123' }, evidence: 'abc123' },
+    ]);
+    const d1 = digestOf(runCli(['verify-apply', file]).stdout);
+    expect(runCli(['verify-apply', file, '--apply', '--digest', d1]).exitCode).toBe(0);
+    const [backup] = readdirSync(backupsDir());
+    expect(runCli(['verify-apply', '--undo', join(backupsDir(), backup)]).exitCode).toBe(0);
+    const before = snapshot();
+
+    const replay = runCli(['verify-apply', file, '--apply', '--digest', d1]);
+    expect(replay.exitCode).toBe(1);
+    expect(replay.stderr).toMatch(/digest mismatch/);
+    expect(snapshot()).toBe(before);
+    expect(readdirSync(backupsDir())).toEqual([backup]);
+
+    const d2 = digestOf(runCli(['verify-apply', file]).stdout);
+    expect(d2).toMatch(/^[0-9a-f]{16}$/);
+    expect(d2).not.toBe(d1);
+    const again = runCli(['verify-apply', file, '--apply', '--digest', d2]);
+    expect(again.exitCode, again.stderr).toBe(0);
+    expect(db.prepare('SELECT narrative FROM observations WHERE id = ?').get(a).narrative).toBe(
+      'fixed in abc123',
+    );
+  });
+
   it("--apply refuses without the dry run's digest, or with a stale one, and writes nothing", () => {
     const a = seed();
     const file = writeProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);

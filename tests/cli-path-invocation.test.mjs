@@ -443,9 +443,12 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
   // launcherEntryPath, install.mjs's collectOrphanHookPaths), so their form is a stored
   // format, not a printed remedy; a format that desyncs from those parsers makes
   // launcherEntryPath resolve a live hook as missing, and hook-prune then deletes it.
-  // The paths are `<homedir>/.claude-mem-lite/scripts/*`, and double quotes already keep a
-  // space, an apostrophe, a trailing `$` and a Windows backslash intact; only a home
-  // containing `$name`, `${`, a backtick or `"` breaks them (bash-measured 2026-09-25).
+  // The paths are `<homedir>/.claude-mem-lite/scripts/*`. Double quotes keep a space, an
+  // apostrophe, a drive-letter Windows path and a `$` before `/`, `.`, a space or the end
+  // intact. They break on a `$` before a name character, a digit, `{`, `(` or a special
+  // parameter (`$$`, `$?`, `$_`, `$-`, …); on a backtick or `"`; and on a backslash before
+  // `$`, a backtick, `"` or `\` — so a UNC home `\\srv` loses a backslash (bash-measured
+  // 2026-09-25, 19 shapes).
   const VERB_THEN_DQ = /\b(?:node|cd|rm|mv|cp|bash|PATH=)(?:\s[^`]*?)?"(?:\$\{|' \+)/;
   const REGISTRATION = [
     'const nodeHook = (entry, ...args) => `node "${LAUNCHER_PATH}"',

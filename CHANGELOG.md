@@ -2,6 +2,70 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.12.0 — /verify: check memories against the code, and correct the stale ones you approve
+
+**Upgrade note.** No schema change, no migration, no config. One new command, and it only
+runs when you ask for it: nothing checks or rewrites your memories on its own. The changes to
+what already runs are narrower: the background model passes no longer rewrite, hide or merge
+a memory you approved through `/verify`, with the exceptions listed below, and the concepts
+backfill stops adding model-written facts to rows an earlier pass already processed.
+
+**`/verify` — memories go stale, and this is how to find and fix them.** A memory that was
+true when saved stops being true: the bug it records as open gets fixed, the number it quotes
+gets retracted, the function it names gets renamed. Measured on 118 live memories across 7
+repositories (2026-09-25): 12 were stale and 16 more partly out of date, and all 10 of the
+stale ones whose onset could be dated had gone stale within a day of being saved. No cheap
+automatic check could be trusted to find them: signals from the code (a file changed, a
+later commit touched it) flagged stale memories no more often than chance where they fired
+often enough to judge, a single model call per memory was right in 36% of its "stale"
+verdicts, and model-written corrections were false in 28 of 72, and one more was unsupported. What worked
+was an agent reading the code, so that is what `/verify` is:
+
+- The agent in your session checks each memory against the repository with read-only tools
+  (Grep, Read, `git log`) and drafts corrections for the stale ones — `edit` a detail,
+  `replace` the memory (the original stays as history), or `retire` it.
+- `claude-mem-lite verify-apply <proposals.json>` is the only thing that writes, and by
+  default it writes nothing: it prints every change, old and new text, and a plan digest.
+- After you approve that exact plan, `--apply --digest <d>` backs up the rows, applies every
+  change in one transaction (all or nothing), reads each row back and prints `ok` or
+  `MISMATCH`. It refuses if the proposals or the memories changed since the dry run.
+- `--undo <backup>` restores the rows while their content and state are as the apply left
+  them, and refuses once an edit, a supersede or a background pass has changed them since
+  (usage counters such as access counts do not count). Restored text is scrubbed for
+  secrets again on the way back. After an undo the old apply command is refused too:
+  applying the same changes again takes a new dry run and a new approval.
+- Backups are kept in `backups/` next to the database, readable by you only, until you
+  delete them. The refusal above rests on the backup file: delete it and the old apply
+  command would match again.
+
+**Background passes no longer undo an approval.** The daily background optimize run rewrites
+a memory's title and text with model output (re-enrich), hides rows the model rates
+unimportant, and merges near-duplicates. A memory you approved through `/verify` is now left
+out of all three — including when the approval lands while one of them is waiting on its
+model call, which before this release could overwrite the correction you had just approved.
+What still reaches an approved memory, and how:
+
+- The backfills that add search aliases, concepts and a scope still fill those on it. They no
+  longer write model facts onto it (the concepts backfill used to replace a memory's facts
+  with the model's), and they skip a memory that changed while their model call was running
+  instead of writing back text they had read before it. This facts rule applies to every row
+  an earlier pass has processed, not only approved ones.
+- Smart-compress still folds old (over 30 days), importance-1, never-accessed memories with
+  no lesson into one summary, approved or not. A memory edited, replaced or retired through
+  `/verify` while its model call is running makes it abort that group instead; so does
+  cluster-merge.
+- Concept normalization still rewrites concept keywords and search aliases into their
+  canonical forms.
+- Housekeeping that uses no model does not look at approvals either, and this release leaves
+  it as it was. Among what it does to an approved memory as to any other: importance decay and
+  boosts change its importance; an importance-1 memory without a lesson that was never
+  injected is hidden after 30 days and folded into a weekly summary after 60; one never read
+  or injected is marked idle and later purged; and auto-dedup can supersede a near-duplicate.
+  Any of these also makes a later `--undo` of that approval refuse.
+
+`get` on a memory that `/verify` retired now says so, instead of attributing it to an
+automatic dedup or merge.
+
 ## v6.11.0 — the second secret on a line, a budget that sat idle, and two faces of one install that disagreed
 
 **Upgrade note.** No schema change, no migration, no config. One default behaviour changes,

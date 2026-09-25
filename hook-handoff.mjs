@@ -386,18 +386,28 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // (session_summaries.key_decisions is a different column, a JSON array from Haiku), and
   // every existing assertion on it is a substring/regex match on the title, so the added
   // prefix is not a contract change for them.
-  const decisions = db
+  //
+  // The cap applies AFTER the low-signal filter (D#40). This read was `LIMIT 10` → filter →
+  // slice(0, 5), which made the SQL limit a reachability bound: six low-signal rows among the
+  // newest ten evicted older real decisions the section had room for, and two writers raise
+  // importance without reading the title, so such rows do reach this pool. Streaming and
+  // stopping at five keeps the JS filter exactly as it was (the SQL NOT LIKE twin is
+  // case-insensitive, so swapping it in would also change WHICH titles count as noise).
+  const decisions = [];
+  for (const d of db
     .prepare(
       `
     SELECT title, type FROM observations
     WHERE (memory_session_id = ? OR project = ?) AND COALESCE(importance, 1) >= 2
       AND ${liveObsFilterSql('')} ${obsWindowClause}
-    ORDER BY created_at_epoch DESC LIMIT 10
+    ORDER BY created_at_epoch DESC
   `,
     )
-    .all(sessionId, project, ...obsWindowParams)
-    .filter((d) => d.title && !LOW_SIGNAL_TITLE.test(d.title))
-    .slice(0, 5);
+    .iterate(sessionId, project, ...obsWindowParams)) {
+    if (!d.title || LOW_SIGNAL_TITLE.test(d.title)) continue;
+    decisions.push(d);
+    if (decisions.length === 5) break;
+  }
 
   // 5b. Next steps — the remaining work a paused note spells out, which is the only
   // next-step source in this system that a human wrote down on purpose. Deliberately not

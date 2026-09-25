@@ -2,6 +2,47 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.12.2 — an imported command no longer stores the start of a token, and pasted remedies quote any path exactly
+
+**Upgrade note.** No schema change, no migration, no config. One stored-data effect, below:
+an already imported row whose title contained something the secret scrubber rewrites gets a
+new title, so the next `import-jsonl` run re-adds that row once (likewise an imported prompt
+longer than 10,000 characters with such text in its first 10,000).
+
+**`import-jsonl` stored the first characters of a token that straddled a length cap.** Every
+imported text is capped — a tool call's title at 80 characters of its command, the stored
+body's tool input and tool result at 4,000 each, a prompt at 10,000 — and each cap ran BEFORE
+the secret scrubber. A token that crossed a cap arrived too short for its own pattern (a GitHub
+token needs 30+ characters after `ghp_`), so its prefix was stored in plaintext. With a 40-char
+token placed at each of 41 positions across a cap, the title stored a prefix at 29 of them and
+each of the other three caps at 24, the longest carrying 29 of the token's 36 secret
+characters. Everything is now scrubbed whole first and capped after.
+The title is also the cross-run dedup key, so a previously imported row whose title the
+scrubber would now rewrite is imported once more on the next run, then matches from then on.
+
+**Every printed shell remedy now quotes its path exactly.** v6.12.1 left `$`, backticks and
+quotes in a path as a known limit: the `doctor`/repair remedies wrapped paths in double
+quotes, which bash still expands. They now use single-quote quoting when a path needs it and
+print a plain path bare. This covers the destructive ones too — the `rm`/`mv`/`cp` commands
+that set aside or restore a damaged database — where a `$` in the path made the pasted command
+act on a different file. The hook commands written into `settings.json` are unchanged: they
+are a stored format that other code parses back, and double quotes already keep a space, an
+apostrophe and a drive-letter Windows path intact. Known limit: on Windows every path contains a
+backslash and so prints single-quoted, which PowerShell and Git Bash accept and `cmd.exe`
+does not — paste remedies into one of the first two.
+
+**The handoff's Key Decisions no longer lose real decisions to noise rows.** The section read
+the newest ten candidates, THEN dropped low-signal titles, THEN kept five, so six or more
+noise rows among the newest ten pushed older real decisions out. The cap now applies after the
+filter. Decisions saved in the same millisecond also come back newest first; before, the cap
+kept the oldest five of seven.
+
+**For maintainers.** `npm run audit:baseline` now runs the suite through `test:coverage`, so
+its vitest cache goes to disk instead of the `/tmp` tmpfs. Test-only: a flush-wait case that
+failed depending on how long a cold import took; a guard for the trailing-separator rule that
+could not fail; a backfill test that bypassed the noise filter the product runs; and the
+import title's "scrubbed once" guard is now behavioural instead of a source-text scan.
+
 ## v6.12.1 — commands that survive a space in the install path, and flags that say when they do nothing
 
 **Upgrade note.** No schema change, no migration, no config. Bugfixes only.

@@ -17,7 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -117,6 +117,42 @@ describe('pre-commit hook sync (P1-11)', () => {
           `  git config core.hooksPath .githooks`,
         'warning',
       );
+    }
+  });
+});
+
+// D#55: every run of the suite leaves a ~13 MB `<TMPDIR>/<id>/ssr` cache, and /tmp here is a
+// 12 GB tmpfs. 627 of them filled it and the Bash tool died with no output. 6e5439c moved
+// `npm test` / `test:coverage` to an on-disk TMPDIR, but the pre-commit hook still ran bare
+// `npx vitest run`, so every commit kept writing to /tmp (17 caches in 15 minutes on
+// 2026-09-25). One home for the TMPDIR choice: the package.json scripts. Every automated
+// caller goes through them.
+describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
+  const callers = [
+    'scripts/pre-commit.sh',
+    '.githooks/pre-commit',
+    ...readdirSync(join(REPO, '.github', 'workflows')).map((f) => `.github/workflows/${f}`),
+  ];
+
+  it('no automated caller runs vitest directly', () => {
+    const bare = [];
+    for (const rel of callers) {
+      readFileSync(join(REPO, rel), 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (/^\s*#/.test(line)) return;
+          if (/\b(npx\s+)?vitest\s+run\b/.test(line) && !/'[^']*vitest run[^']*'/.test(line))
+            bare.push(`${rel}:${i + 1}`);
+        });
+    }
+    expect(bare).toEqual([]);
+  });
+
+  it('the pre-commit hook runs the suite through npm test, whose script sets an on-disk TMPDIR', () => {
+    expect(readFileSync(join(REPO, CANONICAL), 'utf8')).toMatch(/^npm test\b/m);
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+    for (const script of ['test', 'test:coverage']) {
+      expect(pkg.scripts[script], script).toMatch(/TMPDIR="\$HOME\/\.cache\/tmp" vitest run/);
     }
   });
 });

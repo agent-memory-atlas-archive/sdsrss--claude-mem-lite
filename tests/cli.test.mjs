@@ -2543,6 +2543,30 @@ describe('CLI stats command extended', () => {
     }
   });
 
+  it('counts enrich-save ok/total from the metric rows it reads (D#30)', async () => {
+    // readMetrics(DB_DIR) reads the per-run containment sandbox that every test file shares,
+    // so which rows this file saw depended on which OTHER files had run: the loop body read
+    // 0 hits under coverage with this file alone and 55 alongside the metric writers, same
+    // tree, back to back (2026-09-25). The ok/total arithmetic was covered by accident and
+    // asserted by nothing. Stub the reader so it is asserted on purpose.
+    const metrics = await import('../lib/metrics.mjs');
+    const spy = vi
+      .spyOn(metrics, 'readMetrics')
+      .mockReturnValue([
+        { event: 'enrich_save', enriched: true },
+        { event: 'enrich_save', enriched: false },
+        { event: 'enrich_save', enriched: true },
+        { event: 'error_recall' },
+      ]);
+    try {
+      const output = await captureStdout(() => run(['stats']));
+      expect(spy).toHaveBeenCalled(); // premise: the stub is the reader stats used
+      expect(output).toContain('✚ enrich-save 2/3 ok');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('shows daily activity', async () => {
     insertObs(testDb, {
       sessionId: 'mem-s1',

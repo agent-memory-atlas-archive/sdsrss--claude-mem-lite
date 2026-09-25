@@ -405,6 +405,7 @@ surface — reach them through the CLI column in the second table.
 /mem <query>               # Shorthand for search
 /lesson <text>             # Save a non-obvious lesson to the events table (v2.31.0)
 /bug <text>                # Log a known bug + repro steps to the events table (v2.31.0)
+/mem:verify                # Check memories against the current code; correct stale ones after you approve
 ```
 
 ### Efficient Search Workflow

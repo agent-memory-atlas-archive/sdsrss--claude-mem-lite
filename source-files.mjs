@@ -175,6 +175,7 @@ export const SOURCE_FILES = [
   'cli/fts-check.mjs',
   'cli/doctor.mjs',
   'cli/activity.mjs',
+  'cli/verify-apply.mjs',
   'server/fts-check.mjs',
   // v2.32 invited-memory: memdir primitives + adopt/unadopt CLI
   // v3.13 CLAUDE.md-steering: claudemd.mjs project-tree managed block + migration
@@ -307,6 +308,9 @@ export const SOURCE_FILES = [
   // module-level `process.exit(0)` side effects that abort vitest workers on
   // direct import. Statically imported by hook.mjs SessionStart handler.
   'lib/upgrade-banner.mjs',
+  // /mem:verify's write half (validate -> backup -> one transaction -> read-back -> undo).
+  // Statically imported by cli/verify-apply.mjs.
+  'lib/verify-apply-core.mjs',
   // Per-table scrub helper for defense-in-depth at text-write INSERT paths.
   // Statically imported by hook-llm, hook-handoff, hook-optimize, hook,
   // mem-cli; reached transitively from server.mjs and cli.mjs.
@@ -401,6 +405,7 @@ const PLUGIN_DECLARATION_FILES = [
   'commands/unadopt.md',
   'commands/lesson.md',
   'commands/bug.md',
+  'commands/verify.md',
 ];
 
 // The complete set of files the release signature MUST cover: every runtime .mjs

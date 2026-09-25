@@ -3207,6 +3207,12 @@ Commands:
     --project P         Override the restored project for every row
     --dry-run           Preview what would be restored without writing
 
+  verify-apply <file>   Apply agent-verified memory corrections (/mem:verify writes these).
+                        Dry run by default; nothing is written without --apply.
+    --apply             Back up the target rows, apply in one transaction, read back
+    --project P         Project the targets must belong to (default: current)
+    --undo <backup>     Restore the rows from a backup written by --apply
+
   compress              Compress old low-value observations
     --execute           Execute compression (preview by default)
     --age-days N        Min age in days (default 30)
@@ -3609,6 +3615,7 @@ import { cmdDoctor } from './cli/doctor.mjs';
 
 // cmdActivity (T7 v2.31) extracted to cli/activity.mjs (v2.41 split).
 import { cmdActivity } from './cli/activity.mjs';
+import { cmdVerifyApply } from './cli/verify-apply.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // ─── Main Entry Point ────────────────────────────────────────────────────────
@@ -3890,6 +3897,9 @@ async function runDispatch(argv) {
         break;
       case 'activity':
         await cmdActivity(db, cmdArgs);
+        break;
+      case 'verify-apply':
+        cmdVerifyApply(db, cmdArgs);
         break;
       default:
         out(`[mem] Unknown command: ${cmd}`);

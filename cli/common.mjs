@@ -399,6 +399,11 @@ export const KNOWN_CLI_FLAGS = new Set([
   // warn-on-every-unknown-flag flip turned the omission into a false warning on a
   // documented, working command.
   'prompts-limit',
+  // `verify-apply --apply` / `--undo <backup>` — read as flags.apply / flags.undo in
+  // cli/verify-apply.mjs. Missing here, a working apply printed "Unknown flag --apply — ignored,
+  // it had no effect" beside its own read-back. Pinned by tests/verify-apply-cli.test.mjs.
+  'apply',
+  'undo',
   // Entries here MUST be read by a `claude-mem-lite` subcommand. A flag that no
   // command reads is worse than an absent one: it converts the "ignored, it had no
   // effect" warning into silence, so the user's dropped flag reads as accepted.

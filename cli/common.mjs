@@ -417,6 +417,19 @@ export const KNOWN_CLI_FLAGS = new Set([
   // --has?" suggestion. Locked by tests/cli-flag-allowlist.test.mjs.
 ]);
 
+/**
+ * Flags exactly ONE subcommand reads, mapped to that command. KNOWN_CLI_FLAGS is a union, so
+ * without this `recent --apply` was accepted in silence while `--apply` did nothing there.
+ * Every other command now reports such a flag as ignored. Only flags with a single reader
+ * belong here; tests/cli-flag-allowlist.test.mjs derives that from the sources.
+ */
+export const COMMAND_SCOPED_FLAGS = new Map([
+  ['apply', 'verify-apply'],
+  ['digest', 'verify-apply'],
+  ['print-project', 'verify-apply'],
+  ['undo', 'verify-apply'],
+]);
+
 /** Levenshtein distance, early-exit past `max` (cheap enough for a handful of flags). */
 function editDistance(a, b, max = 2) {
   const m = a.length,
@@ -444,12 +457,19 @@ function editDistance(a, b, max = 2) {
  * project — a typo produced a wrong result with zero signal. Returns [{flag, suggestion}].
  * Unknown flags with NO close match are omitted: they may be a valid flag we didn't
  * catalog, so silence beats a false alarm. Warning-only by contract — never fails.
+ * A flag in COMMAND_SCOPED_FLAGS given to any other `cmd` is reported too, with `owner` set.
  * @param {object} flags Parsed flags from parseArgs.
- * @returns {Array<{flag: string, suggestion: string}>}
+ * @param {string} [cmd] The subcommand being run; without it scoped flags are not checked.
+ * @returns {Array<{flag: string, suggestion: string|null, owner?: string}>}
  */
-export function suggestUnknownFlags(flags) {
+export function suggestUnknownFlags(flags, cmd) {
   const result = [];
   for (const key of Object.keys(flags)) {
+    const owner = COMMAND_SCOPED_FLAGS.get(key);
+    if (cmd && owner && owner !== cmd) {
+      result.push({ flag: key, suggestion: null, owner });
+      continue;
+    }
     if (!key || KNOWN_CLI_FLAGS.has(key)) continue;
     let best = null,
       bestDist = 3;

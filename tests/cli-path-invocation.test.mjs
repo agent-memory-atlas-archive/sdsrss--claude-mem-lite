@@ -9,7 +9,7 @@
 //   • plugin MANIFEST files (commands/*.md)  → literal ${CLAUDE_PLUGIN_ROOT}
 
 import { describe, test, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 
@@ -236,6 +236,24 @@ describe('source + manifest guards', () => {
       expect(src, `${rel} still contains the broken tilde path`).not.toContain(BROKEN);
       expect(src).toContain('${CLAUDE_PLUGIN_ROOT}/cli.mjs');
     }
+  });
+
+  test('every ${CLAUDE_PLUGIN_ROOT} in commands/*.md is double-quoted', () => {
+    // An unquoted root splits on a space in the install path (a home directory with a space
+    // in it), and `!`-prefixed lines run through the shell as written. Every manifest, not a
+    // hand-kept list: the list above had drifted to five of the eight files.
+    const files = readdirSync(join(ROOT, 'commands')).filter((f) => f.endsWith('.md'));
+    expect(files.length).toBeGreaterThanOrEqual(8);
+    let seen = 0;
+    for (const f of files) {
+      const src = readFileSync(join(ROOT, 'commands', f), 'utf8');
+      for (const m of src.matchAll(/\$\{CLAUDE_PLUGIN_ROOT\}/g)) {
+        seen++;
+        const line = src.slice(src.lastIndexOf('\n', m.index) + 1, src.indexOf('\n', m.index));
+        expect(src[m.index - 1], `commands/${f}: unquoted plugin root in: ${line.trim()}`).toBe('"');
+      }
+    }
+    expect(seen).toBeGreaterThanOrEqual(16);
   });
 
   test('cli-path.mjs is registered for shipping (SOURCE_FILES + package.json files)', () => {

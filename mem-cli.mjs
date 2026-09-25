@@ -3692,11 +3692,13 @@ async function runDispatch(argv) {
   // project — a misspelled flag changed results with zero signal. Warn (stderr, non-fatal)
   // when a flag looks like a misspelling of a real one; stdout + exit code stay untouched,
   // so JSON/text consumers are unaffected. Mirrors the unknown-COMMAND suggester in cli.mjs.
-  for (const { flag, suggestion } of suggestUnknownFlags(parseArgs(cmdArgs).flags)) {
+  for (const { flag, suggestion, owner } of suggestUnknownFlags(parseArgs(cmdArgs).flags, cmd)) {
     process.stderr.write(
-      suggestion
-        ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
-        : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,
+      owner
+        ? `[mem] --${flag} is read only by ${owner} — ignored by ${cmd}, it had no effect.\n`
+        : suggestion
+          ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
+          : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,
     );
   }
 

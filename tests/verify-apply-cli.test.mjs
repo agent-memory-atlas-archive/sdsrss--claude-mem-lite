@@ -316,6 +316,15 @@ describe('verify-apply CLI', () => {
     expect(r.stdout).toContain('HIDDEN-TAIL: the last clause.');
   });
 
+  it('another command given a verify-apply flag says it was ignored, instead of accepting it in silence', () => {
+    const before = snapshot();
+    const r = runCli(['recent', '--apply', '--digest', 'abc']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/--apply is read only by verify-apply — ignored by recent/);
+    expect(r.stderr).toMatch(/--digest is read only by verify-apply — ignored by recent/);
+    expect(snapshot()).toBe(before);
+  });
+
   it('--print-project prints the project verify-apply resolves from the working directory, and writes nothing', () => {
     const before = snapshot();
     const r = runCli(['verify-apply', '--print-project']);

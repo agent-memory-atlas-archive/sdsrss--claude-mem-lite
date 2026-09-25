@@ -86,6 +86,21 @@ describe('re-enrich does not overwrite an approval that landed during its model 
     expect(row).toEqual({ title: 'Race in balance deduction', narrative: APPROVED, lesson_learned: null });
   });
 
+  it('narrow auto-hide (model says importance 0) does not hide a row approved during the call', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    const id = seed();
+    callModelJSONAsync.mockImplementation(async () => {
+      approveEdit(id);
+      return { type: 'bugfix', importance: 0, title: 'MODEL title', narrative: 'MODEL narrative' };
+    });
+    await executeReenrich(db, 10, { scope: 'narrow' });
+    expect(callModelJSONAsync).toHaveBeenCalledTimes(1);
+    const row = db
+      .prepare('SELECT narrative, COALESCE(compressed_into, 0) AS c FROM observations WHERE id = ?')
+      .get(id);
+    expect(row).toEqual({ narrative: APPROVED, c: 0 });
+  });
+
   it('and an approved row is not a candidate at all afterwards', async () => {
     const { findReenrichCandidates } = await import('../hook-optimize.mjs');
     const id = seed();

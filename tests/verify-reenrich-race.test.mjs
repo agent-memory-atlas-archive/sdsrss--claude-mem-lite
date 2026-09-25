@@ -9,7 +9,7 @@
 // wrote back the PRE-edit narrative it had read before the call. The mocked model call below
 // runs the approval inside that window.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
@@ -23,7 +23,12 @@ vi.mock('../haiku-client.mjs', () => ({
   BG_LLM_TIMEOUT_MS: 45000,
 }));
 import { callModelJSONAsync } from '../haiku-client.mjs';
-import { parseProposals, planVerifyApply, runVerifyApply } from '../lib/verify-apply-core.mjs';
+import {
+  parseProposals,
+  planVerifyApply,
+  runVerifyApply,
+  undoVerifyBackup,
+} from '../lib/verify-apply-core.mjs';
 
 const P = 'test';
 const LONG =
@@ -54,6 +59,13 @@ function seed(over = {}) {
       ...over,
     }).lastInsertRowid,
   );
+}
+
+function approveWith(entry) {
+  const { entries } = parseProposals([entry]);
+  const { plan, errors } = planVerifyApply(db, entries, { project: P });
+  expect(errors).toEqual([]);
+  runVerifyApply(db, plan, { backupDir: dir });
 }
 
 function approveEdit(id) {
@@ -199,6 +211,7 @@ describe('backfills and smart-compress do not undo an approval', () => {
   it.each([
     ['concepts', { concepts: ['locking'], facts: ['MODELFACT from the stale text'] }],
     ['aliases', { search_aliases: ['stalealias'] }],
+    ['scopes', { scope: 'environment' }],
   ])('the %s backfill skips a row approved during its model call', async (scope, answer) => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
     const id = seed();
@@ -215,24 +228,99 @@ describe('backfills and smart-compress do not undo an approval', () => {
     expect(db.prepare('SELECT * FROM observations WHERE id = ?').get(id)).toEqual(approvedRow);
   });
 
-  it('smart-compress does not hide a row approved during its model call', async () => {
-    const { executeSmartCompress } = await import('../hook-optimize.mjs');
-    const DAY = 86400000;
-    const ids = [0, 1, 2].map((i) =>
-      seed({ importance: 1, title: `Race in balance deduction ${i}`, epochOffset: -40 * DAY + i * 1000 }),
-    );
-    const before = db.prepare('SELECT MAX(id) AS m FROM observations').get().m;
-    callModelJSONAsync.mockImplementation(async () => {
-      approveEdit(ids[0]);
-      return { should_compress: true, title: 'MODEL summary', narrative: 'MODEL summary of the stale text' };
-    });
-    const res = await executeSmartCompress(db, 5, {});
-    expect(callModelJSONAsync).toHaveBeenCalledTimes(1); // premise: the three rows formed a cluster
-    expect(res.compressed).toBe(0);
-    const rows = db
-      .prepare('SELECT id, COALESCE(compressed_into, 0) AS c FROM observations WHERE id IN (?, ?, ?)')
-      .all(...ids);
-    expect(rows.map((r) => r.c)).toEqual([0, 0, 0]);
-    expect(db.prepare('SELECT MAX(id) AS m FROM observations').get().m).toBe(before); // no summary row
-  });
+  // Delta review of the first repair (74a54ec): an edit stamps the row it approves, but a retire or a replace
+  // supersedes the original without stamping it, so a stamp check alone saw neither.
+  const approve = {
+    edit: (id) => approveEdit(id),
+    retire: (id) => approveWith({ id, action: 'retire', verdict: 'STALE', evidence: 'x' }),
+    replace: (id) =>
+      approveWith({ id, action: 'replace', verdict: 'STALE', narrative: APPROVED, evidence: 'x' }),
+  };
+
+  it.each(['retire', 'replace'])(
+    'the scopes backfill writes nothing on a row approved (%s) during its model call, so --undo still works',
+    async (action) => {
+      // Neither action changes the original's text or stamp; only the live guard stops the
+      // write, and without it the undo of that approval is refused on `scope`.
+      const { executeReenrich } = await import('../hook-optimize.mjs');
+      const id = seed();
+      let backup = null;
+      callModelJSONAsync.mockImplementation(async () => {
+        const entry =
+          action === 'retire'
+            ? { id, action, verdict: 'STALE', evidence: 'x' }
+            : { id, action, verdict: 'STALE', narrative: APPROVED, evidence: 'x' };
+        const { plan } = planVerifyApply(db, parseProposals([entry]).entries, { project: P });
+        backup = JSON.parse(readFileSync(runVerifyApply(db, plan, { backupDir: dir }).backupPath, 'utf8'));
+        return { scope: 'environment' };
+      });
+      const res = await executeReenrich(db, 10, { scope: 'scopes' });
+      expect(callModelJSONAsync).toHaveBeenCalledTimes(1);
+      expect(res.processed).toBe(0);
+      expect(db.prepare('SELECT scope FROM observations WHERE id = ?').get(id).scope).toBeNull();
+      expect(undoVerifyBackup(db, backup).errors).toEqual([]);
+    },
+  );
+
+  it.each(['edit', 'retire', 'replace'])(
+    'smart-compress lands no summary when a member is approved (%s) during its model call',
+    async (action) => {
+      const { executeSmartCompress } = await import('../hook-optimize.mjs');
+      const DAY = 86400000;
+      const ids = [0, 1, 2].map((i) =>
+        seed({ importance: 1, title: `Race in balance deduction ${i}`, epochOffset: -40 * DAY + i * 1000 }),
+      );
+      let maxAfterApproval = null;
+      callModelJSONAsync.mockImplementation(async () => {
+        approve[action](ids[0]);
+        maxAfterApproval = db.prepare('SELECT MAX(id) AS m FROM observations').get().m;
+        return {
+          should_compress: true,
+          title: 'MODEL summary',
+          narrative: 'MODEL summary of the stale text',
+        };
+      });
+      const res = await executeSmartCompress(db, 5, {});
+      expect(callModelJSONAsync).toHaveBeenCalledTimes(1); // premise: the three rows formed a cluster
+      expect(res.compressed).toBe(0);
+      const rows = db
+        .prepare('SELECT id, COALESCE(compressed_into, 0) AS c FROM observations WHERE id IN (?, ?, ?)')
+        .all(...ids);
+      expect(rows.map((r) => r.c)).toEqual([0, 0, 0]);
+      expect(db.prepare('SELECT MAX(id) AS m FROM observations').get().m).toBe(maxAfterApproval); // no summary
+    },
+  );
+
+  it.each(['retire', 'replace'])(
+    'cluster-merge does not fold in a member approved (%s) during its model call',
+    async (action) => {
+      const { executeMergeCluster } = await import('../hook-optimize.mjs');
+      const a = seed();
+      const b = seed({ title: 'Race in balance deduction (dup)', importance: 1 });
+      const cluster = db
+        .prepare(
+          'SELECT id, title, narrative, project, type, access_count, importance, created_at_epoch, minhash_sig, lesson_learned, concepts, facts FROM observations WHERE id IN (?, ?)',
+        )
+        .all(a, b);
+      callModelJSONAsync.mockImplementation(async () => {
+        approve[action](b);
+        return {
+          should_merge: true,
+          merged_title: 'MODEL merged title',
+          merged_narrative: 'MODEL merged narrative with the stale claim of b',
+          merged_concepts: [],
+          merged_facts: [],
+          merged_lesson: null,
+          importance: 2,
+        };
+      });
+      const res = await executeMergeCluster(db, cluster);
+      expect(callModelJSONAsync).toHaveBeenCalledTimes(1);
+      expect(res.merged).toBe(false);
+      expect(db.prepare('SELECT title, narrative FROM observations WHERE id = ?').get(a)).toEqual({
+        title: 'Race in balance deduction',
+        narrative: LONG,
+      });
+    },
+  );
 });

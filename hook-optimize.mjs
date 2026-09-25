@@ -101,7 +101,7 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     // injects lesson-bearing rows — classifying those first is what makes the
     // lever usable before the backlog is fully drained.
     const stmt = db.prepare(`
-      SELECT id, title, narrative, type, lesson_learned, importance, project
+      SELECT id, title, narrative, type, lesson_learned, importance, project, text, optimized_at
       FROM observations
       WHERE ${liveObsFilterSql('')}
         AND scope IS NULL
@@ -302,10 +302,16 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         }
         // `AND scope IS NULL` is the fill-only-empty guard: a save-enrich worker or
         // an episode upgrade can land between candidate selection and this write,
-        // and a classifier round-trip is long enough for that to be real.
+        // and a classifier round-trip is long enough for that to be real. The live guard
+        // and `text IS ? AND optimized_at IS ?` are the aliases branch's, for its reasons:
+        // the classification was made from the text read before the call, so it may land
+        // only on a live row still holding that text (a /verify approval changes both).
         const res = db
-          .prepare('UPDATE observations SET scope = ? WHERE id = ? AND scope IS NULL')
-          .run(scopeValue, cand.id);
+          .prepare(
+            `UPDATE observations SET scope = ?
+             WHERE id = ? AND scope IS NULL AND ${liveObsFilterSql('')} AND text IS ? AND optimized_at IS ?`,
+          )
+          .run(scopeValue, cand.id, cand.text, cand.optimized_at);
         if (res.changes === 0) {
           skipped++;
           continue;
@@ -1275,17 +1281,20 @@ Return ONLY valid JSON:
         .prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`)
         .get(keeper.id);
       if (!keeperLive) return false;
-      // findMergeCandidates selects only rows with optimized_at NULL; one stamped since then
-      // was approved by /verify (or rewritten by another pass) during the model call, and
-      // folding it into a model summary would overwrite exactly what was approved
-      // (tests/verify-reenrich-race.test.mjs). Abort the whole cluster rather than merge part.
+      // findMergeCandidates selects only live rows with optimized_at NULL. A member stamped
+      // since then was edited through /verify (or rewritten by another pass) during the model
+      // call; a member no longer live was retired or replaced (a /verify retire or replace
+      // supersedes the original without stamping it), or superseded by another writer. The
+      // merged text was written from all of them as they were, so folding it in would bring
+      // a withdrawn claim back inside the keeper (tests/verify-reenrich-race.test.mjs).
+      // Abort the whole cluster rather than merge part.
       const clusterIds = cluster.map((o) => o.id);
-      const stamped = db
+      const unchanged = db
         .prepare(
-          `SELECT COUNT(*) AS n FROM observations WHERE id IN (${clusterIds.map(() => '?').join(',')}) AND optimized_at IS NOT NULL`,
+          `SELECT COUNT(*) AS n FROM observations WHERE id IN (${clusterIds.map(() => '?').join(',')}) AND optimized_at IS NULL AND ${liveObsFilterSql('')}`,
         )
         .get(...clusterIds).n;
-      if (stamped > 0) return false;
+      if (unchanged !== clusterIds.length) return false;
 
       // Snapshot the keeper's pre-merge row BEFORE overwriting it, so its original
       // full text survives as a recoverable compressed_into child (mirroring
@@ -1531,12 +1540,22 @@ export async function executeSmartCompressCluster(db, observations, project) {
 
     const summaryId = db.transaction(() => {
       // The summary was written from the members as they were BEFORE the Sonnet call. A member
-      // stamped since then was approved through /verify (or rewritten by another pass) during
-      // the call, and hiding it behind a summary of its pre-approval text would put the stale
-      // claim back as a live row and bury the correction (pre-ship review of 9786874, P2-1).
-      // Abort the whole cluster, as cluster-merge does.
-      const stampNow = db.prepare('SELECT optimized_at FROM observations WHERE id = ?');
-      if (observations.some((o) => (stampNow.get(o.id)?.optimized_at ?? null) !== (o.optimized_at ?? null))) {
+      // whose stamp changed since was edited through /verify (or rewritten by another pass);
+      // a member no longer live was retired or replaced (neither stamps the original) or
+      // superseded by another writer. A summary of their earlier text would put the withdrawn
+      // claim back as a live row and hide the rest behind it (pre-ship review of 9786874,
+      // P2-1; delta review of the first repair). Abort the whole cluster, as cluster-merge does.
+      // Callers pass rows as findSmartCompressCandidates selects them, optimized_at included:
+      // a row without the column reads as unstamped, so a stamped member would abort (safe).
+      const nowRow = db.prepare(
+        `SELECT optimized_at FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
+      );
+      if (
+        observations.some((o) => {
+          const cur = nowRow.get(o.id);
+          return !cur || (cur.optimized_at ?? null) !== (o.optimized_at ?? null);
+        })
+      ) {
         return null;
       }
       const sessionId = `compress-${project}`;
@@ -1602,7 +1621,8 @@ export async function executeSmartCompressCluster(db, observations, project) {
       // Live guard (audit 2026-09-02 P0-3): the candidate SELECT is separated from this write
       // by a Sonnet round-trip, so a member may already be compressed into another summary or
       // tombstoned. Re-pointing it here would silently remove a row from that summary's child
-      // set. Members that lost liveness stay where they are; the summary still lands.
+      // set. The check at the top of this transaction now aborts in that case; the guard stays
+      // so this UPDATE can never re-point a dead row on its own.
       db.prepare(
         `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
       ).run(sId, ...obsIds);

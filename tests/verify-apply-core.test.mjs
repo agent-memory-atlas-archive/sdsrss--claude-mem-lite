@@ -1,5 +1,5 @@
-// verify-apply — the deterministic write half of /verify (spec:
-// docs/superpowers/specs/2026-09-25-mem-verify-design.md). The agent decides WHAT is stale;
+// verify-apply — the deterministic write half of /verify (contract: commands/verify.md).
+// The agent decides WHAT is stale;
 // this module is the only thing that writes, so every property the spec promises about a
 // write is pinned here: validation before any write, one transaction, a read-back that can
 // say NO, and an undo that restores the backed-up row (its text re-scrubbed for secrets, since
@@ -771,6 +771,51 @@ describe('pre-ship review of 9786874', () => {
       { project: P },
     );
     expect(ok.errors).toEqual([]);
+  });
+
+  it('allows an edit on a narrative-less row whose text is a derived blob, where nothing is filled', () => {
+    // hook-llm rows carry narrative '' and a text made only of their own concepts/aliases; the
+    // repair does not promote those, so refusing them blocked a legitimate lesson edit.
+    const id = seed(db, { narrative: '', text: 'cache lru', lessonLearned: null });
+    db.prepare("UPDATE observations SET concepts = 'cache lru' WHERE id = ?").run(id);
+    const { plan, errors } = planVerifyApply(
+      db,
+      parseProposals([
+        { id, action: 'edit', verdict: 'PARTIAL', set: { lesson_learned: 'l' }, evidence: 'x' },
+      ]).entries,
+      { project: P },
+    );
+    expect(errors).toEqual([]);
+    runVerifyApply(db, plan, { backupDir: dir });
+    expect(db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id).narrative).toBe('');
+  });
+
+  it('refuses when the edit itself would make such a row promotable (it changes the known words)', () => {
+    const id = seed(db, { title: 'cache', narrative: '', text: 'cache lru', lessonLearned: null });
+    db.prepare("UPDATE observations SET concepts = 'lru' WHERE id = ?").run(id);
+    const { errors } = planVerifyApply(
+      db,
+      parseProposals([{ id, action: 'edit', verdict: 'PARTIAL', set: { title: 'other' }, evidence: 'x' }])
+        .entries,
+      { project: P },
+    );
+    expect(errors.join('\n')).toMatch(/no narrative/);
+  });
+
+  it('judges that refusal on the values the edit STORES, which are scrubbed', () => {
+    // applyObsUpdate scrubs the set values before the rebuild runs, so a raw token the proposal
+    // repeats is not "known" to the rebuild, and a legacy row's unscrubbed text gets promoted.
+    const token = 'AKIA' + 'Q'.repeat(16); // assembled: a whole literal trips push protection
+    const id = seed(db, { narrative: '', text: `cache ${token}`, lessonLearned: null });
+    db.prepare("UPDATE observations SET concepts = 'cache' WHERE id = ?").run(id);
+    const { errors } = planVerifyApply(
+      db,
+      parseProposals([
+        { id, action: 'edit', verdict: 'PARTIAL', set: { concepts: `cache ${token}` }, evidence: 'x' },
+      ]).entries,
+      { project: P },
+    );
+    expect(errors.join('\n')).toMatch(/no narrative/);
   });
 
   it('writes the backup readable by its owner only, like the database', () => {

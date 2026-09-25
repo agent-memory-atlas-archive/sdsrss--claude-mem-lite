@@ -648,7 +648,8 @@ try {
       ORDER BY
         CASE WHEN o.lesson_learned IS NOT NULL AND o.lesson_learned != '' THEN 0 ELSE 1 END,
         ${citeFactorClause('o')} DESC,
-        o.created_at_epoch DESC
+        o.created_at_epoch DESC,
+        o.id DESC
       LIMIT ${obsLimit}
     `,
       )
@@ -691,7 +692,8 @@ try {
           ${eventsBodyFilter}
         ORDER BY
           CASE WHEN body IS NOT NULL AND body != '' THEN 0 ELSE 1 END,
-          created_at_epoch DESC
+          created_at_epoch DESC,
+          id DESC
         LIMIT ${eventsLimit}
       `,
         )

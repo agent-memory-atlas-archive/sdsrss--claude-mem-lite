@@ -73,6 +73,7 @@ function writeProposals(entries) {
 }
 
 const backupsDir = () => join(dataDir, 'backups');
+const digestOf = (stdout) => (stdout.match(/--digest ([0-9a-f]{16})/) || [])[1];
 
 beforeEach(() => {
   tmpHome = join(tmpdir(), `mem-verify-cli-${randomUUID().slice(0, 8)}`);
@@ -119,6 +120,10 @@ describe('verify-apply CLI', () => {
     expect(r.stdout).toMatch(new RegExp(`#${a}\\b.*edit`));
     expect(r.stdout).toMatch(new RegExp(`#${b}\\b.*retire`));
     expect(r.stdout).toMatch(/Dry run/);
+    // The user approves what they SEE: the new text itself, not a length or a field name.
+    expect(r.stdout).toContain('The bug was fixed in abc123.');
+    expect(digestOf(r.stdout)).toMatch(/^[0-9a-f]{16}$/);
+    expect(r.stdout).toContain(`--project ${PROJECT} --apply --digest ${digestOf(r.stdout)}`);
     expect(r.stderr).not.toMatch(/Unknown flag/);
     expect(snapshot()).toBe(before);
     expect(existsSync(backupsDir())).toBe(false);
@@ -170,7 +175,8 @@ describe('verify-apply CLI', () => {
       { id: c, action: 'retire', verdict: 'STALE', evidence: 'def456' },
     ]);
 
-    const r = runCli(['verify-apply', file, '--apply']);
+    const dry = runCli(['verify-apply', file]);
+    const r = runCli(['verify-apply', file, '--apply', '--digest', digestOf(dry.stdout)]);
     expect(r.exitCode, r.stderr).toBe(0);
     expect(r.stderr).not.toMatch(/Unknown flag/);
     const backups = readdirSync(backupsDir()).filter((f) => f.startsWith('verify-') && f.endsWith('.json'));
@@ -193,5 +199,47 @@ describe('verify-apply CLI', () => {
     for (const row of originals) {
       expect(db.prepare('SELECT * FROM observations WHERE id = ?').get(row.id)).toEqual(row);
     }
+
+    // A second undo of the same backup is refused: the file now records that it was undone.
+    expect(JSON.parse(readFileSync(backupPath, 'utf8')).undone_at).toEqual(expect.any(String));
+    const again = runCli(['verify-apply', '--undo', backupPath]);
+    expect(again.exitCode).toBe(1);
+    expect(again.stderr).toMatch(/already undone/);
+  });
+
+  it("--apply refuses without the dry run's digest, or with a stale one, and writes nothing", () => {
+    const a = seed();
+    const file = writeProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);
+    const digest = digestOf(runCli(['verify-apply', file]).stdout);
+    const before = snapshot();
+
+    const none = runCli(['verify-apply', file, '--apply']);
+    expect(none.exitCode).toBe(1);
+    expect(none.stderr).toMatch(/--digest/);
+
+    // The proposals file edited after the dry run the user approved.
+    writeFileSync(
+      file,
+      JSON.stringify([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'changed after approval' }]),
+    );
+    const stale = runCli(['verify-apply', file, '--apply', '--digest', digest]);
+    expect(stale.exitCode).toBe(1);
+    expect(stale.stderr).toMatch(/digest/);
+
+    expect(snapshot()).toBe(before);
+    expect(existsSync(backupsDir())).toBe(false);
+  });
+
+  it('rejects --apply=false and --undo mixed with an apply, writing nothing', () => {
+    const a = seed();
+    const file = writeProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);
+    const digest = digestOf(runCli(['verify-apply', file]).stdout);
+    const before = snapshot();
+    const f = runCli(['verify-apply', file, '--apply=false', '--digest', digest]);
+    expect(f.exitCode).toBe(1);
+    const mixed = runCli(['verify-apply', file, '--apply', '--digest', digest, '--undo', file]);
+    expect(mixed.exitCode).toBe(1);
+    expect(mixed.stderr).toMatch(/Usage/);
+    expect(snapshot()).toBe(before);
   });
 });

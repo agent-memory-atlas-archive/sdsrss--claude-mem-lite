@@ -1,16 +1,18 @@
 ---
 name: verify
-description: "Use when: the user explicitly asks to verify, audit or correct their stored memories against the current code (e.g. \"check my memories for stale ones\", /mem:verify). You check each memory with read-only repo tools and propose corrections; nothing is written until the user approves. Not for routine recall or saving."
+description: "Use when: the user explicitly asks to verify, audit or correct their stored memories against the current code (e.g. \"check my memories for stale ones\", /verify). You check each memory with read-only repo tools and propose corrections; nothing is written until the user approves the exact plan. Not for routine recall or saving."
 ---
 
-# /mem:verify — check memories against the code, then correct the stale ones
+# /verify — check memories against the code, then correct the stale ones
 
 Memories go stale: a bug recorded as open gets fixed, a measurement gets retracted, a
 mechanism is replaced. Measured on 118 live memories across 7 repos, ~10% were STALE and
 ~14% PARTIAL, and most went stale within a day of being saved. No automatic pass catches
 this — cheap single-shot models misjudged it (precision 0.36) and model-written corrections
 were false 40% of the time. What works is YOU reading the code: you propose, the user
-approves, and `verify-apply` is the only thing that writes.
+approves the exact plan, and `verify-apply` is the only thing that writes.
+
+(If another plugin also defines `/verify`, this one is `/claude-mem-lite:verify`.)
 
 ## Arguments
 
@@ -24,9 +26,10 @@ approves, and `verify-apply` is the only thing that writes.
 node ${CLAUDE_PLUGIN_ROOT}/cli.mjs export --project <project> [--from <date>] > <scratch>/memories.json
 ```
 
-Every row carries `id`, `type`, `title`, `narrative`, `facts`, `lesson_learned`,
-`files_modified`, `created_at`. With `--ids`, filter that file to those ids. Tell the user
-how many memories you are about to check.
+Every row carries `id`, `project`, `type`, `title`, `narrative`, `facts`, `lesson_learned`,
+`files_modified`, `created_at`. Take the project name for every later command from the rows'
+`project` field (the canonical name) — not from what the user typed. With `--ids`, filter
+the file to those ids. Tell the user how many memories you are about to check.
 
 ## Step 2 — Verify (read-only)
 
@@ -47,8 +50,8 @@ would anything it asserts mislead that agent?*
    - **UNVERIFIABLE** / **NO_CODE_CLAIM** — leave these alone.
 
 Rules that the measurement showed matter:
-- A file having changed is NOT a contradiction. You need a line, a diff hunk or a commit that
-  contradicts a specific claim.
+- A file having changed is NOT a contradiction. You need a line, a diff hunk, a commit, or a
+  command's output that contradicts a specific claim.
 - A record of what happened (what was measured then, what a review found) stays true as
   history. It is stale only if it would mislead about the PRESENT.
 - A note that already records its own fix is not stale because the fix commit landed later.
@@ -57,7 +60,7 @@ Rules that the measurement showed matter:
 More than ~25 memories: split them into batches and give each batch to a read-only subagent
 with the rubric above; have each subagent write its results to a file with a bash heredoc and
 reply with only the path. Treat a subagent's verdict as a lead: before proposing anything,
-re-open every cited `file:line` and commit yourself.
+re-open every cited `file:line`, commit or command yourself.
 
 ## Step 3 — Draft proposals (STALE and PARTIAL only)
 
@@ -74,34 +77,46 @@ Write `<scratch>/proposals.json` — a JSON array, one entry per memory to chang
 ]
 ```
 
-- **edit** — the stale part is one detail. `set` may hold `title`, `narrative`,
-  `lesson_learned`, `importance`, `concepts`; copy the original text and change only the
-  stale words.
-- **replace** — the memory's claim is wrong but its lesson is still worth keeping. Write the
-  corrected memory; omitted fields are copied from the original, which stays as history.
+- **edit** — the stale part is one detail in `title`, `narrative`, `lesson_learned`,
+  `importance` or `concepts`. Copy the original text into `set` and change only the stale words.
+- **replace** — the memory's claim is wrong but its lesson is still worth keeping, OR the
+  stale detail sits in `facts` (edit cannot change `facts`). Write the corrected memory; give
+  `facts` (an empty string drops them) or `concepts` when those are what is stale. Omitted
+  fields are copied from the original, which stays as history.
 - **retire** — nothing in it is worth keeping (e.g. a mid-debug note about a failure fixed
   minutes later).
-- `evidence` is required: the commit or `file:line` that shows the memory is out of date.
+- `evidence` is required: the commit, the `file:line`, or the command and its output (for
+  something outside the repo, e.g. a tool version) that shows the memory is out of date.
 - `lesson_learned` is at most 500 characters. Keep the memory's language.
 
-## Step 4 — Show the plan
+## Step 4 — Show the plan and get approval
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json
+node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json --project <project>
 ```
 
-This is a dry run: it validates every entry against the database and writes nothing. Show the
-user one line per proposal (id, verdict, what changes, evidence) and the counts of
-VALID / STALE / PARTIAL you found. Ask for approval. If the dry run refuses an entry, fix the
-proposal — never work around it with `update`, `save` or `delete`.
+This is a dry run: it validates every entry against the database, writes nothing, prints each
+change as `-` old / `+` new text, and ends with a **plan digest** and the exact apply command.
+Show the user that output as it is (do not summarise the changes away), plus your counts of
+VALID / STALE / PARTIAL, and ask for approval. If the dry run refuses an entry, fix the
+proposal — never work around it with `update`, `save` or `delete`. If you change the proposals
+after the user saw them, run the dry run again and show the new plan: the digest changes, and
+the old one will be refused.
 
-## Step 5 — Apply, only after the user approves
+## Step 5 — Apply, only after the user approves that plan
+
+Run exactly the command the dry run printed:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json --apply
+node ${CLAUDE_PLUGIN_ROOT}/cli.mjs verify-apply <scratch>/proposals.json --project <project> --apply --digest <digest>
 ```
 
-It backs up every target row, applies all entries in one transaction (all or nothing), reads
-each row back and prints `ok` or `MISMATCH`, then prints the undo command
-(`verify-apply --undo <backup>`). Report the read-back result and the undo command to the
-user verbatim. A non-zero exit means something did not land — say so; do not retry blindly.
+It refuses if the proposals or the memories changed since the dry run. Otherwise it backs up
+every target row, applies all entries in one transaction (all or nothing), reads each row back
+and prints `ok` or `MISMATCH`, then prints the backup path and the undo command. Report the
+result and the undo command to the user. Exit 1 with `MISMATCH` lines means the changes were
+written but a row did not read back as planned — show those lines; do not re-run the apply.
+Exit 1 with no `MISMATCH` lines means nothing was written — say why.
+
+Undo (`verify-apply --undo <backup>`) only works while the changed rows are untouched: it
+refuses once any of them is edited or superseded again, and it runs at most once.

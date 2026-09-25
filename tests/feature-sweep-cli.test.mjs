@@ -530,7 +530,8 @@ describe('CLI feature sweep: write commands', () => {
     const before = withDb((db) => db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id));
     expect(before.narrative).toBe('The nightly export job still fails on large tables');
 
-    const r = ok(['verify-apply', file, '--project', 'sweep-verify', '--apply']);
+    const digest = (dry.stdout.match(/--digest ([0-9a-f]{16})/) || [])[1];
+    const r = ok(['verify-apply', file, '--project', 'sweep-verify', '--apply', '--digest', digest]);
     expect(r.stdout).toMatch(new RegExp(`#${id} edit: ok`));
     expect(r.stdout).toContain('verify-apply --undo ');
     const row = withDb((db) => db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id));

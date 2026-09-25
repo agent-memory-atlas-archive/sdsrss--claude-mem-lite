@@ -3207,9 +3207,10 @@ Commands:
     --project P         Override the restored project for every row
     --dry-run           Preview what would be restored without writing
 
-  verify-apply <file>   Apply agent-verified memory corrections (/mem:verify writes these).
-                        Dry run by default; nothing is written without --apply.
+  verify-apply <file>   Apply agent-verified memory corrections (/verify writes these).
+                        Dry run by default: prints the changes and a plan digest.
     --apply             Back up the target rows, apply in one transaction, read back
+    --digest D          Required with --apply: the digest the approved dry run printed
     --project P         Project the targets must belong to (default: current)
     --undo <backup>     Restore the rows from a backup written by --apply
 

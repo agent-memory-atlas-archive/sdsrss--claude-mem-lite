@@ -341,7 +341,7 @@ README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 /mem <query>               # search 的简写
 /lesson <text>             # 保存非显而易见的经验到 events 表（v2.31.0）
 /bug <text>                # 记录已知 bug + 复现步骤到 events 表（v2.31.0）
-/mem:verify                # 对照当前代码核查记忆；你确认后才改正过期的记忆
+/verify                    # 对照当前代码核查记忆；你确认后才改正过期的记忆
 ```
 
 ### 高效搜索工作流

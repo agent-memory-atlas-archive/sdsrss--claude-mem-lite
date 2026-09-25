@@ -308,7 +308,7 @@ export const SOURCE_FILES = [
   // module-level `process.exit(0)` side effects that abort vitest workers on
   // direct import. Statically imported by hook.mjs SessionStart handler.
   'lib/upgrade-banner.mjs',
-  // /mem:verify's write half (validate -> backup -> one transaction -> read-back -> undo).
+  // /verify's write half (validate -> backup -> one transaction -> read-back -> undo).
   // Statically imported by cli/verify-apply.mjs.
   'lib/verify-apply-core.mjs',
   // Per-table scrub helper for defense-in-depth at text-write INSERT paths.

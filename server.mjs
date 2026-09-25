@@ -75,7 +75,7 @@ import { buildLessonNudge } from './lib/save-nudge.mjs';
 import { formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cli/common.mjs';
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
-import { CLI_INVOKE } from './cli-path.mjs';
+import { CLI_INVOKE, shellWord } from './cli-path.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
 import {
   memSearchSchema,
@@ -214,7 +214,7 @@ try {
   console.error(`[claude-mem-lite] FATAL: Database cannot be opened: ${err.message}`);
   if (err.walRecoveryAttempted) {
     console.error(
-      `[claude-mem-lite] Try: rm "${DB_PATH}-wal" "${DB_PATH}-shm" or reinstall with: node install.mjs install`,
+      `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
     );
   } else {
     console.error(

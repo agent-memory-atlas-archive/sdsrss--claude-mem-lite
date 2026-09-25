@@ -97,6 +97,7 @@ import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/nat
 import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
+import { shellWord } from './cli-path.mjs';
 import { isMemHook, launcherEntryPath } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
@@ -272,7 +273,7 @@ export function hookManifestRepairHint(cacheRoot, marketplaceRoot) {
   const src = join(marketplaceRoot, 'hooks', 'hooks.json');
   const dst = join(cacheRoot, 'hooks', 'hooks.json');
   return pluginCacheHookEvents(marketplaceRoot).ok
-    ? `cp "${src}" "${dst}" && restart Claude Code`
+    ? `cp ${shellWord(src)} ${shellWord(dst)} && restart Claude Code`
     : `no usable marketplace copy to restore from — reinstall the plugin (/plugin uninstall then /plugin install), then restart Claude Code`;
 }
 
@@ -723,7 +724,7 @@ function registerMcpServer() {
       ok('MCP server registered: mem-lite');
     } catch (e) {
       fail('MCP registration failed: ' + e.message);
-      warn('Try manually: claude mcp add -s user -t stdio mem-lite -- node "' + SERVER_PATH + '"');
+      warn(`Try manually: claude mcp add -s user -t stdio mem-lite -- node ${shellWord(SERVER_PATH)}`);
     }
   }
 }
@@ -1674,7 +1675,7 @@ async function status() {
         push(
           'warn',
           'cli',
-          `CLI: installed at ${join(binDir, 'claude-mem-lite')} but ${binDir} is not on PATH — add it: export PATH="${binDir}:$PATH"`,
+          `CLI: installed at ${join(binDir, 'claude-mem-lite')} but ${binDir} is not on PATH — add it: export PATH=${shellWord(binDir)}:"$PATH"`,
           { available: false, linked: join(binDir, 'claude-mem-lite') },
         );
       } else {
@@ -2004,7 +2005,7 @@ async function doctor() {
     // misbehaving, which is the worst moment to hand out the one entry that cannot
     // survive a missing module. Pre-ship review of v6.7.0 caught this one left behind.
     dwarn(
-      `Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node "${join(PROJECT_DIR, 'cli.mjs')}" repair\``,
+      `Hook self-heal: a recent hook fire degraded to exit-0${detail} — run \`node ${shellWord(join(PROJECT_DIR, 'cli.mjs'))} repair\``,
     );
   } else {
     ok('Hook self-heal: no recent silent hook breakage');
@@ -2020,7 +2021,7 @@ async function doctor() {
   // should not pay for another round of child spawns to ask it twice.
   if (brokenRoots.length > 0) {
     fail(
-      `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node "${join(PROJECT_DIR, 'cli.mjs')}" rebuild-binding\` (repairs every broken install, not just this one)`,
+      `Native DB binding: unusable in ${brokenRoots.map((b) => b.label).join(', ')} — run \`node ${shellWord(join(PROJECT_DIR, 'cli.mjs'))} rebuild-binding\` (repairs every broken install, not just this one)`,
     );
     issues++;
   } else if (breakage) {
@@ -2137,7 +2138,7 @@ async function doctor() {
     for (const p of orphanPaths.slice(0, 5)) log(`    missing: ${p}`);
     if (orphanPaths.length > 5) log(`    ... +${orphanPaths.length - 5} more`);
     log(
-      `    Repair: node "${join(PROJECT_DIR, 'install.mjs')}" uninstall    # removes the dead hook entries`,
+      `    Repair: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} uninstall    # removes the dead hook entries`,
     );
     issues++;
   } else if (hasHooks) {
@@ -2408,12 +2409,12 @@ async function doctor() {
   // already there.
   const noCodeInstall =
     !shape.managed && !shape.activePluginVersion && !hasAnyManagedCode(INSTALL_DIR, SOURCE_FILES);
-  const installRemedy = `node "${join(PROJECT_DIR, 'install.mjs')}" install`;
+  const installRemedy = `node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} install`;
   try {
     const skipDrift = !shape.managed && !!shape.activePluginVersion;
     const { checkDevDrift } = await import('./lib/doctor-drift.mjs');
     const r = skipDrift ? null : checkDevDrift(INSTALL_DIR, SOURCE_FILES);
-    const devRemedy = `re-run: node "${join(PROJECT_DIR, 'install.mjs')}" install --dev`;
+    const devRemedy = `re-run: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} install --dev`;
     const nameList = (files, count) => {
       const suffix = count > files.length ? ` +${count - files.length} more` : '';
       return `${files.join(', ')}${suffix}`;
@@ -2485,7 +2486,7 @@ async function doctor() {
               `a damaged one. Fix: ${installRemedy}`
           : `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
               `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
-              `(or: node "${join(INSTALL_DIR, 'cli.mjs')}" repair)`,
+              `(or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`,
       );
     }
     // Complete copy install: no message — drift is a dev-install concern.
@@ -2513,7 +2514,7 @@ async function doctor() {
     // `noCodeInstall` above: the `repair` route runs from an entry point that is itself absent.
     const scriptRemedy = noCodeInstall
       ? installRemedy
-      : `claude-mem-lite self-update (or: node "${join(INSTALL_DIR, 'cli.mjs')}" repair)`;
+      : `claude-mem-lite self-update (or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`;
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
     } else if (!h.present) {

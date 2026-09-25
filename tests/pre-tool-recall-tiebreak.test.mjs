@@ -1,11 +1,13 @@
 // D#36: both pre-tool-recall legs ended their ORDER BY on `created_at_epoch DESC` with no id
 // tiebreak. On a same-millisecond tie SQLite returns the rows in ascending rowid, so the
-// OLDER memory takes the Read slot (LIMIT 1) the newer one should get. CLAUDE.md spells
-// the fix `created_at_epoch DESC, id DESC`.
+// OLDER memory takes the Read slot (LIMIT 1) the newer one should get. The fix appends the
+// `id DESC` that CLAUDE.md's spelling ends with (`importance DESC, created_at_epoch DESC,
+// id DESC`); these legs have no importance sort key.
 //
-// Measured before the fix (live DB, 2026-09-25T17:01Z): 0/242 observation rows and 0/2670
-// event rows share (project, file, epoch) with another row, so this is a correctness pin
-// on a rare shape, not a frequent one. These cases build the tie directly.
+// Live tie rate, read-only 2026-09-25T17:38Z, over each leg's own population (importance >= 2,
+// live, 60-day window) keyed on project + lowercased basename + epoch with file lists
+// exploded: 0/103 observation rows and 0/2681 event rows. A correctness pin on a rare shape,
+// not a frequent one. These cases build the tie directly.
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'fs';

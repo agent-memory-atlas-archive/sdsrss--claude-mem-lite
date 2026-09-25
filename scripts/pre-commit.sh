@@ -137,7 +137,7 @@ npm run format:check || {
 
 echo "[pre-commit] Running tests..."
 # `npm test`, not bare `vitest run`: its script puts TMPDIR on disk. Every run leaves a
-# ~13 MB vitest ssr cache, and /tmp here is a RAM-backed tmpfs that this filled (D#55).
+# vitest ssr cache (45 MB for a full-suite run), and /tmp here is a RAM-backed tmpfs (D#55).
 npm test || {
   echo "[pre-commit] ❌ Tests failed. Fix errors before committing."
   exit 1

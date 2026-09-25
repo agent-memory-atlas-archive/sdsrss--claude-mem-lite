@@ -575,6 +575,12 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `sorted[0]` after a STABLE JS sort — which preserves SQL order as the tiebreak. The hazard is
   therefore unconditional now, on the default path. Still left alone under Iron Law #1 because
   no failing case has been built. **Unjudged, not cleared — and no longer gated.**
+  **2026-09-25: the two `scripts/pre-tool-recall.js` legs were judged and fixed** (D#36): a built
+  same-millisecond tie gave the Read slot to the older row, and both now end on `id DESC`. The live
+  tie rate over those legs' own populations (importance >= 2, live, 60-day window; key = project +
+  lowercased basename + epoch, file lists exploded) read 0/103 observation rows and 0/2681 event
+  rows (read-only, 2026-09-25T17:38Z). Whether D#15's 52 below counted these two was not
+  re-derived, so do not subtract them from it.
   **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie

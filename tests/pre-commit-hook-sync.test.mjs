@@ -121,11 +121,11 @@ describe('pre-commit hook sync (P1-11)', () => {
   });
 });
 
-// D#55: every run of the suite leaves a ~13 MB `<TMPDIR>/<id>/ssr` cache, and /tmp here is a
-// 12 GB tmpfs. 627 of them filled it and the Bash tool died with no output. 6e5439c moved
-// `npm test` / `test:coverage` to an on-disk TMPDIR, but the pre-commit hook still ran bare
-// `npx vitest run`, so every commit kept writing to /tmp (17 caches in 15 minutes on
-// 2026-09-25). One home for the TMPDIR choice: the package.json scripts. The population
+// D#55: every vitest run leaves one `<TMPDIR>/<id>/ssr` cache (45 MB for a full-suite run,
+// 610 files; single-file runs 44 K-5.4 MB), and /tmp here is a 12 GB tmpfs. 627 of them
+// filled it and the Bash tool died with no output. 6e5439c moved `npm test` / `test:coverage`
+// to an on-disk TMPDIR, but the pre-commit hook still ran bare `npx vitest run`, so each
+// commit wrote one full-suite cache to /tmp. One home for the TMPDIR choice: the package.json scripts. The population
 // below is the git hook and the CI workflows; `npm run audit:baseline` spawns vitest from
 // scripts/audit-metrics.mjs and is not covered (a manual dev tool, tracked separately).
 describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
@@ -143,7 +143,9 @@ describe('suite runs keep vitest caches off the RAM-backed /tmp (D#55)', () => {
         .forEach((line, i) => {
           if (/^\s*#/.test(line)) return;
           // `npx vitest` with no `run` also runs the suite once outside a TTY (pre-ship review P3-7).
-          if (/\b(npx\s+vitest|vitest\s+run)\b/.test(line) && !/'[^']*vitest[^']*'/.test(line))
+          // Exempt only prose that names the command in backticks (sandbox-install.yml:81); a
+          // quoted YAML `run: 'npx vitest run'` is still an invocation (pre-ship claims review).
+          if (/\b(npx\s+vitest|vitest\s+run)\b/.test(line) && !/`[^`]*vitest[^`]*`/.test(line))
             bare.push(`${rel}:${i + 1}`);
         });
     }

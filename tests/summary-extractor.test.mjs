@@ -212,16 +212,21 @@ describe('extractStructuredSummary — markdown heading reports', () => {
     expect(r.notDone).toBe(notDone);
   });
 
-  // Pre-ship review P3-2: one chained pattern backtracked for 37 s on this line (Stop hook, 5 s).
+  // Pre-ship review P3-2, delta review P3-1: header parsing must be linear in line length —
+  // a quadratic parser still passes at 5000 characters (11 ms), so the lines here are 200k,
+  // where quadratic reads seconds (the delta review measured 50k at 1 s).
   it.each([
-    ['## Done' + ' '.repeat(5000) + 'x'],
-    ['**Done' + ' '.repeat(5000) + 'x'],
-    ['### Failed' + '\t'.repeat(5000) + '.x'],
-    ['**Not done**' + ' '.repeat(5000) + '（' + 'x'.repeat(5000)],
+    [' '.repeat(200_000) + 'x'],
+    ['## Done' + ' '.repeat(200_000) + 'x'],
+    ['## ' + ' '.repeat(200_000) + 'x'],
+    ['**Done' + ' '.repeat(200_000) + 'x'],
+    ['**Done' + ' '.repeat(200_000) + '.' + ' '.repeat(200_000) + 'x'],
+    ['### Failed' + '\t'.repeat(200_000) + '.x'],
+    ['**Not done**' + ' '.repeat(200_000) + '（' + 'x'.repeat(5000)],
   ])('a long whitespace run in a header-shaped line stays linear (%#)', (line) => {
     const t0 = performance.now();
-    extractStructuredSummary(line + '\n' + line);
-    expect(performance.now() - t0).toBeLessThan(100);
+    extractStructuredSummary('## Done\n- A\n' + line + '\n' + line);
+    expect(performance.now() - t0).toBeLessThan(250);
   });
 
   // Claims review of 44ad93e: three shapes the first cut got wrong or left unpinned.
@@ -246,6 +251,25 @@ describe('extractStructuredSummary — markdown heading reports', () => {
     );
     expect(r.notDone).toBe('');
     expect(r.uncertain).toBe('- 剩下的挂账里 D#37 是唯一的另一条 P2\n- 未做 Windows 验证');
+  });
+
+  // Delta review P3-2 / P3-3 / P3-8.
+  it('`* Done:` asterisk bullets are headers', () => {
+    expect(extractStructuredSummary('* Done: shipped v2\n* Not done: tag')).toMatchObject({
+      done: 'shipped v2',
+      notDone: 'tag',
+    });
+  });
+
+  it('a question-shaped heading still ends a block section', () => {
+    const r = extractStructuredSummary(
+      '## Done\n- shipped\n\n## Not done\n- tag\n\n## What should happen next?\nThe baseline expires on 2026-10-14.',
+    );
+    expect(r.notDone).toBe('- tag');
+  });
+
+  it('bold inside an inline tail keeps its closing markup', () => {
+    expect(extractStructuredSummary('**Done:** shipped **v2.1**').done).toBe('shipped **v2.1**');
   });
 
   it('a heading with more words, or a bare "Done." line, is not a section', () => {

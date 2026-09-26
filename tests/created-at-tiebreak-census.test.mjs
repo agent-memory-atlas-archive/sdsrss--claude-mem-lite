@@ -97,6 +97,35 @@ describe('N3 — created_at_epoch DESC listings return the newest id first under
     expect(afterRows).toEqual([]);
   });
 
+  // The legs used to compare the epoch strictly (`< ?` / `> ?`), so a row sharing the
+  // ANCHOR's epoch satisfied neither and vanished from the window. Both legs now compare
+  // (created_at_epoch, id), the same total order they sort by.
+  it.each([
+    ['first', 0],
+    ['middle', 2],
+    ['last', 4],
+  ])('fetchTimelineWindow shows every row tied with the anchor exactly once (anchor %s)', (_, at) => {
+    const [older] = seedTiedObs(1, TIED_EPOCH - 60_000);
+    const tied = seedTiedObs(5);
+    const [newer] = seedTiedObs(1, TIED_EPOCH + 60_000);
+    const anchorId = tied[at];
+    const { anchor, beforeRows, afterRows } = fetchTimelineWindow(db, anchorId, {
+      before: 10,
+      after: 10,
+      project: 'p',
+    });
+    expect(anchor.id).toBe(anchorId);
+    expect(beforeRows.map((r) => r.id)).toEqual([older, ...tied.slice(0, at)]);
+    expect(afterRows.map((r) => r.id)).toEqual([...tied.slice(at + 1), newer]);
+  });
+
+  it('fetchTimelineWindow legs stop at their LIMIT from the anchor outward inside a tie', () => {
+    const tied = seedTiedObs(7);
+    const { beforeRows, afterRows } = fetchTimelineWindow(db, tied[3], { before: 2, after: 2, project: 'p' });
+    expect(beforeRows.map((r) => r.id)).toEqual([tied[1], tied[2]]);
+    expect(afterRows.map((r) => r.id)).toEqual([tied[4], tied[5]]);
+  });
+
   it('a P#N anchor resolves to the newest of the observations tied nearest it', () => {
     const ids = seedTiedObs(3);
     const promptId = Number(

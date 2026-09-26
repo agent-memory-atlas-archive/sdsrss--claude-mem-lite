@@ -722,7 +722,7 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `CLAUDE_MEM_EPISODE_INPUT_FILTER` | 决定 episode 摘要器能从哪些输入里学。子代理的工具调用不进入 episode 缓冲（修改项目内文件的除外）；变异探针（改文件 → 跑红 → 还原）和 agent 自己失败的内联脚本（补丁的 `anchor not found`）在保存或摘要前被剔除——在 30 条已核验 event 上重放，这一项直接去掉 16 条错误中的 3 条；配合 `CLAUDE_MEM_LESSON_GROUNDING`，16 条错误教训一条都不会被注入。设为 `off` 恢复未过滤的输入。 | _(开启)_ |
 | `CLAUDE_MEM_BASH_RECALL` | 在查看（`cat`、`sed -n`、`head`…）或写入（`sed -i`、`cat > f`、python 补丁…）文件的 Bash 命令执行前做文件召回，与 Read / Edit 召回相同。bash 预过滤让其他命令不启动 Node。设为 `off` 只关闭这一路。 | _(开启)_ |
 | `CLAUDE_MEM_LESSON_GROUNDING` | 自动捕获的 event 只有在教训引用了本窗口自己的诊断文字（失败输出行、编辑新增的注释或提交信息）时才保留教训；否则保留这一行但去掉教训，importance 降为 1，低于所有注入面的门槛。设为 `off` 保留未引用原文的教训。 | _(开启)_ |
-| `CLAUDE_MEM_LESSON_OUTPUT_CAP` | 自动捕获的教训如果引用了一行**工具输出**（失败命令打印的文字，能控制这段输出的人就能写它），这一行和教训都保留、仍可搜索，但 importance 降为 1，低于所有注入面的门槛；引用编辑新增的注释或提交信息的教训不受影响。设为 `off` 恢复模型给出的 importance。 | _(开启)_ |
+| `CLAUDE_MEM_LESSON_OUTPUT_CAP` | 自动捕获的教训如果引用了**工具输出**（命令打印的文字，能控制这段输出的人就能写它；连续 4 个词相同即算引用），就不会进入注入面：event 保留这一行和教训、仍可搜索，importance 降为 1；`change` 类 observation 的 importance 之后会被读取次数抬高，所以改为去掉教训。引用编辑新增的注释或提交信息的教训不受影响。这一行的标题不在检查范围内。设为 `off` 恢复模型给出的 importance 和教训。 | _(开启)_ |
 | `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 阻止每次 SessionStart 在**所有**项目自动写入 `CLAUDE.md` 托管块。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
 | `MEM_NO_ADOPT_HINT` | 静音当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
 

@@ -193,7 +193,7 @@ describe('D#69 capture: a Bash patch contributes its comment block as diagnosis'
     expect(e.diag).toEqual([
       'A LIMIT upstream of a JS filter is a reachability bound: the demoted row was evicted, not ranked lower.',
     ]);
-    expect(e.diagOut, 'a comment the agent wrote is not tool output').toBeUndefined();
+    expect(e.diagOut, 'a comment the agent wrote is not tool output').toEqual([]);
   });
 });
 

@@ -123,18 +123,29 @@ export function episodeDiagnosis(episode) {
   return out;
 }
 
+// Tools whose entry desc is the agent's own input, not a response snippet.
+const AUTHORED_DESC_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Agent', 'Task']);
+
 /**
- * The diagnosis lines that reached the episode ONLY as tool output (an entry's \`diagOut\`),
- * never as text the agent authored in any entry. Exported for tests.
+ * The text that reached the episode ONLY as tool output, never as text the agent authored in
+ * any entry: an entry's \`diagOut\` lines, and the response snippet \`makeEntryDesc\` puts
+ * after " → " in a Bash / Grep / other tool's desc, which the prompt shows as the action
+ * (pre-ship review P3-7). A Bash entry buffered before \`diagOut\` existed counts all its
+ * lines as output — over-capping one flush after an upgrade, never under-capping.
+ * Exported for tests.
  */
 export function episodeOutputDiagnosis(episode) {
   const output = new Set();
   const authored = new Set();
   for (const e of Array.isArray(episode?.entries) ? episode.entries : []) {
-    const out = new Set(Array.isArray(e?.diagOut) ? e.diagOut : []);
-    for (const l of Array.isArray(e?.diag) ? e.diag : []) (out.has(l) ? output : authored).add(l);
+    const diag = Array.isArray(e?.diag) ? e.diag : [];
+    const out = new Set(Array.isArray(e?.diagOut) ? e.diagOut : e?.tool === 'Bash' ? diag : []);
+    for (const l of diag) (out.has(l) ? output : authored).add(l);
+    const arrow =
+      typeof e?.desc === 'string' && !AUTHORED_DESC_TOOLS.has(e?.tool) ? e.desc.indexOf(' → ') : -1;
+    if (arrow !== -1) output.add(e.desc.slice(arrow + 3).replace(/^ERROR: /, ''));
   }
-  return [...output].filter((l) => !authored.has(l));
+  return [...output].filter((l) => l && !authored.has(l));
 }
 
 function diagnosisBlock(diag) {
@@ -1185,9 +1196,16 @@ ${diagnosisBlock(diag)}`;
       const quotesToolOutput =
         Boolean(lessonLearned) &&
         lessonOutputCapEnabled() &&
-        quotedLines(lessonLearned, episodeOutputDiagnosis(episode), 1).length > 0;
+        quotedLines(lessonLearned, episodeOutputDiagnosis(episode), 1, { anyWord: true }).length > 0;
       if (quotesToolOutput)
         debugLog('DEBUG', 'llm-episode', 'lesson quotes tool output: importance capped at 1');
+      // An observation's importance does not stay where this worker puts it — two mem_get
+      // reads (autoBoostIfNeeded) or four accesses (boostAccessed) lift 1 to 2 (pre-ship
+      // review P2-1). Only \`change\` lands in \`observations\` (no writer raises an event's
+      // importance), so there the lesson itself is dropped; the row then meets the
+      // lesson-less-change rule like any other.
+      if (quotesToolOutput && (validTypes.has(parsed.type) ? parsed.type : 'change') === 'change')
+        lessonLearned = null;
 
       const searchAliases = Array.isArray(parsed.search_aliases)
         ? parsed.search_aliases.slice(0, 6).join(' ')

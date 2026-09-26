@@ -726,7 +726,8 @@ async function handlePostToolUse() {
   const respWindow = resp.length > 65536 ? resp.slice(0, 32768) + '\n' + resp.slice(-32768) : resp;
 
   // `diagOut` = the diagnosis lines read from tool OUTPUT: a lesson quoting one stays
-  // under every injection floor (D#100(3)).
+  // under every injection floor (D#100(3)). Always present on a Bash entry, [] included, so
+  // the worker can tell a new entry with no output lines from one buffered before the field.
   const diagnosis = extractDiagnosis(tool_name, toolInput, respWindow, {
     isError: bashSig?.isError || false,
     writesFiles: tool_name === 'Bash' && bashWrites.length > 0,
@@ -739,7 +740,7 @@ async function handlePostToolUse() {
     desc: scrubSecrets(makeEntryDesc(tool_name, toolInput, resp, bashSig)),
     inputTags: entryInputTags(tool_name, toolInput, respWindow),
     diag: diagnosis.lines,
-    ...(diagnosis.output.length ? { diagOut: diagnosis.output } : {}),
+    ...(tool_name === 'Bash' ? { diagOut: diagnosis.output } : {}),
     files,
     ...(tool_name === 'Bash' && bashWrites.length ? { bashWrites } : {}),
     ts: Date.now(),

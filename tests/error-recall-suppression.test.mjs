@@ -223,6 +223,13 @@ describe('isDataPrintingCommand', () => {
     ['python3 - heredoc', "cd /r; python3 - <<'PY'\nprint(1)\nPY"],
     ['gh --log-failed piped', GH_CMD],
     ['gh --log', 'gh run view 1 --log | grep -n "not ok" | head -6'],
+    // The analysing session's third misfire: the run id comes from a `--json` query in a
+    // substitution, so the substitution must count as a printer too.
+    [
+      'gh --json in a substitution, then --log-failed',
+      `ID=$(gh run list --workflow CI --limit 20 --json databaseId,conclusion -q '.[0].databaseId'); echo $ID; gh run view $ID --log-failed 2>/dev/null | grep -E "FAIL|×" | head -6`,
+    ],
+    ['gh --json=field', 'gh pr view 12 --json=body | jq -r .body'],
   ])('prints: %s', (_n, cmd) => {
     expect(isDataPrintingCommand(cmd)).toBe(true);
   });
@@ -235,6 +242,7 @@ describe('isDataPrintingCommand', () => {
     ['a script file fed by a heredoc', "python3 tools/fix.py <<'EOF'\nx\nEOF"],
     ['python -m fed by a heredoc', "python3 -m json.tool <<'EOF'\n{}\nEOF"],
     ['gh without --log', 'gh run view 123'],
+    ['gh run rerun', 'gh run rerun 123 --failed'],
     ['a pure read', 'grep -n x f | head'],
     ['a build piped', 'npm run build 2>&1 | tail'],
     ['printer then a real run', "node -e 'x'; npm test"],

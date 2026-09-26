@@ -545,8 +545,10 @@ function isPrinterElement(text) {
   const prog = toks[i];
   if (!prog) return false;
   const args = toks.slice(i + 1);
-  // `gh run view … --log[-failed]`: a CI log is somebody else's failure, reprinted.
-  if (prog === 'gh') return args.some((a) => a === '--log' || a === '--log-failed');
+  // `gh run view … --log[-failed]`: a CI log is somebody else's failure, reprinted. `--json`
+  // is gh's structured READ (list/view/status only), typically feeding a run id to the former.
+  if (prog === 'gh')
+    return args.some((a) => a === '--log' || a === '--log-failed' || /^--json(?:=|$)/.test(a));
   if (!INLINE_INTERPRETER_RE.test(prog)) return false;
   const py = prog.startsWith('python');
   for (let k = 0; k < args.length; k++) {

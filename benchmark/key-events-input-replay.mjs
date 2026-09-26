@@ -239,14 +239,14 @@ export function replayWindows(stream, project) {
 }
 
 /** What the NEW pipeline does with one old window, and with the lesson stored from it. */
-export function fateOf(window, lesson, { gates = true } = {}) {
+export function fateOf(window, lesson, { gates = true, projectDir = null } = {}) {
   const main = gates ? window.entries.filter((e) => !e.agentId) : window.entries;
   if (main.length === 0) return { fate: 'no-event:subagent-only', dropped: { probe: 0, slip: 0 } };
   const ep = { entries: main, files: [...new Set(main.flatMap((e) => e.files))] };
   if (!explainSignificance(ep).significant)
     return { fate: 'no-event:subagent', dropped: { probe: 0, slip: 0 } };
   if (!gates) return { fate: 'kept:ungated', dropped: { probe: 0, slip: 0 } };
-  const { episode, dropped } = filterSummaryInput(ep);
+  const { episode, dropped } = filterSummaryInput(ep, { projectDir });
   if (!explainSignificance(episode).significant) {
     return { fate: `no-event:${dropped.probe ? 'probe' : 'slip'}`, dropped };
   }
@@ -295,6 +295,13 @@ function main() {
     process.exit(2);
   }
   const { stream, subagentFiles } = collectStream(dir);
+  // The hook passes its project dir to filterSummaryInput (only writes under it are
+  // protected by the unrestored-write rule). Default: the main thread's most common cwd.
+  const cwdCount = new Map();
+  for (const e of stream)
+    if (e.kind === 'tool' && !e.agentId && e.cwd) cwdCount.set(e.cwd, (cwdCount.get(e.cwd) || 0) + 1);
+  const projectDir =
+    argOf('--project-dir') || [...cwdCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
   const windows = replayWindows(stream, project);
   const db = new Database(dbPath, { readonly: true });
   const rows = db
@@ -318,7 +325,7 @@ function main() {
   };
   const names = { probe: [], slip: [], subagent: [] };
   for (const w of windows) {
-    const { fate, dropped } = fateOf(w, null);
+    const { fate, dropped } = fateOf(w, null, { projectDir });
     const subs = w.entries.filter((e) => e.agentId);
     reach.subagentEntries += subs.length;
     if (fate === 'no-event:subagent-only') reach.subagentOnly++;
@@ -344,12 +351,12 @@ function main() {
       const r = byId.get(id);
       if (!r) return { id, fate: 'not-in-db' };
       if (!m) return { id, type: r.event_type, fate: 'unmatched' };
-      return { id, type: r.event_type, sameFiles: m.same, ...fateOf(m.w, r.body) };
+      return { id, type: r.event_type, sameFiles: m.same, ...fateOf(m.w, r.body, { projectDir }) };
     });
 
   const report = {
     stamp: new Date().toISOString(),
-    corpus: { stream: stream.length, subagentFiles, events: rows.length },
+    corpus: { stream: stream.length, subagentFiles, events: rows.length, projectDir },
     reach,
     matched: [...matches.values()].filter(Boolean).length,
   };

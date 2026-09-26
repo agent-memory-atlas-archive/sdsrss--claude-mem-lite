@@ -9,6 +9,7 @@ import { writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createTestDb } from './test-helpers.mjs';
+import { extractFileTargets } from '../bash-utils.mjs';
 import {
   entryInputTags,
   filterSummaryInput,
@@ -33,21 +34,33 @@ vi.mock('../lib/metrics.mjs', async () => {
 });
 
 import { handleLLMEpisode, episodeDiagnosis } from '../hook-llm.mjs';
+import { MEMORY_INPUT_GUARD } from '../lib/memory-input-guard.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
 
 const bash = (command, response) => ({ tool: 'Bash', input: { command }, response });
-/** An episode entry the way hook.mjs builds one (tags computed from the full call). */
-const entry = ({ tool, input, response }) => ({
-  tool,
-  desc: `${tool} ${String(input.command || input.file_path || '').slice(0, 40)}`,
-  files: input.file_path ? [input.file_path] : [],
-  inputTags: entryInputTags(tool, input, response),
-  diag: extractDiagnosisLines(tool, input, response, { isError: /FAIL|Error/.test(response) }),
-});
+/** An episode entry the way hook.mjs builds one (tags + Bash writes computed from the full call). */
+const entry = ({ tool, input, response }) => {
+  const writes =
+    tool === 'Bash' ? extractFileTargets(input, { cwd: '/repo', projectDir: '/repo' }).writes : [];
+  return {
+    tool,
+    desc: `${tool} ${String(input.command || input.file_path || '').slice(0, 40)}`,
+    files: input.file_path ? [input.file_path] : writes,
+    ...(writes.length ? { bashWrites: writes } : {}),
+    inputTags: entryInputTags(tool, input, response),
+    diag: extractDiagnosisLines(tool, input, response, { isError: /FAIL|Error/.test(response) }),
+  };
+};
 
 // ─── E#818's window: mutate in one call, RED run, restore in a later call ──────────
 const MUT_OPEN = bash(
   `cd /repo\nBAK=/tmp/sp/hl.bak\ncp scripts/hook-launcher.mjs "$BAK"\nperl -0pi -e "s{const TARBALL_FALLBACK = }{const TARBALL_FALLBACK_X = }" scripts/hook-launcher.mjs\necho "=== mutation landed? ==="; grep -c TARBALL_FALLBACK_X scripts/hook-launcher.mjs`,
+  '=== mutation landed? ===\n1\n',
+);
+// The same mutation through a variable path: the hook cannot resolve `"$F"`, so the call
+// carries no bashWrites and the unrestored-write rule has nothing to protect.
+const MUT_OPEN_VAR = bash(
+  `cd /repo\nF=scripts/hook-launcher.mjs\ncp "$F" /tmp/sp/hl.bak\nperl -0pi -e "s{const TARBALL_FALLBACK = }{const X = }" "$F"\necho "=== mutation landed? ==="`,
   '=== mutation landed? ===\n1\n',
 );
 const MUT_RED = bash(
@@ -125,6 +138,25 @@ describe('entryInputTags — probes', () => {
     expect(entryInputTags('Bash', script.input, script.response)).toContain('probe');
   });
 
+  it("recall shapes kept after the P2-2 tightening (both read off this repo's transcripts)", () => {
+    // A restore from a `…backup…` copy: the vocabulary word alone no longer tags it.
+    const restore = bash(
+      'cp /tmp/sp/hu-backup.mjs tests/hook-update.test.mjs && echo "mutation reverted"\nnpx vitest run tests/hook-update.test.mjs',
+      'mutation reverted\n × clears populated hooks.json 12ms',
+    );
+    expect(entryInputTags('Bash', restore.input, restore.response)).toEqual([
+      'test-run',
+      'probe',
+      'closes-probe',
+    ]);
+    // A node -e mutation announcing itself at line start ("mutated …"), then a syntax check.
+    const nodeMut = bash(
+      'node -e "const fs=require(\'fs\');fs.writeFileSync(g, t.replace(a, b))"\nnode --check lib/doctor-modes.mjs && node -e "import(\'./lib/doctor-modes.mjs\')"',
+      'mutated hint: --benchmark | --metrics',
+    );
+    expect(entryInputTags('Bash', nodeMut.input, nodeMut.response)).toContain('probe');
+  });
+
   it('test authoring is not a probe: a heredoc adding a case whose comment names the mutation it kills', () => {
     const authoring = bash(
       "python3 - <<'PY'\np='tests/scrub.test.mjs'; s=open(p).read()\ns += '// Kills the mutation MAX_SCRUB_PASSES = 1'\nopen(p,'w').write(s)\nPY\nnpx vitest run tests/scrub.test.mjs -t 'second secret'",
@@ -145,6 +177,68 @@ describe('entryInputTags — probes', () => {
     expect(entryInputTags('Edit', { file_path: 'a.mjs', new_string: 'mutation landed' }, 'mutant')).toEqual(
       [],
     );
+  });
+});
+
+// P2-2 (pre-ship defect review): "mutation" is PRODUCT vocabulary in GraphQL, Vuex/Pinia
+// and Redux code. The weak rule once let a test run alone confirm the word, so a real fix
+// window in such a project was deleted whole. Correct usage must pass untouched.
+describe('entryInputTags — correct-usage population (mutation is product vocabulary)', () => {
+  const RED = ' FAIL src/graphql/mutations/createUser.test.ts > createUser\nTypeError: x is not a function';
+  const shapes = [
+    bash('npx vitest run src/graphql/mutations/createUser.test.ts', RED),
+    bash('npm test -- --grep "mutation resolvers"', '  1 failing\n  mutation resolvers: expected 200'),
+    bash(
+      'cd /repo && npx jest src/store/mutations.spec.js',
+      ' FAIL src/store/mutations.spec.js\n  ● SET_USER mutates state',
+    ),
+    bash(
+      'npx vitest run src/redux/mutations.test.ts -t "mutate cart"',
+      ' ✓ mutate cart (3ms)\n Tests 1 passed (1)',
+    ),
+    bash('pytest tests/test_mutations.py -x', 'E   AssertionError: mutation returned None'),
+    bash("npx vitest run -t 'optimistic mutation' src/apollo", ' × optimistic mutation rolls back on error'),
+  ];
+  for (const s of shapes) {
+    it(`no probe tag: ${s.input.command}`, () => {
+      expect(entryInputTags('Bash', s.input, s.response)).not.toContain('probe');
+    });
+  }
+
+  it('a real sed -i fix window in a GraphQL project keeps all three calls', () => {
+    const window = [
+      bash(
+        "sed -i 's/return null/return user/' src/graphql/mutations.ts && npx vitest run src/graphql/mutations.test.ts",
+        ' FAIL src/graphql/mutations.test.ts > createUser mutation\nAssertionError: expected null',
+      ),
+      bash(
+        'npx vitest run src/graphql',
+        ' FAIL src/graphql/mutations.test.ts\nTests 1 failed | 9 passed (10)',
+      ),
+      bash('npx vitest run src/graphql', ' Tests 10 passed (10)'),
+    ].map(entry);
+    expect(window[0].bashWrites, 'premise: the hook sees the sed -i as a write').toEqual([
+      '/repo/src/graphql/mutations.ts',
+    ]);
+    const { episode, dropped } = filterSummaryInput({ entries: window, files: [] });
+    expect(dropped).toEqual({ probe: 0, slip: 0 });
+    expect(episode.entries).toHaveLength(3);
+  });
+
+  it('a project write tagged as a probe is kept when no restore follows it', () => {
+    // Strong output marker + an in-place edit, but nothing ever puts the file back: this
+    // edit stayed in the tree, so it is the session's work whatever the output said.
+    const e = entry(
+      bash(
+        "sed -i 's/a/b/' src/store/cart.ts && npx vitest run src/store",
+        ' ✓ mutation applied to cart state\n Tests 4 passed (4)',
+      ),
+    );
+    expect(e.inputTags).toContain('probe'); // premise: the tag fires
+    const later = entry(bash('npx vitest run src/store', ' Tests 4 passed (4)'));
+    const { episode, dropped } = filterSummaryInput({ entries: [e, later], files: [] });
+    expect(dropped.probe).toBe(0);
+    expect(episode.entries).toHaveLength(2);
   });
 });
 
@@ -183,15 +277,39 @@ describe('filterSummaryInput', () => {
   });
 
   it('an open span swallows only test runs: the commit after an unrestored mutation is kept', () => {
-    const ep = { entries: [MUT_OPEN, COMMIT, MUT_RED].map(entry), files: [] };
+    const ep = { entries: [MUT_OPEN_VAR, COMMIT, MUT_RED].map(entry), files: [] };
     const { episode, dropped } = filterSummaryInput(ep);
     expect(dropped.probe).toBe(1);
     expect(episode.entries.map((e) => e.desc)).toEqual([entry(COMMIT).desc, entry(MUT_RED).desc]);
   });
 
+  it('a probe whose resolved write is never restored is kept, and opens no span (P2-2)', () => {
+    const ep = { entries: [MUT_OPEN, MUT_RED].map(entry), files: [] };
+    expect(ep.entries[0].bashWrites, 'premise').toEqual(['/repo/scripts/hook-launcher.mjs']);
+    const { dropped, episode } = filterSummaryInput(ep);
+    expect(dropped.probe).toBe(0);
+    expect(episode.entries).toHaveLength(2);
+  });
+
+  it('only writes under projectDir are protected; a probe copy elsewhere is still dropped', () => {
+    const e = { ...entry(MUT_OPEN), bashWrites: ['/opt/vendor/hook-launcher.mjs'] };
+    expect(
+      filterSummaryInput({ entries: [e], files: [] }).dropped.probe,
+      'no projectDir: every write protected',
+    ).toBe(0);
+    expect(filterSummaryInput({ entries: [e], files: [] }, { projectDir: '/repo/' }).dropped.probe).toBe(1);
+    const inside = entry(MUT_OPEN);
+    expect(filterSummaryInput({ entries: [inside], files: [] }, { projectDir: '/repo' }).dropped.probe).toBe(
+      0,
+    );
+  });
+
   it(`an unclosed span ends after PROBE_SPAN_MAX (${PROBE_SPAN_MAX}) test runs`, () => {
     const runs = Array.from({ length: PROBE_SPAN_MAX + 1 }, () => MUT_RED);
-    const { dropped, episode } = filterSummaryInput({ entries: [MUT_OPEN, ...runs].map(entry), files: [] });
+    const { dropped, episode } = filterSummaryInput({
+      entries: [MUT_OPEN_VAR, ...runs].map(entry),
+      files: [],
+    });
     expect(dropped.probe).toBe(1 + PROBE_SPAN_MAX);
     expect(episode.entries).toHaveLength(1);
   });
@@ -424,6 +542,16 @@ describe('handleLLMEpisode — D#69 grounding', () => {
     expect(callLLM).toHaveBeenCalledTimes(2); // the retry is offered the diagnosis
     expect(promptOf(1)).toContain('D2. fix(sql): a backtick');
     expect(event()).toMatchObject({ event_type: 'bugfix', body: 'narr', importance: 1 });
+  });
+
+  it('the retry prompt carries MEMORY_INPUT_GUARD — its DIAGNOSIS block is verbatim tool output (P3-4)', async () => {
+    callLLM.mockResolvedValueOnce(reply({ type: 'bugfix', lesson_learned: unquoted }));
+    callLLM.mockResolvedValueOnce(JSON.stringify({ lesson: null }));
+    await runWith();
+    expect(callLLM).toHaveBeenCalledTimes(2);
+    const retry = callLLM.mock.calls[1][0];
+    expect(retry.user, 'premise: the retry sees the diagnosis').toContain('D1. SyntaxError');
+    expect(retry.system).toContain(MEMORY_INPUT_GUARD);
   });
 
   it('keeps a lesson the retry grounded', async () => {

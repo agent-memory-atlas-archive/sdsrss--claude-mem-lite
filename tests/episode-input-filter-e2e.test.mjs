@@ -245,3 +245,47 @@ describe('D#69 flush: a probe never reaches the saved observation', () => {
     expect(off).toHaveLength(0);
   });
 });
+
+// P2-2 (pre-ship defect review): a call that WROTE a project file is dropped only when a
+// restore follows. The hook resolves writes against stdin `cwd` and passes its project dir,
+// so a probe's write outside the project (a vendored copy) protects nothing.
+describe('D#69 flush: an unrestored project write survives the probe filter (P2-2)', () => {
+  const probe = (target) => ({
+    tool_name: 'Bash',
+    tool_input: {
+      command: `cp ${target} "$BAK"\nperl -0pi -e "s/a/b/" ${target}\necho "=== mutation landed? ==="`,
+    },
+    tool_response: '=== mutation landed? ===\n1',
+  });
+  const restore = (target) => ({
+    tool_name: 'Bash',
+    tool_input: { command: `cp "$BAK" ${target}\necho "reverted"; md5sum ${target}` },
+    tool_response: 'reverted\n1577347ff9c1b4df253c784d7e98ce86  x.mjs',
+  });
+
+  async function filterRows(name, calls) {
+    const { cwd } = workDir(name);
+    const env = { CLAUDE_MEM_METRICS: '1' };
+    const before = metricRows('episode_input_filter').length;
+    for (const c of calls(cwd)) await post(cwd, { cwd, ...c }, env);
+    await stop(cwd, env);
+    return metricRows('episode_input_filter').slice(before);
+  }
+
+  it('a project write with no restore is kept: nothing is dropped', async () => {
+    const sigBefore = metricRows('episode_significance').length;
+    expect(await filterRows('keep-write', () => [probe('lib/x.mjs')])).toEqual([]);
+    // Premise: the flush ran (a silent [] would also come from no flush at all).
+    expect(metricRows('episode_significance').length).toBeGreaterThan(sigBefore);
+  });
+
+  it('the same write followed by its restore is dropped with the restore', async () => {
+    const rows = await filterRows('restored-write', () => [probe('lib/x.mjs'), restore('lib/x.mjs')]);
+    expect(rows).toEqual([expect.objectContaining({ probe: 2 })]);
+  });
+
+  it('a write outside the project protects nothing (the hook passes its project dir)', async () => {
+    const rows = await filterRows('outside-write', () => [probe('/opt/vendor/x.mjs')]);
+    expect(rows).toEqual([expect.objectContaining({ probe: 1 })]);
+  });
+});

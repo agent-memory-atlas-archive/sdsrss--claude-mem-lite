@@ -433,7 +433,7 @@ function summaryInputSubs(subs) {
   const out = [];
   const dropped = { probe: 0, slip: 0, emptied: 0 };
   for (const sub of subs) {
-    const r = filterSummaryInput(sub);
+    const r = filterSummaryInput(sub, { projectDir: inferProjectDir() });
     dropped.probe += r.dropped.probe;
     dropped.slip += r.dropped.slip;
     if (r.episode.entries.length > 0) out.push(r.episode);

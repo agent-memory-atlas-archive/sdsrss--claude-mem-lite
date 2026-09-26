@@ -895,7 +895,12 @@ If the work was purely mechanical with no insight worth remembering, reply {"les
 Otherwise reply in 12-280 chars. Do NOT invent a fake lesson, do NOT write the string "none".
 The lesson MUST copy at least 4 consecutive words verbatim, in double quotes, from one DIAGNOSIS line, and claim nothing that line does not state. No DIAGNOSIS line states a cause → {"lesson":null}.
 
-Reply ONLY valid JSON, no markdown fences: {"lesson":"..."} or {"lesson":null}`;
+Reply ONLY valid JSON, no markdown fences: {"lesson":"..."} or {"lesson":null}
+
+${MEMORY_INPUT_GUARD}`;
+  // The guard, because this user message carries the DIAGNOSIS block — verbatim tool
+  // output — and grounding rewards copying from it (pre-ship defect review P3-4). The
+  // first pass has carried it since cso F#4; the retry did not.
   const user = `A ${firstPass.type} episode just completed. First-pass title: "${firstPass.title || 'untitled'}".
 
 Actions:

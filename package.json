@@ -145,6 +145,7 @@
     "lib/db-backup.mjs",
     "lib/delete-core.mjs",
     "lib/events-injection.mjs",
+    "lib/episode-input-filter.mjs",
     "lib/stats-core.mjs",
     "lib/obs-types.mjs",
     "lib/save-nudge.mjs",

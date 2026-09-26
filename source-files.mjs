@@ -272,6 +272,10 @@ export const SOURCE_FILES = [
   // hook-context.mjs (SessionStart) — missing it from the manifest would break both
   // hooks on auto-update.
   'lib/events-injection.mjs',
+  // D#69 episode-summarizer input filters + lesson grounding check. Statically imported
+  // by hook.mjs (PostToolUse capture, episode flush) and hook-llm.mjs (llm-episode) —
+  // missing it from the manifest would break both on auto-update.
+  'lib/episode-input-filter.mjs',
   // Shared delete orchestration (snapshot + related_ids cleanup + child recovery
   // + delete txn). Statically imported by server.mjs (mem_delete) and mem-cli.mjs
   // (cmdDelete) — extracted to kill the byte-duplicated twin. Missing it from the

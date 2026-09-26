@@ -56,6 +56,7 @@ import { DAY_MS } from './lib/time-constants.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { recoverChildrenOf } from './lib/maintain-core.mjs';
 import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
+import { isLessonGrounded, lessonGroundingEnabled } from './lib/episode-input-filter.mjs';
 
 /**
  * Retract a pre-saved observation this worker created moments ago, after the Haiku
@@ -97,6 +98,31 @@ export function retractPreSavedObs(db, obsId, where) {
 // T9: memdir-incompatible types live in the `events` table, not `observations`.
 // Set lookup is O(1) — authoritative source is lib/activity.mjs::EVENT_TYPES.
 const EVENT_TYPE_SET = new Set(EVENT_TYPES);
+
+// ─── The window's own diagnosis (D#69) ──────────────────────────────────────
+//
+// Episode entries carry `diag`: failing output lines, comment blocks an edit added, a
+// commit message — captured at PostToolUse by lib/episode-input-filter.mjs. The prompt
+// shows them verbatim and asks the lesson to quote one; isLessonGrounded then CHECKS it.
+const DIAGNOSIS_MAX_LINES = 12;
+
+/** Distinct diagnosis lines of an episode, in order, capped. Exported for tests. */
+export function episodeDiagnosis(episode) {
+  const out = [];
+  for (const e of Array.isArray(episode?.entries) ? episode.entries : []) {
+    for (const l of Array.isArray(e?.diag) ? e.diag : []) {
+      if (typeof l === 'string' && l && !out.includes(l)) out.push(l);
+      if (out.length >= DIAGNOSIS_MAX_LINES) return out;
+    }
+  }
+  return out;
+}
+
+function diagnosisBlock(diag) {
+  return diag.length
+    ? `DIAGNOSIS (verbatim from this window — the only text a lesson may rest on):\n${diag.map((l, i) => `D${i + 1}. ${l}`).join('\n')}`
+    : 'DIAGNOSIS: (none — no failing output, added comment or commit message in this window; lesson_learned must be null)';
+}
 
 // ─── Memory-input injection guard (cso F#4 follow-up, EverAlgo-validated) ────
 //
@@ -854,7 +880,7 @@ export function hasEnrichmentContent(parsed) {
 // (MEMORY_INPUT_GUARD used to be the other example here; it is now exported from
 // lib/memory-input-guard.mjs and imported by two modules and two tests, so it no longer
 // illustrates the point.)
-function buildLessonRetryPrompt(episode, firstPass) {
+function buildLessonRetryPrompt(episode, firstPass, diag = []) {
   const actionList = episode.entries
     .map((e, i) => `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`)
     .join('\n');
@@ -867,12 +893,15 @@ function buildLessonRetryPrompt(episode, firstPass) {
 
 If the work was purely mechanical with no insight worth remembering, reply {"lesson":null}.
 Otherwise reply in 12-280 chars. Do NOT invent a fake lesson, do NOT write the string "none".
+The lesson MUST copy at least 4 consecutive words verbatim, in double quotes, from one DIAGNOSIS line, and claim nothing that line does not state. No DIAGNOSIS line states a cause → {"lesson":null}.
 
 Reply ONLY valid JSON, no markdown fences: {"lesson":"..."} or {"lesson":null}`;
   const user = `A ${firstPass.type} episode just completed. First-pass title: "${firstPass.title || 'untitled'}".
 
 Actions:
-${actionList}`;
+${actionList}
+
+${diagnosisBlock(diag)}`;
   return { system, user };
 }
 
@@ -926,10 +955,11 @@ export async function handleLLMEpisode() {
 type: pick by strongest signal. decision = explicit tradeoff / "chose X over Y because Z" / rejected an approach (e.g. "Rejected schema migration — single-source module + sync test instead"; "Heterogeneous hook events → heterogeneous context budgets"). bugfix = prior-failing path fixed with a named root cause. feature = new user-visible capability. refactor = behavior unchanged but structure improved. discovery = learned how a system works (read-heavy, no writes). change = routine edit with no new principle (default if unsure and nothing else fits).
 Facts: each MUST be (1) atomic—one claim, (2) self-contained—no pronouns, include file/function name, (3) specific—"refreshToken() in auth.ts:45 uses 1h TTL" not "handles tokens"
 importance: Be strict — default to 1. 0=pure browsing with zero learning value. 1=routine file edits, standard changes, normal workflow (MOST episodes). 2=notable ONLY if it reveals something non-obvious: error fix with discovered root cause, architectural decision with explicit tradeoff, config change with unexpected side effects. 3=critical: breaking change affecting users, security vulnerability fix, data migration. Ask yourself: "would a future session benefit from knowing this?" — if not, it's importance=1.
-lesson_learned: The non-obvious insight a future session would benefit from. Examples: "FTS5's default tokenizer doesn't split CJK — need bigram workaround", "vitest --reporter=verbose hangs on large test suites, use default reporter". Look hard before giving up — most coding episodes contain at least one micro-lesson (an undocumented flag, a surprising default, a debugging shortcut, an unexpected interaction). If literally no insight worth teaching (e.g. version bump, whitespace fix, file rename), output JSON null. Do NOT invent a lesson, do NOT write the strings "none"/"n/a"/"todo"/"tbd"/"-" — those will be discarded as noise.
+lesson_learned: The non-obvious insight a future session would benefit from, resting ONLY on the DIAGNOSIS lines: copy at least 4 consecutive words verbatim, in double quotes, from one DIAGNOSIS line, and claim no mechanism that line does not state. Example: FTS5's "default tokenizer doesn't split CJK" — index bigrams instead. No DIAGNOSIS line, or none that states a cause → output JSON null; a lesson without such a quote is discarded. Do NOT invent a lesson. A mutation/probe run (a file changed on purpose, a checksum, a restore) and the agent's own script errors are not product bugs. Do NOT write the strings "none"/"n/a"/"todo"/"tbd"/"-" — those will be discarded as noise.
 scope: ${SCOPE_PROMPT_LEGEND}
 search_aliases: 2-6 alternative search terms someone might use to find this memory later (include CJK if project uses Chinese)`;
 
+  const diag = episodeDiagnosis(episode);
   let prompt;
   if (episode.entries.length === 1) {
     const e = episode.entries[0];
@@ -940,7 +970,9 @@ ${SHARED_OBS_SCHEMA_TAIL}`;
     const user = `Tool: ${e.tool}
 File: ${episodeFiles.join(', ') || 'unknown'}
 Action: ${e.desc}
-Error: ${e.isError ? 'yes' : 'no'}`;
+Error: ${e.isError ? 'yes' : 'no'}
+
+${diagnosisBlock(diag)}`;
     prompt = { system, user };
   } else {
     const actionList = episode.entries
@@ -954,7 +986,9 @@ ${SHARED_OBS_SCHEMA_TAIL}`;
     const user = `Project: ${episode.project}
 Files: ${fileList}
 Actions (${episode.entries.length} total):
-${actionList}`;
+${actionList}
+
+${diagnosisBlock(diag)}`;
     prompt = { system, user };
   }
 
@@ -1036,6 +1070,25 @@ ${actionList}`;
       const isLessonLowSignal = isLowSignalLesson(rawLesson);
       let lessonLearned = isLessonLowSignal ? null : rawLesson.slice(0, 500);
 
+      // D#69 grounding post-check. An event's lesson is kept only when it quotes the
+      // window's own DIAGNOSIS (isLessonGrounded: a shared 4-word run with one diag line).
+      // The 2026-09-25 audit read 16 of 30 events WRONG and found lessons accurate only
+      // where the window itself stated the cause; the prompt now asks for the quote, and
+      // this is the mechanism — prompt wording alone barely moves Haiku (#8605).
+      // Least destructive outcome: the row is still saved (title, narrative, files — all
+      // searchable), the lesson is dropped, and importance is capped at 1 below, which is
+      // under every automatic injection face's floor (SessionStart / UserPromptSubmit /
+      // PreToolUse all read importance >= 2). Event types only: `change` rows go to
+      // `observations`, were not in the audit, and a lesson-less `change` is DELETED by
+      // isLowYieldChangeObs — demotion there would be a deletion.
+      const groundingOn = lessonGroundingEnabled() && EVENT_TYPE_SET.has(parsed.type);
+      let groundingDropped = false;
+      if (groundingOn && lessonLearned && !isLessonGrounded(lessonLearned, diag)) {
+        debugLog('DEBUG', 'llm-episode', `ungrounded lesson dropped: "${truncate(lessonLearned, 60)}"`);
+        lessonLearned = null;
+        groundingDropped = true;
+      }
+
       // P3: for bugfix/decision, retry once with a lesson-focused prompt.
       // These types have the highest reuse value (~72.7% hit-rate vs change
       // ~16.5%), and Haiku's first pass writes NULL ~70% of the time for
@@ -1043,10 +1096,13 @@ ${actionList}`;
       // episode. Opt-out: CLAUDE_MEM_NO_LESSON_RETRY=1.
       let retryAttempted = false;
       let retryRecovered = false;
+      // With grounding on, a window with no diagnosis cannot yield a keepable lesson, so
+      // the retry (an extra LLM call) is skipped there rather than paid for and discarded.
       if (
-        isLessonLowSignal &&
+        !lessonLearned &&
         (parsed.type === 'bugfix' || parsed.type === 'decision') &&
-        !process.env.CLAUDE_MEM_NO_LESSON_RETRY
+        !process.env.CLAUDE_MEM_NO_LESSON_RETRY &&
+        (!groundingOn || diag.length > 0)
       ) {
         retryAttempted = true;
         // The first callLLM released its slot in the finally above; this lesson
@@ -1056,13 +1112,15 @@ ${actionList}`;
         // rather than exceed the limit (the lesson is an optional enhancement).
         const retrySlot = await acquireLLMSlot();
         try {
-          const retryPrompt = buildLessonRetryPrompt(episode, parsed);
+          const retryPrompt = buildLessonRetryPrompt(episode, parsed, diag);
           const retryRaw = retrySlot ? await callLLM(retryPrompt, BG_LLM_TIMEOUT_MS) : null;
           if (retryRaw) {
             const retry = parseJsonFromLLM(retryRaw);
             const retryLesson = typeof retry?.lesson === 'string' ? retry.lesson.trim() : '';
             const retryIsLow = isLowSignalLesson(retryLesson);
-            if (!retryIsLow) {
+            const retryUngrounded = !retryIsLow && groundingOn && !isLessonGrounded(retryLesson, diag);
+            if (retryUngrounded) groundingDropped = true;
+            if (!retryIsLow && !retryUngrounded) {
               lessonLearned = retryLesson.slice(0, 500);
               retryRecovered = true;
               debugLog(
@@ -1136,8 +1194,12 @@ ${actionList}`;
         // to schema.mjs). Haiku's OWN importance can still reach 3 (genuine judgment); only the
         // path heuristic is capped. The isLessonLowSignal branch still floors no-lesson
         // non-decision autos at ≤1; manual mem_save uses a different path and is unaffected.
+        // D#69: `!lessonLearned` is the old `isLessonLowSignal && !retryRecovered` (the
+        // two are equal with grounding off). A lesson the grounding check dropped caps
+        // `decision` too: its body falls back to the model's narrative, which is exactly
+        // as unanchored as the lesson it replaces.
         importance:
-          isLessonLowSignal && !retryRecovered && parsed.type !== 'decision'
+          !lessonLearned && (groundingDropped || parsed.type !== 'decision')
             ? Math.min(ruleImportance, 1)
             : Math.max(Math.min(ruleImportance, 2), clampImportance(parsed.importance)),
         lessonLearned,

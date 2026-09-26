@@ -275,6 +275,12 @@ describe('handleLLMEpisode', () => {
     filesToCleanup.push(tmpFile);
     process.argv[3] = tmpFile;
     process.env.CLAUDE_MEM_NO_DELAY = '1';
+    // The cases in this block pin retry / importance / routing mechanics with fixture
+    // episodes that carry no `diag` lines, so D#69's grounding check would drop every
+    // event lesson they assert on (and skip the retry whose queued mock response then
+    // leaks into the next case). Grounding-on behaviour, including its interaction with
+    // the retry and the importance cap, is pinned in tests/episode-input-filter.test.mjs.
+    process.env.CLAUDE_MEM_LESSON_GROUNDING = 'off';
 
     db = createTestDb();
     // Prevent handleLLMEpisode from closing our test DB
@@ -303,6 +309,7 @@ describe('handleLLMEpisode', () => {
     if (db?._realClose) db._realClose();
     process.argv[3] = originalArgv3;
     delete process.env.CLAUDE_MEM_NO_DELAY;
+    delete process.env.CLAUDE_MEM_LESSON_GROUNDING;
     while (filesToCleanup.length) {
       try {
         rmSync(filesToCleanup.pop(), { force: true });

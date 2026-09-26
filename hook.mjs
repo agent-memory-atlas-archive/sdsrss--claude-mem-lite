@@ -99,6 +99,12 @@ import { formatHookError } from './lib/native-binding-hint.mjs';
 import { recordHookError } from './lib/hook-telemetry.mjs';
 import { queueHookContext, queueHookSystemMessage, flushHookStdout } from './lib/hook-stdout.mjs';
 import { shouldRecallOnFailure } from './lib/tool-refusal.mjs';
+import {
+  entryInputTags,
+  extractDiagnosisLines,
+  filterSummaryInput,
+  episodeInputFilterEnabled,
+} from './lib/episode-input-filter.mjs';
 import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from './lib/compress-core.mjs';
 import {
   cleanupBroken,
@@ -414,12 +420,38 @@ function trimReadsFile(readsFile) {
   }
 }
 
+/**
+ * planEpisodeFlush's subs with lib/episode-input-filter.mjs applied (D#69). Identity when
+ * the filter is off or drops nothing, so the common case still hands flushEpisodeGroup
+ * the buffer object itself. Records one `episode_input_filter` metric row per flush that
+ * dropped anything — the forward meter for the filter's reach.
+ */
+function summaryInputSubs(subs) {
+  if (!episodeInputFilterEnabled()) return subs;
+  const out = [];
+  const dropped = { probe: 0, slip: 0, emptied: 0 };
+  for (const sub of subs) {
+    const r = filterSummaryInput(sub);
+    dropped.probe += r.dropped.probe;
+    dropped.slip += r.dropped.slip;
+    if (r.episode.entries.length > 0) out.push(r.episode);
+    else dropped.emptied++;
+  }
+  if (dropped.probe || dropped.slip) recordMetric(DB_DIR, { event: 'episode_input_filter', ...dropped });
+  return out;
+}
+
 function flushEpisodeWithDb(db, episode, hookEventName) {
   // Split by CC session so concurrent same-project sessions flush as separate
   // observations. planEpisodeFlush returns [episode] BY REFERENCE for the common
   // single-session (or all-legacy) case → flushEpisodeGroup(episode) is identical
   // to pre-grouping. Two+ interleaved sessions each get their own sub-episode.
-  const subs = planEpisodeFlush(episode);
+  //
+  // D#69: mutation-probe and tool-slip entries leave each sub BEFORE anything reads it —
+  // significance, the immediate save, and the llm-episode summarizer all see the filtered
+  // episode, so a probe's intentional RED run can neither make a window "significant"
+  // nor become a lesson. A sub left with no entries is not flushed at all.
+  const subs = summaryInputSubs(planEpisodeFlush(episode));
 
   // D#178. The reads file used to be consumed right here, unconditionally, BEFORE
   // anything knew whether this flush would persist an observation — and an
@@ -685,10 +717,22 @@ async function handlePostToolUse() {
   // Tier 1 B: Detect significant Bash commands
   const bashSig = tool_name === 'Bash' ? detectBashSignificance(toolInput, resp) : null;
 
+  // D#69: tags and diagnosis lines need the FULL command and output, which the entry
+  // does not keep, so they are computed here once. The output is windowed head + tail:
+  // a runner prints its failures at the END, and a multi-megabyte stdout should not be
+  // regex-scanned on every PostToolUse.
+  const respWindow = resp.length > 65536 ? resp.slice(0, 32768) + '\n' + resp.slice(-32768) : resp;
+
   // Build episode entry
   const entry = {
     tool: tool_name,
     desc: scrubSecrets(makeEntryDesc(tool_name, toolInput, resp, bashSig)),
+    inputTags: entryInputTags(tool_name, toolInput, respWindow),
+    diag: extractDiagnosisLines(tool_name, toolInput, respWindow, {
+      isError: bashSig?.isError || false,
+      writesFiles: tool_name === 'Bash' && bashWrites.length > 0,
+      scrub: scrubSecrets,
+    }),
     files,
     ...(tool_name === 'Bash' && bashWrites.length ? { bashWrites } : {}),
     ts: Date.now(),
@@ -725,6 +769,21 @@ async function handlePostToolUse() {
   if (bashSig?.isHardError) {
     const d = getDb();
     if (d) triggerErrorRecall(d, toolInput, resp);
+  }
+
+  // D#69: a subagent's calls (the host sets `agent_id` only inside a subagent) stay out of
+  // the episode buffer. benchmark/key-events-input-replay.mjs over this repo's transcripts
+  // (2026-09-26): 212 of 1471 significant windows were made ENTIRELY of subagent calls —
+  // reviewer probes in an extracted tree, fixture paths such as /repo/alpha.mjs — and 4 of
+  // the audit's 16 WRONG events came from such windows. Sharing the main thread's buffer
+  // also split its episodes. Error recall above still answers the subagent; only the
+  // summarizer input is withheld. Opt out: CLAUDE_MEM_EPISODE_INPUT_FILTER=off.
+  if (typeof hookData.agent_id === 'string' && hookData.agent_id && episodeInputFilterEnabled()) {
+    if (db)
+      try {
+        db.close();
+      } catch {}
+    return;
   }
 
   if (!acquireLock()) {

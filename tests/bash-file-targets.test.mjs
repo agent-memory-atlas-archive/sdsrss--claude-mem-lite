@@ -404,6 +404,13 @@ describe('bashFileTargets — a loop writes only when its own body writes', () =
     expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
   });
 
+  // Delta review P3-7: a JS `for (k in obj) { … }` is not a comprehension — its body is the block.
+  it('a JS for-in loop over a bound object writes its keys through the block body', () => {
+    const cmd =
+      "node - <<'EOF'\nconst fs = require('fs');\nconst edits = {'lib/a.mjs': 1, 'lib/b.mjs': 2};\nfor (k in edits) {\n  fs.writeFileSync(k, '');\n}\nEOF";
+    expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
+  });
+
   // Pre-ship review P3-5: the 200 KB shape tests skip indirect resolution entirely, so this one
   // stays under MAX_INDIRECT_PROGRAM and proves (via the write) that the loop path ran.
   it('64 nested loops plus forEach sites under the indirect-resolution cap stay bounded', () => {

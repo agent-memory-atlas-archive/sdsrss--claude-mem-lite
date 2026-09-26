@@ -1509,13 +1509,18 @@ v6.14.0).
 
 The rule is PROVENANCE, not content: `extractDiagnosis` tags output lines (`entry.diagOut`,
 always present on a Bash entry; an older Bash entry without it counts all its lines as
-output), the response snippet after " → " in a Bash / Grep / other tool's desc counts as
-output too, a line counts as output only if no entry authored it (a comment block an edit
+output), the response snippet in a tool's desc counts as output too (after " → " for Bash /
+Grep, after "<tool>: " for every other tool, MCP servers included — the delta review found the
+first repair read only the arrow form), a line counts as output only if no entry authored it (a comment block an edit
 added, a commit message), and a lesson sharing ANY 4 consecutive words with output (not
 grounding's stricter 5-letter rule) is handled by where it lands: an event row is capped at
 importance 1 with its lesson kept and searchable (no writer raises an event's importance, and
 every event face floors at 2); a `change` observation loses the lesson, because observation
-importance is not stable and UserPromptSubmit reads observations at ≥ 1. A content filter was
+importance is not stable and UserPromptSubmit reads observations at ≥ 1 — and the lesson-less
+row is then deleted by the lesson-less-change rule unless `CLAUDE_MEM_KEEP_LOW_SIGNAL=1`. Any
+four shared words count, filler included ("is not in the"), so the cap over-reaches: a lesson
+resting on the agent's own comment is demoted when it also shares such a run with an output
+line in the window. That recall cost is not measured. A content filter was
 not tried: a deny-list of dangerous commands is bypassed by rephrasing, and the prompt-side
 `MEMORY_INPUT_GUARD` did not stop 3 of 6.
 Not covered, none measured: every row's TITLE and NARRATIVE are written from the same
@@ -1524,7 +1529,11 @@ importance ≥ 1); a `decision` whose lesson is empty keeps its importance with 
 as its body; a PARAPHRASED directive shares no 4 words with the output line (the defect
 review saw 1 of 6 real-Haiku windows store one at importance 2); and an agent-authored line
 the same command prints back (a commit subject echoed by `git log`) counts as output, which
-over-caps (10 of 991 such calls in this repo's transcripts).
+over-caps (10 of 991 such calls in this repo's transcripts). Two routes move a demoted lesson
+back into reach, both off the default path: `activity promote --min-importance 1 --execute`
+copies an importance-1 event's body into an observation's lesson (observations are read at
+≥ 1), and with `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` hook-optimize's re-enrich pass writes a new
+lesson for the lesson-less `change` row from its title and narrative, uncapped.
 
 ### Bash-first capture (v6.14.0): what recovering Bash file paths did to the pre-save
 

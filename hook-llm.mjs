@@ -123,15 +123,29 @@ export function episodeDiagnosis(episode) {
   return out;
 }
 
-// Tools whose entry desc is the agent's own input, not a response snippet.
-const AUTHORED_DESC_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Agent', 'Task']);
+// Tools whose entry desc is built from the agent's own input only, never a response snippet
+// (utils.mjs makeEntryDesc: Edit / Write / NotebookEdit quote the edit, Agent / Task the
+// description, LSP / WebSearch / WebFetch the operation, query or URL).
+const AUTHORED_DESC_TOOLS = new Set([
+  'Edit',
+  'MultiEdit',
+  'Write',
+  'NotebookEdit',
+  'Agent',
+  'Task',
+  'LSP',
+  'WebSearch',
+  'WebFetch',
+]);
 
 /**
  * The text that reached the episode ONLY as tool output, never as text the agent authored in
- * any entry: an entry's \`diagOut\` lines, and the response snippet \`makeEntryDesc\` puts
- * after " → " in a Bash / Grep / other tool's desc, which the prompt shows as the action
- * (pre-ship review P3-7). A Bash entry buffered before \`diagOut\` existed counts all its
- * lines as output — over-capping one flush after an upgrade, never under-capping.
+ * any entry: an entry's \`diagOut\` lines, and the response snippet \`makeEntryDesc\` puts in
+ * the desc of every other tool — after " → " for Bash / Grep, after "<tool>: " for its
+ * default arm (MCP servers, Skill, SendMessage, anything unlisted) — which the prompt shows
+ * as the action (pre-ship review P3-7; delta review P2-1: the first repair read only the
+ * arrow form). A Bash entry buffered before \`diagOut\` existed counts all its lines as
+ * output — over-capping one flush after an upgrade, never under-capping.
  * Exported for tests.
  */
 export function episodeOutputDiagnosis(episode) {
@@ -141,9 +155,12 @@ export function episodeOutputDiagnosis(episode) {
     const diag = Array.isArray(e?.diag) ? e.diag : [];
     const out = new Set(Array.isArray(e?.diagOut) ? e.diagOut : e?.tool === 'Bash' ? diag : []);
     for (const l of diag) (out.has(l) ? output : authored).add(l);
-    const arrow =
-      typeof e?.desc === 'string' && !AUTHORED_DESC_TOOLS.has(e?.tool) ? e.desc.indexOf(' → ') : -1;
+    if (typeof e?.desc !== 'string' || AUTHORED_DESC_TOOLS.has(e?.tool)) continue;
+    const arrow = e.desc.indexOf(' → ');
     if (arrow !== -1) output.add(e.desc.slice(arrow + 3).replace(/^ERROR: /, ''));
+    else if (typeof e.tool === 'string' && e.desc.startsWith(`${e.tool}: `)) {
+      output.add(e.desc.slice(e.tool.length + 2));
+    }
   }
   return [...output].filter((l) => l && !authored.has(l));
 }

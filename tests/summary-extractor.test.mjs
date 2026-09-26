@@ -114,6 +114,93 @@ describe('extractStructuredSummary — boundary handling', () => {
   });
 });
 
+// R6 (2026-09-26): 362 of 440 turn-final reports across this machine's transcripts used a
+// markdown heading (`## Done` 202, `**Done**` 118, …) that the colon-only header missed, so
+// the model's summary took Done / Not done even where the assistant had written its own.
+describe('extractStructuredSummary — markdown heading reports', () => {
+  it('reads `**Done**` / `**Not done**` / `**Uncertain**` block headings (v6.14.0 release report)', () => {
+    const text = [
+      'v6.14.0 已发布：CI 和 Release 都是绿的。',
+      '',
+      '**Done**',
+      '- **Bash 读写文件的记忆与召回（N1 + R8）**：回放中比例从 3.3% 升到 87.3%。',
+      '- **error-recall 不再回应刻意的 TDD 红（N2）**：触发次数从 1,107 降到 641。',
+      '',
+      '**Not done**',
+      '- **D#69 的效果还需要发布后验证（D#101）**：等约 100 条新记录。',
+      '- **P3 残留（D#100）**：',
+      '  - 循环变量按名字匹配；',
+      '  - 超过 64 个 helper 不再解析；',
+      '',
+      '**Uncertain**',
+      '- 不确定新的 Bash 召回的引用率。',
+      '',
+      '**给另外两个仓库的提示词**',
+      '',
+      'code-graph-mcp：',
+      '> PreToolUse:Bash hook sometimes emits invalid JSON.',
+    ].join('\n');
+    const r = extractStructuredSummary(text);
+    expect(r.done).toContain('87.3%');
+    expect(r.done).toContain('1,107');
+    expect(r.notDone).toContain('D#101');
+    expect(r.notDone).toContain('超过 64 个 helper');
+    expect(r.uncertain).toBe('- 不确定新的 Bash 召回的引用率。');
+    expect(r.failed).toBe('');
+  });
+
+  it('reads `## Done` sections whose body is a paragraph and a table, up to the next heading or rule', () => {
+    const text = [
+      '# Final report',
+      '',
+      '## Done',
+      '',
+      '**4 rounds, 3 defects fixed.**',
+      '',
+      '| # | sev |',
+      '|---|---|',
+      '| 1 | P1 |',
+      '',
+      '## Not done',
+      '',
+      '- the relabel waits for 100 events',
+      '',
+      '---',
+      'Unrelated trailing note.',
+    ].join('\n');
+    const r = extractStructuredSummary(text);
+    expect(r.done).toBe('**4 rounds, 3 defects fixed.**\n| # | sev |\n|---|---|\n| 1 | P1 |');
+    expect(r.notDone).toBe('- the relabel waits for 100 events');
+  });
+
+  it('`**Done:**` / `**Not done.**` on their own line leave no stray markup', () => {
+    const r = extractStructuredSummary('**Done:**\n- A\n\n**Not done.**\n- B');
+    expect(r.done).toBe('- A');
+    expect(r.notDone).toBe('- B');
+  });
+
+  it('an inline bold header after a block section starts its own section, without the markup', () => {
+    const r = extractStructuredSummary('**Not done**\n- the relabel\n**Failed:** 无。');
+    expect(r.notDone).toBe('- the relabel');
+    expect(r.failed).toBe('无。');
+  });
+
+  it('after an inline header the paragraph-break rule applies again, not the block rule', () => {
+    const r = extractStructuredSummary('**Done**\n- A\nNot done: B\n\nAn unrelated closing paragraph.');
+    expect(r.notDone).toBe('B');
+  });
+
+  it('`**Not done** — text` / `**Failed** — 无。` are inline headers', () => {
+    const r = extractStructuredSummary('**Done**\n- A\n\n**Not done** — 未提交。\n**Failed** - none');
+    expect(r).toEqual({ done: '- A', notDone: '未提交。', failed: 'none', uncertain: '' });
+  });
+
+  it('a heading with more words, or a bare "Done." line, is not a section', () => {
+    const r = extractStructuredSummary('## Done criteria\n- x\n\nDone.\n\nThe tests pass.');
+    expect(r).toEqual({ done: '', notDone: '', failed: '', uncertain: '' });
+  });
+});
+
 describe('extractTailAssistantText', () => {
   let dir;
   beforeEach(() => {

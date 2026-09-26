@@ -195,6 +195,35 @@ describe('extractStructuredSummary — markdown heading reports', () => {
     expect(r).toEqual({ done: '- A', notDone: '未提交。', failed: 'none', uncertain: '' });
   });
 
+  // Pre-ship review P3-3: real headers carrying a parenthetical, and a combined header. Each
+  // was misread (Not done filed under Done, or dropped), which then wiped remaining_items.
+  it.each([
+    ['**Done**\n- A\n**Not done**（未开始，非受阻）：D#21 等三项', '（未开始，非受阻） D#21 等三项'],
+    [
+      '## Done\n- A\n## Not done（报告已明确排除在前 5 之外）\n- D#21',
+      '（报告已明确排除在前 5 之外）\n- D#21',
+    ],
+    ['**Done**\n- A\n**Not done（未开始）**\n- D#21', '（未开始）\n- D#21'],
+    ['**Done**\n- A\n**Not done / Failed / Uncertain**：与上一条汇报相同', '与上一条汇报相同'],
+    ['**Done**\n- A\n**Not done — 第二组，等你批**', '第二组，等你批'],
+  ])('%j keeps its Not done', (text, notDone) => {
+    const r = extractStructuredSummary(text);
+    expect(r.done).toBe('- A');
+    expect(r.notDone).toBe(notDone);
+  });
+
+  // Pre-ship review P3-2: one chained pattern backtracked for 37 s on this line (Stop hook, 5 s).
+  it.each([
+    ['## Done' + ' '.repeat(5000) + 'x'],
+    ['**Done' + ' '.repeat(5000) + 'x'],
+    ['### Failed' + '\t'.repeat(5000) + '.x'],
+    ['**Not done**' + ' '.repeat(5000) + '（' + 'x'.repeat(5000)],
+  ])('a long whitespace run in a header-shaped line stays linear (%#)', (line) => {
+    const t0 = performance.now();
+    extractStructuredSummary(line + '\n' + line);
+    expect(performance.now() - t0).toBeLessThan(100);
+  });
+
   it('a heading with more words, or a bare "Done." line, is not a section', () => {
     const r = extractStructuredSummary('## Done criteria\n- x\n\nDone.\n\nThe tests pass.');
     expect(r).toEqual({ done: '', notDone: '', failed: '', uncertain: '' });

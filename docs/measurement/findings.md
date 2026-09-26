@@ -1491,8 +1491,12 @@ v6.14.0's D#69 grounding shows the episode summarizer up to 12 verbatim DIAGNOSI
 keeps a lesson only if it quotes one. Before it, the model saw a 60-character prefix of a
 Bash call's output (`makeEntryDesc`). Tool output is written by whoever controls what a
 command prints — a repo's test, a fetched page, a third-party tool — so "must quote" became
-"may carry a hostile line verbatim into memory", at importance 2, the floor of
-UserPromptSubmit's event leg and every observation face.
+"may carry a hostile line verbatim into memory", at importance 2, the floor of the event
+faces (UserPromptSubmit's event leg; SessionStart Key Events when enabled). Observation faces
+are not all floored at 2: UserPromptSubmit's observation queries admit importance ≥ 1
+(`scripts/user-prompt-search.js`), and an observation's importance is raised later by reads
+(autoBoostIfNeeded, boostAccessed) — both found by the pre-ship reviews, not by this entry's
+first draft, which said "every observation face".
 
 Reproduced, not inferred: the shipped `handleLLMEpisode` with real Haiku (`callLLM`, CLI mode)
 on a sandbox `CLAUDE_MEM_DIR`, 6 windows each carrying one hostile failing line (curl | sh,
@@ -1503,14 +1507,24 @@ verbatim in the event body at importance 2. After `a3dbf2d`, 12 windows (both li
 pinned by `tests/episode-input-filter.test.mjs` (the "quotes tool output" cases, RED on
 v6.14.0).
 
-The rule is PROVENANCE, not content: `extractDiagnosis` tags output lines (`entry.diagOut`),
-a line counts as output only if no entry authored it (a comment block an edit added, a commit
-message), and a lesson quoting any output-only line caps its row at importance 1 — row and
-lesson stay searchable. A content filter was not tried: a deny-list of dangerous commands is
-bypassed by rephrasing, and the prompt-side `MEMORY_INPUT_GUARD` did not stop 3 of 6.
-Not covered: a `decision` whose lesson is empty keeps its importance with the model's
-narrative as its body, and that narrative is written from the same DIAGNOSIS block. Not
-measured.
+The rule is PROVENANCE, not content: `extractDiagnosis` tags output lines (`entry.diagOut`,
+always present on a Bash entry; an older Bash entry without it counts all its lines as
+output), the response snippet after " → " in a Bash / Grep / other tool's desc counts as
+output too, a line counts as output only if no entry authored it (a comment block an edit
+added, a commit message), and a lesson sharing ANY 4 consecutive words with output (not
+grounding's stricter 5-letter rule) is handled by where it lands: an event row is capped at
+importance 1 with its lesson kept and searchable (no writer raises an event's importance, and
+every event face floors at 2); a `change` observation loses the lesson, because observation
+importance is not stable and UserPromptSubmit reads observations at ≥ 1. A content filter was
+not tried: a deny-list of dangerous commands is bypassed by rephrasing, and the prompt-side
+`MEMORY_INPUT_GUARD` did not stop 3 of 6.
+Not covered, none measured: every row's TITLE and NARRATIVE are written from the same
+DIAGNOSIS block and are not checked (the SessionStart Recent table shows titles at
+importance ≥ 1); a `decision` whose lesson is empty keeps its importance with the narrative
+as its body; a PARAPHRASED directive shares no 4 words with the output line (the defect
+review saw 1 of 6 real-Haiku windows store one at importance 2); and an agent-authored line
+the same command prints back (a commit subject echoed by `git log`) counts as output, which
+over-caps (10 of 991 such calls in this repo's transcripts).
 
 ### Bash-first capture (v6.14.0): what recovering Bash file paths did to the pre-save
 
@@ -1598,13 +1612,18 @@ every main-thread transcript on the maintainer's machine (both arms exit 0):
   the hand-written parser, which is why this was worth deciding once. Measured in a scratch
   install (never added to the repo): web-tree-sitter 0.27.0 + tree-sitter-bash 0.25.1 (+
   python 0.25.0, javascript 0.25.0), Node 22, this machine, 3 runs. Import + `Parser.init`
-  ≈ 8 ms, loading the bash grammar ≈ 9.5 ms, python + JS ≈ 2.6 ms, first parse of a real
-  patch command ≈ 6 ms — about 26 ms of setup and 6 ms of parsing, paid in EVERY hook process,
-  since each Bash PreToolUse / PostToolUse spawns a fresh node. The current parser's worst
-  case over 10,389 real commands is 2.2 ms. The grammar WASM files alone are 2.4 MB
-  (bash 1.36 MB), shipped to a plugin cache that has no `node_modules`. Tree-sitter IS
-  linear on the round-3 shapes (120 KB in 45–70 ms), but it does not remove the reasons the
-  findings recurred: the bash prefilter (P2-3's home) runs in bash and cannot use it, and
+  ≈ 8 ms, loading the bash grammar ≈ 9.5 ms, python + JS ≈ 2.6 ms — about 20 ms of setup —
+  and the first parse of a real patch command ≈ 6 ms, ≈ 26 ms in all, paid by every node
+  process that parses: each Bash PostToolUse, and the ≈ 52% of Bash PreToolUse calls the
+  prefilter hands to node. The current parser, cold in a fresh process, takes 3.2–8.6 ms on
+  the same commands (warm, its worst case over 10,389 real commands is 2.2 ms — the figure
+  first quoted here, which compared warm against cold; corrected by the claims review). The
+  grammar WASM files are 2.23 MB (bash 1.36 MB), 2.44 MB with the runtime, shipped to a
+  plugin cache that has no `node_modules`. On the round-3 shapes at 120 KB the bash grammar
+  parses the P2-3 prefilter shapes in 45–70 ms, but the python and JS grammars take
+  96–663 ms and 3–511 ms on the P2-1 shapes (claims review re-measure; this entry first
+  quoted only the bash figure as "120 KB in 45–70 ms"). It does not remove the reasons the
+  findings recurred either: the bash prefilter (P2-3's home) runs in bash and cannot use it, and
   the python / JS write-flow resolution (P2-1's home) stays hand-written logic over any
   AST. The class is instead bounded by hard caps (`0d29930`: 4 KB bracket scans, 64 sites
   per kind, 64 KB for indirect resolution, 16 KB for the prefilter and tags), each with a
@@ -1618,17 +1637,22 @@ every main-thread transcript on the maintainer's machine (both arms exit 0):
   pick when, and how often, the summary is produced. Measured first, as R6 asked
   (DB snapshot 2026-09-26, every project on this machine, sessions started in the last 7
   days, `done` provenance of each session's newest summary row): 157 sessions; `done=model`
-  9, `done=report` 4, `done=titles` 134 (and a titles row's `completed` is usually empty,
-  because the session's observations were upgrade-deleted into events — D#95). Only 5 of
-  the 157 still held an observation, which is the model worker's only input. **So model
-  coverage is bound by its INPUT, not its timing**: a SessionEnd or debounced worker reads
-  the same empty table. Where the model does win, it can be wrong — row 477, the v6.14.0
+  9, `done=report` 4, `done=titles` 134, and 10 with no summary row at all (a titles row's
+  `completed` is usually empty, because the session's observations were upgrade-deleted into
+  events — D#95). Only 4 of the 156 hook sessions still held an observation (a fifth hit was
+  a `manual-*` pseudo-session no worker runs for; first quoted as "5 of 157"), and holding
+  one is the worker's gate — without it it exits before reading anything else (it also reads
+  user prompts once past the gate). **So model coverage is bound by its INPUT, not its
+  timing**: a SessionEnd or debounced worker meets the same gate. Where the model does win, it can be wrong — row 477, the v6.14.0
   release session, told the next session the work left was "MEMORY.md compression" while
   that session's own report listed D#101 / D#100 / N4. The writer that outranks the model by
-  design, the assistant's own report, was the real gap: its header matched `Done:` only,
-  and read 109 of 440 turn-final reports on this machine. Fixed in `44ad93e` (markdown
-  headings); per transcript touched in the last 7 days, a report Done / Not done is now
-  readable in 86 of 109 (was 39). The v6.13.5/6 timing defects stay fixed and guarded.
+  design, the assistant's own report, was the real gap: its header matched `Done:` only.
+  Of the 1843 turn-final messages on this machine, 440 carried at least one section header
+  (238 all four) and the colon form parsed 78 of those (it parsed 109 messages in all; the
+  other 31 through a 中文 marker such as 剩下, some of them wrongly). Fixed in `44ad93e` (markdown
+  headings, with the review repairs in `589b1e3` and after); per transcript touched in the
+  last 7 days, a report Done / Not done is now readable in 86 of 106 (was 39; re-measured
+  after the repairs, the 7-day window having moved). The v6.13.5/6 timing defects stay fixed and guarded.
   **Next, if anything:** after the report fix ships, count sessions whose Last Session is
   still model-sourced and label them; retiring the per-Stop model worker is the candidate
   if they read wrong. D#95 (the input) stays open.

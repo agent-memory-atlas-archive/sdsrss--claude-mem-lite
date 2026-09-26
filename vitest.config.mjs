@@ -88,6 +88,9 @@ export default defineConfig({
     // current run. See lib/tmp-fixture-sweep.mjs.
     // The second clears the green stamp for a run that does not load its reporter (below).
     globalSetup: ['./tests/global-setup.mjs', './scripts/green-stamp.mjs'],
+    // Workers only: strip GIT_* inherited from a git hook, or a fixture `git init` rewrites
+    // the repository the hook's GIT_DIR names (see the file's header).
+    setupFiles: ['./tests/setup-strip-git-env.mjs'],
     // `default` restated because `reporters` REPLACES the default list. The second one
     // records a green stamp after a full, passing, unfiltered run over an unchanged tree,
     // which scripts/pre-commit.sh reuses to skip re-running the suite on that exact tree.

@@ -1509,9 +1509,11 @@ v6.14.0).
 
 The rule is PROVENANCE, not content: `extractDiagnosis` tags output lines (`entry.diagOut`,
 always present on a Bash entry; an older Bash entry without it counts all its lines as
-output), the response snippet in a tool's desc counts as output too (after " → " for Bash /
-Grep, after "<tool>: " for every other tool, MCP servers included — the delta review found the
-first repair read only the arrow form), a line counts as output only if no entry authored it (a comment block an edit
+output), the response snippet in a tool's desc counts as output too, located by TOOL: after
+" → " for Bash / Grep, after "<tool>: " for makeEntryDesc's default arm (MCP servers, Skill,
+SendMessage, MultiEdit, anything unlisted). Two delta reviews found the repairs reading only
+the arrow form, then reading an arrow INSIDE an MCP response first — the response is the
+attacker's text, so its content must not choose where it starts, a line counts as output only if no entry authored it (a comment block an edit
 added, a commit message), and a lesson sharing ANY 4 consecutive words with output (not
 grounding's stricter 5-letter rule) is handled by where it lands: an event row is capped at
 importance 1 with its lesson kept and searchable (no writer raises an event's importance, and
@@ -1532,8 +1534,10 @@ the same command prints back (a commit subject echoed by `git log`) counts as ou
 over-caps (10 of 991 such calls in this repo's transcripts). Two routes move a demoted lesson
 back into reach, both off the default path: `activity promote --min-importance 1 --execute`
 copies an importance-1 event's body into an observation's lesson (observations are read at
-≥ 1), and with `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` hook-optimize's re-enrich pass writes a new
-lesson for the lesson-less `change` row from its title and narrative, uncapped.
+≥ 1), and with `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` hook-optimize's re-enrich pass can write a new
+lesson for the lesson-less `change` row from its title and narrative, uncapped — only when
+the row's concepts, facts and search aliases are all empty too (that is the pool's
+predicate; confirmed by the round-3 review's probe).
 
 ### Bash-first capture (v6.14.0): what recovering Bash file paths did to the pre-save
 

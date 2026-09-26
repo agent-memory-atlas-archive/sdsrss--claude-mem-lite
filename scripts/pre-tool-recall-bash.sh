@@ -18,6 +18,8 @@
 # and this command line is the only one the transcript records for a Bash firing.
 
 [[ -n "$CLAUDE_MEM_HOOK_RUNNING" ]] && exit 0
+# Off switch for this leg alone (Edit/Write/Read recall is unaffected).
+case "${CLAUDE_MEM_BASH_RECALL:-}" in off | 0 | false | no) exit 0 ;; esac
 
 input=$(head -c 262144)
 

@@ -44,7 +44,9 @@
  * slightly differently, which this replay approximates by deleting those calls from the
  * old window; (b) host-flagged failures are excluded (PostToolUseFailure never fed the
  * buffer), matching production; (c) the transcript does not record `agent_id`, so a call
- * is "subagent" when it comes from `<session>/subagents/*.jsonl`.
+ * is "subagent" when it comes from `<session>/subagents/*.jsonl`; (d) this replay drops
+ * EVERY subagent call, while the shipped hook (ea8b61d) keeps a subagent call that edits a
+ * file inside the project — so its subagent counts are an upper bound on what ships.
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';

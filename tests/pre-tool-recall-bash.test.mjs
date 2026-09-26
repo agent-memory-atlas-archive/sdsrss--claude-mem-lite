@@ -89,6 +89,14 @@ describe('PreToolUse:Bash file recall', () => {
     expect(ctx).not.toContain('Before this edit');
   });
 
+  it('CLAUDE_MEM_BASH_RECALL=off silences the Bash leg (control: same call fires without it)', async () => {
+    const cmd = bash("sed -n '1,40p' lib/m.mjs", 'soff');
+    expect((await viaPrefilter(cmd, env({ CLAUDE_MEM_BASH_RECALL: 'off' }))).stdout).toBe('');
+    expect((await viaPrefilter(bash("sed -n '1,40p' lib/m.mjs", 'son'), env())).stdout).toContain(
+      'Keep the v export first',
+    );
+  });
+
   it('a Bash edit recalls the file in edit mode, with the ack directive', async () => {
     const { stdout } = await viaPrefilter(bash(`cd ${projectDir} && sed -i 's/1/2/' lib/m.mjs`), env());
     const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;

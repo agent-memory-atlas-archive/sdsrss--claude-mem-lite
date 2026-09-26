@@ -351,3 +351,14 @@ describe('bashFileTargets — dict-keyed edit maps', () => {
     expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
   });
 });
+
+describe('bashFileTargets — hot-path bound on pathological programs', () => {
+  it('200 KB of helper definitions resolves well inside a hook timeout', () => {
+    let body = '';
+    for (let i = 0; body.length < 200 * 1024; i++)
+      body += `def f(path, x):\n    open(path, 'w').write(x)\nf('lib/a${i}.mjs', 1)\n`;
+    const t0 = Date.now();
+    bashFileTargets(`python3 - <<'EOF'\n${body}EOF`, { cwd: REPO });
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});

@@ -119,12 +119,33 @@ const schemaWrite = (cwd) => ({
 });
 
 describe('D#69 capture: subagent calls stay out of the episode buffer', () => {
-  it('a call carrying agent_id buffers nothing; the same call without it does', async () => {
+  it('a subagent write OUTSIDE the project buffers nothing; the same call from the main thread does', async () => {
     const { cwd, project } = workDir('sub');
-    await post(cwd, { ...schemaWrite(cwd), agent_id: 'adefect-lens-1' });
+    // A reviewer probing an extracted tree: the file is outside the session's project dir.
+    const extracted = join(ROOT, 'extracted-review-tree');
+    mkdirSync(extracted, { recursive: true });
+    await post(cwd, { ...schemaWrite(extracted), agent_id: 'adefect-lens-1' });
     expect(existsSync(bufferOf(project)), 'a subagent call reached the episode buffer').toBe(false);
-    await post(cwd, schemaWrite(cwd)); // control: the main thread's identical call
+    await post(cwd, schemaWrite(extracted)); // control: the main thread's identical call
     expect(existsSync(bufferOf(project)), 'control: a main-thread call must buffer').toBe(true);
+  });
+
+  it("a subagent EDIT inside the project is the session's work and is buffered", async () => {
+    const { cwd, project } = workDir('sub-impl');
+    await post(cwd, { ...schemaWrite(cwd), agent_id: 'aimplementer-1' });
+    expect(existsSync(bufferOf(project)), 'an implementer subagent edit was dropped').toBe(true);
+  });
+
+  it('a subagent command that edits nothing is not buffered, even inside the project', async () => {
+    const { cwd, project } = workDir('sub-read');
+    await post(cwd, {
+      tool_name: 'Bash',
+      tool_input: { command: 'cat schema.sql && git status' },
+      tool_response: 'CREATE TABLE widgets (id INTEGER);\nOn branch main\nnothing to commit',
+      cwd,
+      agent_id: 'areader-1',
+    });
+    expect(existsSync(bufferOf(project))).toBe(false);
   });
 
   it('CLAUDE_MEM_EPISODE_INPUT_FILTER=off buffers the subagent call again', async () => {

@@ -1489,14 +1489,18 @@ Full evidence for the first three in `docs/measurement/findings.md`.
 
 The N1 change (docs/audits/20260926-154904-session-history-analysis-r2.md) made Bash commands
 yield their real files and made a Bash write an edit. That moved two things the commit that
-shipped it did not measure; the pre-ship defect review did, with `benchmark/episode-flush-replay.mjs
---json` on the base tree (`fa66e5d`) and then the head tree (`207dc38`), back to back,
-2026-09-26 ~17:35Z, over every main-thread transcript on the maintainer's machine:
+shipped it did not measure; the pre-ship defect review did, and it was re-measured on the tree
+that ships (after the review repairs) with `benchmark/episode-flush-replay.mjs --json` on the
+base tree (`fa66e5d`) and then the release tree, back to back, 2026-09-26 18:38–18:39Z, over
+every main-thread transcript on the maintainer's machine (both arms exit 0):
 
-| arm | flushes | significant | pre-saved rows landing (upper bound) | of which dev--claude-mem-lite |
-|---|---|---|---|---|
-| fa66e5d | 7658 | 4304 | 79 | 45 |
-| 207dc38 | 8553 (+11.7%) | 5370 (+24.8%) | 18 | 0 |
+| arm | flushes | significant | pre-saved rows landing (upper bound) | of which dev--claude-mem-lite | reads destroyed |
+|---|---|---|---|---|---|
+| fa66e5d | 7700 | 4321 | 83 | 49 | 49.8% |
+| release tree | 8597 (+11.6%) | 5324 (+23.2%) | 18 | 0 | 37.8% |
+
+(The review's own reading on the pre-repair tree `207dc38` was 7658 → 8553 / 4304 → 5370 /
+79 → 18 about an hour earlier; the corpus grows every session, so compare within a row pair.)
 
 - **Why fewer pre-saves land.** The rows that stopped landing were error+test windows whose
   degraded title was the entry desc (`sed -n 895,908p tests/… → …`) because the window had no
@@ -1509,12 +1513,14 @@ shipped it did not measure; the pre-ship defect review did, with `benchmark/epis
   success the worker clean-inserts a fresh row, so nothing is lost there. Decision: kept —
   the rows that stopped landing had command text for titles. Re-measure this table if an
   LLM-less install becomes a supported shape.
-- **What it costs.** +24.8% significant flushes is roughly that many more `llm-episode` calls
-  on the replayed corpus; +11.7% flushes because real paths now make `isRelatedToEpisode`
+- **What it costs.** +23.2% significant flushes is roughly that many more `llm-episode` calls
+  on the replayed corpus; +11.6% flushes because real paths now make `isRelatedToEpisode`
   split windows that used to look related.
-- **The ruler's own self-check 2 FAILs on the head tree** (15.1pp gap against a 15pp
-  tolerance): its live meter was recorded by the old code. Expected until the new build has
-  written a meter of its own — do not widen the tolerance to make it pass.
+- **What it gains.** Read paths destroyed at flush fell 49.8% → 37.8% of those consumed:
+  Bash edits now make windows significant, so the reads that preceded them are kept.
+- **The ruler's self-check 2 compares against a live meter written by the old code.** It
+  failed on the review's run (15.1pp against a 15pp tolerance) and passed on this one;
+  either way do not widen the tolerance — the meter re-baselines once the new build writes it.
 
 ## Levers measured and rejected
 

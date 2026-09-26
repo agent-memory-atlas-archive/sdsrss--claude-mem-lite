@@ -53,6 +53,19 @@ describe('post-tool-use.sh Read fast path: subagent Reads (P3-5)', () => {
     expect(lines).toEqual(['/tmp/review-tree/lib/alpha.mjs']);
   });
 
+  // Pre-ship delta review P3-7: the head -c 262144 window is all the script used to look
+  // at, so an agent_id serialised AFTER a >256 KB tool_response was never seen.
+  it('an agent_id past a >256 KB tool_response still keeps the Read out', () => {
+    const { r, lines } = read({ tool_response: { content: 'x'.repeat(300000) }, agent_id: 'areviewer-9' });
+    expect(r.status).toBe(0);
+    expect(lines).toEqual([]);
+  });
+
+  it('control: the same >256 KB Read without agent_id is appended', () => {
+    const { lines } = read({ tool_response: { content: 'x'.repeat(300000) } });
+    expect(lines).toEqual(['/tmp/review-tree/lib/alpha.mjs']);
+  });
+
   it('a Read carrying agent_id appends nothing', () => {
     const { r, lines } = read({ agent_id: 'adefect-lens-1', agent_type: 'general-purpose' });
     expect(r.status).toBe(0);

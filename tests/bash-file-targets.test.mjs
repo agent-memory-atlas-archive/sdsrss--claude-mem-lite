@@ -283,3 +283,71 @@ describe('bashFileTargets — keywords, wrappers, subshells', () => {
     expect(t("jq --arg name value '.f' data.json").reads).toEqual([`${REPO}/data.json`]);
   });
 });
+
+// Pre-ship delta review P2-A / P3-2..4: indirect write shapes the target attribution
+// dropped (the python tuple edit table is this repo's most common multi-file patch), and
+// the false writes it still made.
+describe('bashFileTargets — delta review shapes', () => {
+  it.each([
+    [
+      "python3 - <<'EOF'\nedits = [('lib/a.mjs', 'x', 'y'), ('lib/b.mjs', 'p', 'q')]\nfor f, old, new in edits:\n    s = open(f).read()\n    open(f, 'w').write(s.replace(old, new))\nEOF",
+      ['lib/a.mjs', 'lib/b.mjs'],
+    ],
+    [
+      "python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('lib/x.mjs')\np.write_text(p.read_text())\nEOF",
+      ['lib/x.mjs'],
+    ],
+    [
+      "python3 - <<'EOF'\nfrom pathlib import Path\nROOT = Path('.')\np = ROOT / 'lib/x.mjs'\np.write_text(p.read_text())\nEOF",
+      ['lib/x.mjs'],
+    ],
+    [
+      "python3 - <<'EOF'\nfiles = ['lib/a.mjs', 'lib/b.mjs']\nfor f in files:\n    open(f, 'w').write('')\nEOF",
+      ['lib/a.mjs', 'lib/b.mjs'],
+    ],
+    [
+      "node -e \"const fs=require('fs'); ['lib/a.mjs','lib/b.mjs'].forEach(f=>fs.writeFileSync(f,''))\"",
+      ['lib/a.mjs', 'lib/b.mjs'],
+    ],
+    [
+      "node -e \"const fs=require('fs'),path=require('path'); fs.writeFileSync(path.resolve('lib/x.mjs'),'')\"",
+      ['lib/x.mjs'],
+    ],
+    [
+      "node -e \"const fs=require('fs'); const w = f => fs.writeFileSync(f,'x'); w('lib/x.mjs')\"",
+      ['lib/x.mjs'],
+    ],
+    ["ruby -e \"File.write('lib/x.rb','x')\"", ['lib/x.rb']],
+    ["python3.12 -c \"open('lib/o.json','w').write('{}')\"", ['lib/o.json']],
+  ])('%s writes %j', (cmd, rels) => {
+    expect(t(cmd).writes).toEqual(rels.map((r) => `${REPO}/${r}`));
+  });
+
+  it('a read-only helper sharing a parameter name with a writing helper is not a writer', () => {
+    const cmd =
+      "python3 - <<'EOF'\ndef show(path):\n    print(open(path).read())\ndef save(path, s):\n    open(path, 'w').write(s)\nshow('lib/a.mjs')\nsave('lib/b.mjs', 'x')\nEOF";
+    expect(t(cmd).writes).toEqual([`${REPO}/lib/b.mjs`]);
+  });
+
+  it('a read-only table is not written just because something else is', () => {
+    const cmd =
+      "python3 - <<'EOF'\nimport sys\nchecks = [['tests/a.test.mjs', 3], ['tests/b.test.mjs', 4]]\nopen(sys.argv[1], 'w').write(str(checks))\nEOF";
+    expect(t(cmd).writes).toEqual([]);
+  });
+
+  it('jq --tab takes no value; time -p is a wrapper', () => {
+    expect(t('jq --tab . data.json').reads).toEqual([`${REPO}/data.json`]);
+    expect(t('time -p cat lib/x.mjs').views).toEqual([`${REPO}/lib/x.mjs`]);
+  });
+});
+
+describe('bashFileTargets — dict-keyed edit maps', () => {
+  it.each([
+    [
+      "python3 - <<'EOF'\nedits = {'lib/a.mjs': [('x', 'y')], 'lib/b.mjs': [('p', 'q')]}\nfor p, pairs in edits.items():\n    s = open(p).read()\n    open(p, 'w').write(s)\nEOF",
+    ],
+    ["python3 - <<'EOF'\nfor p in {'lib/a.mjs': 1, 'lib/b.mjs': 2}:\n    open(p, 'w').write('')\nEOF"],
+  ])('%s writes both keys', (cmd) => {
+    expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
+  });
+});

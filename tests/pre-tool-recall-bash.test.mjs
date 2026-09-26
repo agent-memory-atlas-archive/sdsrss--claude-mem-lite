@@ -213,6 +213,8 @@ describe('PreToolUse:Bash file recall', () => {
       ['ln -sf lib/a.mjs lib/b.mjs', true],
       ['time cat lib/m.mjs', true],
       ['env FOO=1 cat lib/m.mjs', true],
+      ['sudo -u root cat lib/m.mjs', true],
+      ['timeout -s KILL 5 cat lib/m.mjs', true],
       ['for l in 1 2; do sed -n "1,${l}p" lib/m.mjs; done', true],
       ['echo hi\n\tcat lib/m.mjs', true],
       ['git status', false],
@@ -223,6 +225,35 @@ describe('PreToolUse:Bash file recall', () => {
     ])('%s → starts node: %s', async (command, expected) => {
       expect(await withShim(command)).toBe(expected);
     });
+  });
+
+  // Pre-ship delta review P2-B: JSON escapes a heredoc's newlines and tabs, so a data
+  // heredoc is one long whitespace-free token to bash. A regex token that could span
+  // those escapes made the prefilter quadratic — 8.8 s at 149 KB against a 3 s hook
+  // timeout. Measured linear after the fix (66 ms at 149 KB); the bound leaves ~20x.
+  it('a large tab-separated data heredoc clears the prefilter well inside the hook timeout', async () => {
+    const row = Array.from({ length: 12 }, (_, i) => `${i % 2 ? '-' : ''}0.${(143 * i) % 997}`).join('\t');
+    const body = [];
+    for (let n = 0; n < 149 * 1024; n += row.length + 1) body.push(row);
+    const t0 = Date.now();
+    await viaPrefilter(bash(`python3 analyze.py <<'EOF'\n${body.join('\n')}\nEOF`), env());
+    expect(Date.now() - t0).toBeLessThan(1500);
+  });
+
+  it('drains a multi-megabyte payload even when it exits early (no EPIPE for the writer)', async () => {
+    const big = JSON.stringify(bash(`cat <<'EOF' > lib/big.txt\n${'x'.repeat(4 * 1024 * 1024)}\nEOF`));
+    const pipeErrors = [];
+    await new Promise((resolveP, reject) => {
+      const child = spawn('bash', [PREFILTER], {
+        env: { ...process.env, ...env({ CLAUDE_MEM_BASH_RECALL: 'off' }), CLAUDE_MEM_HOOK_RUNNING: '' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.stdin.on('error', (e) => pipeErrors.push(e.code));
+      child.on('close', resolveP);
+      child.on('error', reject);
+      child.stdin.end(big);
+    });
+    expect(pipeErrors).toEqual([]);
   });
 
   // Correct-usage sweep: none of these views or writes one file. Each must stay silent

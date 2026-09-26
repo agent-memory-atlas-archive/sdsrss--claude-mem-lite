@@ -198,7 +198,18 @@ describe('entryInputTags — correct-usage population (mutation is product vocab
     ),
     bash('pytest tests/test_mutations.py -x', 'E   AssertionError: mutation returned None'),
     bash("npx vitest run -t 'optimistic mutation' src/apollo", ' × optimistic mutation rolls back on error'),
+    // Delta review P3-5: a backup MARK mid-name is product naming, not a backup copy.
+    bash('cp src/user/user.mutation.ts src/user/admin.mutation.ts', ''),
+    bash('cp src/user/create.mutation.ts src/user/create.ts', ''),
+    bash('cp lib/db-backup.mjs lib/db-restore.mjs', ''),
   ];
+  it('control: a backup suffix at the END of a path is still a probe mechanism', () => {
+    const tags = (c) => entryInputTags('Bash', bash(c, '').input, '');
+    expect(tags('cp lib/a.mjs lib/a.mjs.mutated  # mutation arm M1')).toContain('probe');
+    expect(tags('cp lib/a.mjs lib/a.mjs.bak  # mutation arm M2')).toContain('probe');
+    expect(tags('cp lib/a.mjs.bak lib/a.mjs')).toContain('closes-probe');
+  });
+
   for (const s of shapes) {
     it(`no probe tag: ${s.input.command}`, () => {
       expect(entryInputTags('Bash', s.input, s.response)).not.toContain('probe');

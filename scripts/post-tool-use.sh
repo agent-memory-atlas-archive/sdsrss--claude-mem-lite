@@ -60,7 +60,18 @@ if [[ "$tool" == "Read" ]]; then
   # ALL subagent Reads, unlike hook.mjs (which keeps a subagent call that edits the
   # project): this path cannot know whether the subagent will edit later, a Read only
   # feeds files_read, and the edit itself still reaches the buffer through hook.mjs.
+  # The field can sit past the 256 KB head window (after a large tool_response): a
+  # truncated payload — one that does not end in `}` — has its unread rest scanned too.
+  # `grep -c`, not `-q`: it reads to EOF, so the writer never gets an EPIPE
+  # (pre-ship delta review P3-7).
+  _mem_sub=0
   if [[ "$input" =~ \"agent_id\"[[:space:]]*:[[:space:]]*\"[^\"]+\" ]]; then
+    _mem_sub=1
+  elif ! [[ "$input" =~ \}[[:space:]]*$ ]] &&
+    grep -c '"agent_id"[[:space:]]*:[[:space:]]*"[^"]' >/dev/null 2>&1; then
+    _mem_sub=1
+  fi
+  if [[ $_mem_sub == 1 ]]; then
     case "${CLAUDE_MEM_EPISODE_INPUT_FILTER:-}" in
       0|[oO][fF][fF]|[fF][aA][lL][sS][eE]|[nN][oO]) ;;
       *) exit 0 ;;

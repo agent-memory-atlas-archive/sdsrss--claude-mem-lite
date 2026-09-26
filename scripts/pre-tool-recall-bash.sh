@@ -19,8 +19,12 @@
 
 # Read the payload FIRST, before any early exit: exiting with stdin unread hands the
 # writer an EPIPE (seen as an uncaught error in this repo's own test harness when the
-# off switch fired before the write finished). pre-agent-inject.sh drains for the same reason.
-input=$(head -c 262144)
+# off switch fired before the write finished). Only the first 256 KB is kept; the rest is
+# drained, or a multi-megabyte heredoc still hits EPIPE (pre-ship delta review P3-6).
+{
+  input=$(head -c 262144)
+  cat >/dev/null
+}
 
 [[ -n "$CLAUDE_MEM_HOOK_RUNNING" ]] && exit 0
 # Off switch for this leg alone (Edit/Write/Read recall is unaffected).
@@ -70,12 +74,19 @@ done
 # JSON escapes a tab as `\t`, so it counts as whitespace here; wrappers (`time`, `env`,
 # `sudo -u x`, `timeout -s KILL 5`) and assignments may sit before the verb.
 ws='([[:space:]]|\\t)'
-wrap="(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|then|do|else|if|\\{|!|sudo|time|env|nice|nohup|command|timeout|-[^[:space:]]+|[0-9]+[smhd]?)${ws}+)*"
-start="(^|;|&&|\\|\\||\\(|\\\\n|\\\\t)${ws}*${wrap}"
+#
+# Every token class below excludes the backslash, so no token can swallow a JSON escape
+# (`\t`, `\n`) and each token boundary is unique. A token that could span `\t` made the
+# match superlinear: a 149 KB tab-separated heredoc took 8.8 s, over the hook's 3 s timeout
+# (pre-ship delta review P2-B). For the same reason a `\t` is whitespace, not a command start.
+# Wrapper options that take a value (`sudo -u root`, `timeout -s KILL 5`) are one token.
+tok='[^[:space:]\\]'
+wrap="(([A-Za-z_][A-Za-z0-9_]*=${tok}*|then|do|else|if|\\{|!|sudo|time|env|nice|nohup|command|timeout|-[ugsknCDhprtU]${ws}+[^-[:space:]\\]${tok}*|-${tok}+|[0-9]+[smhd]?)${ws}+)*"
+start="(^|;|&&|\\|\\||\\(|\\\\n)${ws}*${wrap}"
 verb_re="${start}(cat|head|tail|nl|less|more|bat|sed|perl|tee|cp|mv|ln|touch|truncate|install)${ws}"
 # Interpreters by basename (`/usr/bin/python3`, `python3.12`); a heredoc in any spelling
 # (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`).
-prog_re="${start}([^[:space:]]*/)?(python[0-9.]*|node)(${ws}+--?[A-Za-z0-9_=.-]+)*${ws}*(-[a-zA-Z]*[cep](${ws}|$)|-(${ws}|$)|<<)"
+prog_re="${start}(${tok}*/)?(python[0-9.]*|node)(${ws}+--?[A-Za-z0-9_=.-]+)*${ws}*(-[a-zA-Z]*[cep](${ws}|$)|-(${ws}|$)|<<)"
 tee_re='\|[[:space:]]*tee[[:space:]]'
 redir_re='>[[:space:]]*[^[:space:]&|;>]'
 if [[ "$cmd" =~ $verb_re ]] || [[ "$cmd" =~ $prog_re ]] || [[ "$cmd" =~ $tee_re ]] || [[ "$scan" =~ $redir_re ]]; then

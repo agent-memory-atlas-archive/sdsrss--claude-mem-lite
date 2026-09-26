@@ -56,7 +56,12 @@ import { DAY_MS } from './lib/time-constants.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { recoverChildrenOf } from './lib/maintain-core.mjs';
 import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
-import { isLessonGrounded, lessonGroundingEnabled } from './lib/episode-input-filter.mjs';
+import {
+  isLessonGrounded,
+  lessonGroundingEnabled,
+  lessonOutputCapEnabled,
+  quotedLines,
+} from './lib/episode-input-filter.mjs';
 
 /**
  * Retract a pre-saved observation this worker created moments ago, after the Haiku
@@ -116,6 +121,20 @@ export function episodeDiagnosis(episode) {
     }
   }
   return out;
+}
+
+/**
+ * The diagnosis lines that reached the episode ONLY as tool output (an entry's \`diagOut\`),
+ * never as text the agent authored in any entry. Exported for tests.
+ */
+export function episodeOutputDiagnosis(episode) {
+  const output = new Set();
+  const authored = new Set();
+  for (const e of Array.isArray(episode?.entries) ? episode.entries : []) {
+    const out = new Set(Array.isArray(e?.diagOut) ? e.diagOut : []);
+    for (const l of Array.isArray(e?.diag) ? e.diag : []) (out.has(l) ? output : authored).add(l);
+  }
+  return [...output].filter((l) => !authored.has(l));
 }
 
 function diagnosisBlock(diag) {
@@ -1163,6 +1182,13 @@ ${diagnosisBlock(diag)}`;
         }
       }
 
+      const quotesToolOutput =
+        Boolean(lessonLearned) &&
+        lessonOutputCapEnabled() &&
+        quotedLines(lessonLearned, episodeOutputDiagnosis(episode), 1).length > 0;
+      if (quotesToolOutput)
+        debugLog('DEBUG', 'llm-episode', 'lesson quotes tool output: importance capped at 1');
+
       const searchAliases = Array.isArray(parsed.search_aliases)
         ? parsed.search_aliases.slice(0, 6).join(' ')
         : null;
@@ -1203,8 +1229,12 @@ ${diagnosisBlock(diag)}`;
         // two are equal with grounding off). A lesson the grounding check dropped caps
         // `decision` too: its body falls back to the model's narrative, which is exactly
         // as unanchored as the lesson it replaces.
+        // D#100(3): a lesson quoting a line that reached the window only as tool OUTPUT
+        // carries text whoever controls that output wrote — reproduced on real Haiku,
+        // 3 of 6 hostile windows stored the directive at importance 2. The row and
+        // lesson stay searchable; only the automatic injection faces lose them.
         importance:
-          !lessonLearned && (groundingDropped || parsed.type !== 'decision')
+          (!lessonLearned && (groundingDropped || parsed.type !== 'decision')) || quotesToolOutput
             ? Math.min(ruleImportance, 1)
             : Math.max(Math.min(ruleImportance, 2), clampImportance(parsed.importance)),
         lessonLearned,

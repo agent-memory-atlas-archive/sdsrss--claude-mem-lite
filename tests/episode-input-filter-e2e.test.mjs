@@ -169,6 +169,8 @@ describe('D#69 capture: subagent calls stay out of the episode buffer', () => {
     const [e] = JSON.parse(readFileSync(bufferOf(project), 'utf8')).entries;
     expect(e.inputTags).toContain('slip');
     expect(e.diag).toContain('AssertionError: anchor not found');
+    // D#100(3): an output line is marked as tool output for the worker's importance cap.
+    expect(e.diagOut).toEqual(e.diag);
   });
 });
 
@@ -191,6 +193,7 @@ describe('D#69 capture: a Bash patch contributes its comment block as diagnosis'
     expect(e.diag).toEqual([
       'A LIMIT upstream of a JS filter is a reachability bound: the demoted row was evicted, not ranked lower.',
     ]);
+    expect(e.diagOut, 'a comment the agent wrote is not tool output').toBeUndefined();
   });
 });
 

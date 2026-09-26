@@ -116,10 +116,10 @@ describe('doctor: bash-invoking hooks (issue #28)', () => {
     // Two things at once. (1) If every hook command becomes `node`, this whole check is
     // measuring a dependency the product no longer has — delete it rather than leave it
     // passing vacuously. (2) The count is RESTATED in prose that nothing else checks: both
-    // READMEs' Platform Support rows and the CHANGELOG entry all say "three". A prose
+    // READMEs' Platform Support rows and the CHANGELOG entry all say "four". A prose
     // number with no machine behind it is this repo's standing way of going quietly stale,
-    // so the number is derived here and the exact value asserted — when a fourth bash hook
-    // lands, or one of these three is ported to .mjs, this goes red and names the surfaces.
+    // so the number is derived here and the exact value asserted — when a fifth bash hook
+    // lands, or one of these four is ported to .mjs, this goes red and names the surfaces.
     const manifest = JSON.parse(readFileSync(join(REPO, 'hooks', 'hooks.json'), 'utf8'));
     const commands = Object.values(manifest.hooks || {})
       .flat()

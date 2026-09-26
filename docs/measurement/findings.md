@@ -1341,7 +1341,7 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   proxy. **That check has to ask which registration is LIVE, and the first cut did not**
   (pre-ship review P1-1). `hooks/hooks.json` is in `RELEASE_SIGNED_FILES` but NOT in
   `SOURCE_FILES`, so the npm / npx / `git clone` install has no `hooks/` directory — and that
-  is exactly the shape registering its bash hooks through `settings.json` (2 of them, not 3).
+  is exactly the shape registering its bash hooks through `settings.json` (3 of them since v6.14.0, not 4 — `setup.sh` has no settings.json twin).
   Reading only the manifest therefore printed a green *"no hook command needs bash"* on the
   one shape where they are live, while both shipped READMEs promise `claude-mem-lite doctor`
   reports it — and that binary is the `~/.local/bin` symlink pointing at exactly the copy

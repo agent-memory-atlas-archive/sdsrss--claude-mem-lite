@@ -17,7 +17,7 @@ before retrieval, measurement, release, migration or schema work.**
 
 | Task | Command |
 |------|---------|
-| Setup · tests | `npm install` (Node >=22 toolchain) · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` · **before tagging: `npm run test:ci-env`** (CI colour/env; v6.13.0 burned a version on it) |
+| Setup · tests | `npm install` (Node >=22 toolchain) · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` · before tagging `npm run test:ci-env` (CI env) |
 | Coverage | `npm run test:coverage` (gate: statements 81 / branches 75 / functions 87 / lines 83) |
 | Lint · shell | `npx eslint .` · `shellcheck scripts/*.sh` |
 | Format | `npm run format` — **run it twice**, `tests/hook-update.test.mjs` needs a second pass to reach a fixed point. `format:check` is gated in CI and pre-commit |
@@ -171,7 +171,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 - **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at an unadopted temp dir and assert a premise first.
 - **An MCP tool's advertised JSON Schema is not its enforced schema, and `.pipe()` is where they part** — zod 4 renders the ZodPipe's INPUT side. Put the constraint INSIDE the `z.preprocess`.
 - **Tool name mapping**: Claude Code's Agent tool is `'Agent'`, not `'Task'`; Skill via `event.tool_input?.skill`. Skill commands (`/search`, `/recall`, `/recent`, `/timeline`) use `!` preprocessing for CLI injection.
-- **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the three shipped bash hooks sit outside every guard built on it, which is where two `setup.sh` runtime-dir splits hid for 12 audit rounds. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.
+- **A sweep is only as wide as its population, and `walkShipped` is every shipped `.mjs`/`.js`** — the four shipped bash hooks sit outside every guard built on it, which is where two `setup.sh` runtime-dir splits hid for 12 audit rounds. Read a guard's population before its criteria, and fix this class behaviourally: a text scan carries the same blind spot.
 <!-- claude-mem-lite:begin v1 -->
 ## claude-mem-lite — persistent memory
 

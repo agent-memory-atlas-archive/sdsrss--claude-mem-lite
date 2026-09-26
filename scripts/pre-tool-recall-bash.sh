@@ -19,7 +19,8 @@
 
 [[ -n "$CLAUDE_MEM_HOOK_RUNNING" ]] && exit 0
 # Off switch for this leg alone (Edit/Write/Read recall is unaffected).
-case "${CLAUDE_MEM_BASH_RECALL:-}" in off | 0 | false | no) exit 0 ;; esac
+# Case-insensitive like the other switches (bash 3.2 on macOS has no ${var,,}).
+case "${CLAUDE_MEM_BASH_RECALL:-}" in [Oo][Ff][Ff] | 0 | [Ff][Aa][Ll][Ss][Ee] | [Nn][Oo]) exit 0 ;; esac
 
 input=$(head -c 262144)
 

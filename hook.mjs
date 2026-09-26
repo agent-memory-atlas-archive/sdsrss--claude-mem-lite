@@ -784,15 +784,19 @@ async function handlePostToolUse() {
   // the episode buffer. benchmark/key-events-input-replay.mjs over this repo's transcripts
   // (2026-09-26): 212 of 1471 significant windows were made ENTIRELY of subagent calls —
   // reviewer probes in an extracted tree, fixture paths such as /repo/alpha.mjs — and 4 of
-  // the audit's 16 WRONG events came from such windows. Sharing the main thread's buffer
+  // the audit's 16 WRONG events came from such windows (counted under that drop-all rule).
+  // Sharing the main thread's buffer
   // also split its episodes. Error recall above still answers the subagent; only the
   // summarizer input is withheld. Opt out: CLAUDE_MEM_EPISODE_INPUT_FILTER=off.
   //
   // Narrowed from "every subagent call": 24 of 112 subagents in this repo's transcripts
   // (2026-09-26) wrote files inside the project — implementer agents, whose edits ARE the
-  // session's work. A subagent call is kept when it edits a file under the project dir;
-  // the audit's subagent-born WRONG events all came from activity outside it (extracted
-  // review trees, /repo/alpha.mjs fixtures). Kept entries still pass the probe filter.
+  // session's work. A subagent call is kept when it edits a file under the project dir.
+  // This is a trade, not a free narrowing: 3 of the audit's 4 subagent-born WRONG events
+  // (1106, 1217, 1827) involved such project edits, so their windows are kept again — the
+  // replay then drops each of their lessons at the grounding check (no quotable
+  // diagnosis), so none of the 16 WRONG lessons is injected under either rule. Kept
+  // entries still pass the probe filter.
   const projectRoot = inferProjectDir().replace(/\/+$/, '');
   const subagentEditsProject = entryEditedFiles({ tool: tool_name, files, bashWrites }).some((p) =>
     p.startsWith(projectRoot + '/'),

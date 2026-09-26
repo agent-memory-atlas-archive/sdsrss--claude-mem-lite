@@ -91,7 +91,9 @@ describe('PreToolUse:Bash file recall', () => {
 
   it('CLAUDE_MEM_BASH_RECALL=off silences the Bash leg (control: same call fires without it)', async () => {
     const cmd = bash("sed -n '1,40p' lib/m.mjs", 'soff');
-    expect((await viaPrefilter(cmd, env({ CLAUDE_MEM_BASH_RECALL: 'off' }))).stdout).toBe('');
+    for (const v of ['off', 'OFF', 'False', 'no', '0']) {
+      expect((await viaPrefilter(cmd, env({ CLAUDE_MEM_BASH_RECALL: v }))).stdout, v).toBe('');
+    }
     expect((await viaPrefilter(bash("sed -n '1,40p' lib/m.mjs", 'son'), env())).stdout).toContain(
       'Keep the v export first',
     );

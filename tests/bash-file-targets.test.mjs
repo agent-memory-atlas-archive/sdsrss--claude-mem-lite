@@ -352,6 +352,42 @@ describe('bashFileTargets — dict-keyed edit maps', () => {
   });
 });
 
+// Round-3 review P3-1 (D#100): a loop's variable was matched to a write target by NAME
+// program-wide, so a read-only loop reusing the name became a write.
+describe('bashFileTargets — a loop writes only when its own body writes', () => {
+  it.each([
+    [
+      "python3 - <<'EOF'\nchecks = [('lib/a.mjs', 'pat')]\nedits = [('lib/b.mjs', 'x', 'y')]\nfor f, pat in checks:\n    assert pat in open(f).read()\nfor f, a, b in edits:\n    open(f, 'w').write(open(f).read().replace(a, b))\nEOF",
+    ],
+    [
+      "node - <<'EOF'\nconst fs = require('fs');\n['lib/a.mjs'].forEach(f => console.log(fs.readFileSync(f, 'utf8')));\nfor (const f of ['lib/b.mjs']) fs.writeFileSync(f, '');\nEOF",
+    ],
+    [
+      "python3 - <<'EOF'\nfor f in ['lib/a.mjs']:\n    print(open(f).read())\nfor f in ['lib/b.mjs']:\n    open(f, 'w').write('')\nEOF",
+    ],
+    [
+      "node - <<'EOF'\nconst fs = require('fs');\nfor (const f of ['lib/a.mjs']) { console.log(fs.readFileSync(f, 'utf8')); }\n['lib/b.mjs'].forEach(f => { fs.writeFileSync(f, ''); });\nEOF",
+    ],
+  ])('%s writes lib/b.mjs only', (cmd) => {
+    const r = t(cmd);
+    expect(r.writes).toEqual([`${REPO}/lib/b.mjs`]);
+    expect(r.reads).toEqual([`${REPO}/lib/a.mjs`]);
+  });
+
+  it('a python loop whose inline list wraps onto more lines keeps the header indent', () => {
+    // From this repo's transcripts: the list's second row is indented past the loop body.
+    const cmd =
+      "python3 - <<'EOF'\nfor p,a,b in [('lib/a.mjs','x','y'),\n              ('lib/b.mjs','p','q')]:\n    s=open(p).read(); open(p,'w').write(s.replace(a,b))\nEOF";
+    expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
+  });
+
+  it('a one-line python loop body still counts', () => {
+    expect(
+      t("python3 - <<'EOF'\nfor p in ['lib/a.mjs', 'lib/b.mjs']: open(p, 'w').write('')\nEOF").writes,
+    ).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
+  });
+});
+
 describe('bashFileTargets — hot-path bound on pathological programs', () => {
   it('200 KB of helper definitions resolves well inside a hook timeout', () => {
     let body = '';

@@ -575,6 +575,8 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `sorted[0]` after a STABLE JS sort — which preserves SQL order as the tiebreak. The hazard is
   therefore unconditional now, on the default path. Still left alone under Iron Law #1 because
   no failing case has been built. **Unjudged, not cleared — and no longer gated.**
+  **Superseded 2026-09-26 by the N3 census below: it now ends on `id`**, which pins the ascending
+  rowid order R11 §5 measured (60/60) rather than changing it.
   **2026-09-25: the two `scripts/pre-tool-recall.js` legs were judged and fixed** (D#36): a built
   same-millisecond tie gave the Read slot to the older row, and both now end on `id DESC`. The live
   tie rate over those legs' own populations (importance >= 2, live, 60-day window; key = project +
@@ -648,7 +650,7 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   09:40Z), its rows are created only by `INSERT OR IGNORE` so `id` is creation order (the
   ordered column itself is set by an UPDATE at Stop), and the
   path runs only for a startup within 2 minutes of an /exit whose session has no summary yet.
-  **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
+  *(Superseded by the N3 census at the end of this bullet.)* **The other 52 sites in other files are NOT cleared, just unjudged** (D#15 — 52 is a re-count
   by name on 2026-09-07, excluding `CREATE INDEX` definitions and comments; the earlier "~42"
   was an undercount). Most are display order, where an arbitrary tie is cosmetic, and **the tie
   itself is not currently firing on this corpus**: a read-only probe of the real DB found
@@ -679,6 +681,36 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   HAVING c > 1` before spending a round on the remaining sites. Match `hook-memory.mjs:683`'s
   spelling (`importance DESC, created_at_epoch DESC, id DESC`) — it is the one face that already
   got this right.
+  **2026-09-26, N3 (session-history analysis r2 §4.3): the census closes the population, and
+  the "52 unjudged" above is superseded.** Caliber, which differs from the 52's: the `.mjs`/`.js`
+  entries of `package.json#files` (so `scripts/*.js` in, `benchmark/` and `tests/` out), SQL
+  read from the AST (literals, templates, `+` chains; SQL `--` comments stripped), ASC and DESC,
+  every clause whose terms name `created_at` / `created_at_epoch`, including window
+  `OVER (ORDER BY …)`; no shipped `.sh`/`.md`/`.json` carries one. `CREATE INDEX` excluded.
+  Result on `fa66e5d` (pre-fix): **76 clauses, 38 already on `id`, 27 fixed, 11 left**.
+
+  | Verdict | Clauses | Sites |
+  |---|---|---|
+  | Already on `id` | 38 | D#9 / R11 / D#36 / D#67 / D#75 sites (hook-handoff 6, hook-context 5, hook-optimize 7, hook-llm 5, search-core 5, fast-summary 3, pre-tool-recall 2, one each in search-engine, hook-memory, recall-core, save-observation, user-prompt-search) |
+  | Fixed, DESC listing under a LIMIT (a tie handed back the OLDEST rows) | 13 | `fetchRecent`, `fetchRecentTimeline`, timeline before-leg, `recentInjectableEvents`, `recentEvents`, `promoteInsightEvents`, browse tiers, CLI + MCP export, hook.mjs fuzzy-dedup scan, `findDuplicates`, doctor prompt sample, user-prompt-search `searchRecent` |
+  | Fixed, LIMIT 1 anchor | 1 | `nearestObservation` `ABS(created_at_epoch - ?) ASC, id DESC` (matches hook-handoff's twin) |
+  | Fixed, ASC (gains `id ASC`; pins the ascending-rowid tie order R11 §5 measured) | 13 | get-core's 4 detail fetches, timeline after-leg, `findSmartCompressCandidates`, `selectCompressionCandidates`, the 6 `deferred_work` orderings behind the user-typed ordinal (3 `ROW_NUMBER` windows + 3 display orders, deferred-work.mjs and hook-context.mjs) |
+  | Left: `session_handoffs` has no id and its rowid is not write order | 11 | hook-handoff 8, hook-context "Working State" 2, startup-dashboard 1 |
+
+  Six DESC faces got built-tie cases (`tests/created-at-tiebreak-census.test.mjs`), all six red
+  before (`[1,2,3]` for `[5,4,3]`). `tests/order-by-created-at-guard.test.mjs` now holds the
+  population: a clause naming created_at must end on `id`/`rowid` of the same alias, same
+  direction for a bare column, or match an allowlist entry keyed on file + table + clause with
+  an exact count; a case asserts `session_handoffs` still has no id column, so the excuse
+  expires with its premise. Mutation-verified with the REAL reverts (`git show` of 8876cc4^,
+  43571e3^ on two files, d06dc32^, bbf1490^ — each red naming exactly the sites its commit
+  fixed) plus eight live-file mutants. Live tie groups, read-only on a DB copy
+  2026-09-26T16:35Z, keyed project + `created_at_epoch`: observations 0/172 rows, events
+  **1**/4112 (the first live tie this bullet has recorded), session_summaries 0/327,
+  deferred_work 0/96, session_handoffs 0/71; user_prompts 0/789 on the epoch alone.
+  **Not in the census**: orderings on other time columns (`completed_at_epoch`,
+  `started_at_epoch`, `resolved_at`) and score-led orders whose expression folds in a decay of
+  `created_at_epoch` (error-recall's `bm25 × decay`, R10 B3).
 - **2026-09-26, D#79 / D#80: one summary row per session.** Every `session_summaries` writer
   assumed one Stop per mem session. Stop always fired per assistant turn; since R10-P1-1 the
   mem session also survives it, so every writer runs many times against a session that

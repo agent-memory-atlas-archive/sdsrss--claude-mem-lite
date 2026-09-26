@@ -240,6 +240,17 @@ describe('PreToolUse:Bash file recall', () => {
     expect(Date.now() - t0).toBeLessThan(1500);
   });
 
+  // Pre-ship round-3 review P2-3: non-heredoc runs with many command-start characters.
+  it.each([
+    'echo a.mjs ' + ';x='.repeat(30000),
+    'echo a.mjs ' + '( -a('.repeat(20000),
+    'echo a.mjs ' + ';a/python'.repeat(12000),
+  ])('the prefilter stays bounded on %#', async (command) => {
+    const t0 = Date.now();
+    await viaPrefilter(bash(command), env());
+    expect(Date.now() - t0).toBeLessThan(1500);
+  });
+
   it('drains a multi-megabyte payload even when it exits early (no EPIPE for the writer)', async () => {
     const big = JSON.stringify(bash(`cat <<'EOF' > lib/big.txt\n${'x'.repeat(4 * 1024 * 1024)}\nEOF`));
     const pipeErrors = [];

@@ -40,6 +40,12 @@ else
   exit 0
 fi
 
+# Only the head of a command is judged: a verb that decides this sits in its first lines,
+# and bash's regex engine is superlinear on some whitespace-free runs (`;x=;x=…` read 5.5 s
+# at 30 KB — pre-ship round-3 review P2-3). 16 KB bounds every shape; the node side still
+# parses the whole command.
+cmd="${cmd:0:16384}"
+
 # fd plumbing is never a file target.
 cmd="${cmd//[0-9]>&[0-9]/}"
 cmd="${cmd//>&[0-9]/}"
@@ -80,7 +86,7 @@ ws='([[:space:]]|\\t)'
 # match superlinear: a 149 KB tab-separated heredoc took 8.8 s, over the hook's 3 s timeout
 # (pre-ship delta review P2-B). For the same reason a `\t` is whitespace, not a command start.
 # Wrapper options that take a value (`sudo -u root`, `timeout -s KILL 5`) are one token.
-tok='[^[:space:]\\]'
+tok='[^[:space:]\;&|()]'
 wrap="(([A-Za-z_][A-Za-z0-9_]*=${tok}*|then|do|else|if|\\{|!|sudo|time|env|nice|nohup|command|timeout|-[ugsknCDhprtU]${ws}+[^-[:space:]\\]${tok}*|-${tok}+|[0-9]+[smhd]?)${ws}+)*"
 start="(^|;|&&|\\|\\||\\(|\\\\n)${ws}*${wrap}"
 verb_re="${start}(cat|head|tail|nl|less|more|bat|sed|perl|tee|cp|mv|ln|touch|truncate|install)${ws}"

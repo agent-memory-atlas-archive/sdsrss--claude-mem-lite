@@ -362,3 +362,24 @@ describe('bashFileTargets — hot-path bound on pathological programs', () => {
     expect(Date.now() - t0).toBeLessThan(1000);
   });
 });
+
+// Pre-ship round-3 review P2-1: every pathological shape it timed, each bounded well inside
+// the 3 s PreToolUse / 5 s PostToolUse timeouts (the worst read 71.8 s at 200 KB).
+describe('bashFileTargets — bounded on every round-3 pathological shape', () => {
+  const shapes = [
+    'x=[',
+    'a = (',
+    'for p in [',
+    'const f = (p ',
+    'for (const p ',
+    '].forEach(p',
+    'def f(p ',
+    'a$',
+  ];
+  it.each(shapes)('%s x N (200 KB) stays under 500 ms', (frag) => {
+    const body = `open(p, 'w')\nx = 'lib/a.mjs'\n${frag.repeat(Math.ceil((200 * 1024) / frag.length))}`;
+    const t0 = Date.now();
+    bashFileTargets(`python3 - <<'EOF'\n${body}\nEOF`, { cwd: REPO });
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+});

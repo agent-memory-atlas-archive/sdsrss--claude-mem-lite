@@ -614,3 +614,16 @@ describe('handleLLMEpisode — D#69 grounding', () => {
     return `${p.system}\n${p.user}`;
   }
 });
+
+// Pre-ship round-3 review P2-2: the /tmp backup-mark alternative backtracked cubically
+// (1.6 KB read 5 s) on every PostToolUse Bash call.
+describe('entryInputTags — bounded on pathological backup paths', () => {
+  it.each([
+    ['mv ' + '/tmp/bak'.repeat(500) + ' /tmp/z.bak'],
+    ['echo mutation; cp a ' + '/tmp/'.repeat(40000) + 'x'],
+  ])('%# stays under 200 ms', (command) => {
+    const t0 = Date.now();
+    entryInputTags('Bash', { command }, '');
+    expect(Date.now() - t0).toBeLessThan(200);
+  });
+});

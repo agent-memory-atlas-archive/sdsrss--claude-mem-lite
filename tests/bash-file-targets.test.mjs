@@ -381,6 +381,44 @@ describe('bashFileTargets — a loop writes only when its own body writes', () =
     expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
   });
 
+  // Pre-ship review P3-4: the body check must follow a write through a writing helper, a
+  // comprehension, and a python suite with a column-0 comment inside it.
+  it.each([
+    [
+      "python3 - <<'EOF'\ndef patch(path, old, new):\n    s = open(path).read()\n    open(path, 'w').write(s.replace(old, new))\nedits = [('lib/a.mjs', 'x', 'y'), ('lib/b.mjs', 'p', 'q')]\nfor f, old, new in edits:\n    patch(f, old, new)\nEOF",
+    ],
+    [
+      "node - <<'EOF'\nconst fs = require('fs');\nconst write = (p) => fs.writeFileSync(p, '');\nfor (const f of ['lib/a.mjs', 'lib/b.mjs']) write(f);\nEOF",
+    ],
+    [
+      "node - <<'EOF'\nconst fs = require('fs');\nfunction rep(f, a, b) { fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(a, b)); }\n['lib/a.mjs', 'lib/b.mjs'].forEach((f) => rep(f, 'x', 'y'));\nEOF",
+    ],
+    [
+      "python3 - <<'EOF'\nfiles = ['lib/a.mjs', 'lib/b.mjs']\n_ = [open(f, 'w').write('') for f in files]\nEOF",
+    ],
+    [
+      "python3 - <<'EOF'\nfor p in ['lib/a.mjs', 'lib/b.mjs']:\n    s = open(p).read()\n# keep the header\n    open(p, 'w').write(s)\nEOF",
+    ],
+    ["python3 - <<'EOF'\nfor p in ['lib/a.mjs', 'lib/b.mjs']: open(p, 'w').write('')\nprint('ok')\nEOF"],
+  ])('%s writes both', (cmd) => {
+    expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
+  });
+
+  // Pre-ship review P3-5: the 200 KB shape tests skip indirect resolution entirely, so this one
+  // stays under MAX_INDIRECT_PROGRAM and proves (via the write) that the loop path ran.
+  it('64 nested loops plus forEach sites under the indirect-resolution cap stay bounded', () => {
+    let prog = "x = ['lib/a.mjs']\n";
+    for (let i = 0; i < 64; i++) prog += ' '.repeat(i) + 'for f in x:\n';
+    const ind = ' '.repeat(64);
+    while (prog.length < 60000) prog += ind + "print(open(g).read()); ['lib/c.mjs'].forEach(q => q)\n";
+    prog += ind + "open(f, 'w')\n";
+    const cmd = `python3 - <<'EOF'\n${prog}EOF`;
+    const t0 = performance.now();
+    const r = t(cmd);
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(r.writes, 'premise: the loop path ran').toEqual([`${REPO}/lib/a.mjs`]);
+  });
+
   it('a one-line python loop body still counts', () => {
     expect(
       t("python3 - <<'EOF'\nfor p in ['lib/a.mjs', 'lib/b.mjs']: open(p, 'w').write('')\nEOF").writes,

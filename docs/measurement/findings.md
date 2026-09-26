@@ -711,6 +711,10 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   **Not in the census**: orderings on other time columns (`completed_at_epoch`,
   `started_at_epoch`, `resolved_at`) and score-led orders whose expression folds in a decay of
   `created_at_epoch` (error-recall's `bm25 × decay`, R10 B3).
+  **A tie can also hide a row, not just misorder it** (found by this census, fixed in `d4e6d18`):
+  `fetchTimelineWindow`'s legs compared the epoch strictly, so a row sharing the ANCHOR's
+  millisecond fell out of both the before and the after leg. Both now compare
+  `(created_at_epoch, id)`; built ties with the anchor first / middle / last were red before.
 - **2026-09-26, D#79 / D#80: one summary row per session.** Every `session_summaries` writer
   assumed one Stop per mem session. Stop always fired per assistant turn; since R10-P1-1 the
   mem session also survives it, so every writer runs many times against a session that

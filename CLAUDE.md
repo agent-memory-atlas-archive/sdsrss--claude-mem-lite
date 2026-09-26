@@ -43,8 +43,8 @@ series. Sandbox harness `tests/sandbox/` (`SBX_BASE` mandatory) after any depend
 ## Architecture
 
 Seven hook events in `hooks/hooks.json`: `SessionStart`, `PreCompact`, `PreToolUse`,
-`PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse` has TWO
-matchers, not three**; `install.mjs`'s settings.json twin must stay equal to it.
+`PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse` has THREE
+matchers** (Bash via a prefilter); `install.mjs`'s settings.json twin must stay equal.
 
 `code-graph-mcp overview .` maps the tree; the modules whose ROLE the filename does not give
 away are: **`tfidf.mjs` — the name is historical**, it is the Porter stemmer alone

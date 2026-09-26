@@ -54,6 +54,8 @@ import { neutralizeContextDelimiters } from '../format-utils.mjs';
 // Import-free module, no runtime deps — nothing added to this script's load cost.
 import { queueHookContext, flushHookStdout } from '../lib/hook-stdout.mjs';
 import { envNumber } from '../lib/env-number.mjs';
+// Leaf (path + os only): the Bash leg's command parser. See the Bash block in Main.
+import { bashFileTargets, isScratchCommandPath, isTransientPath } from '../lib/bash-file-targets.mjs';
 // P1-9: one bounded stdin reader. Import-free, like hook-stdout.mjs beside it.
 import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } from '../lib/hook-stdin.mjs';
 // Recall queries the SAVE-path project, so this MUST produce the same string as the
@@ -62,7 +64,7 @@ import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } f
 // recalled nothing) and would have drifted again when the 2026-08-17 e2e round taught inferProject to
 // anchor on the git work-tree root. project-utils.mjs is a leaf module over path/fs/os
 // only — cheaper than several imports this script already carries.
-import { inferProject } from '../project-utils.mjs';
+import { inferProject, inferProjectDir } from '../project-utils.mjs';
 
 import { DAY_MS } from '../lib/time-constants.mjs';
 // CLAUDE_MEM_DIR matches schema.mjs / main CLI — one env var sandboxes the
@@ -113,6 +115,11 @@ const CROSS_HOOK_DEDUP_SLACK_MAX = 5;
 //   4. benchmark/efficacy-harness.mjs, which builds its own settings.json
 // (install.mjs:975 looks like a fifth and is not — different matcher, for
 // post-tool-recall.js.)
+//
+// Bash is deliberately NOT in this list although this script handles it: it reaches
+// here through its own matcher and prefilter (scripts/pre-tool-recall-bash.sh), and for
+// Bash a command with no file target is the normal case, not an upstream field rename,
+// so it must never reach the shape probe this constant drives.
 //
 // Drift between any two is invisible at runtime. Two guards chain to cover 1-3:
 // tests/hooks-pretool-whitelist-sync.test.mjs pins hooks.json against this
@@ -401,6 +408,7 @@ try {
   // isFullRead: a Read with no offset/limit reads the whole file. The reread
   // guard only flags full-vs-full re-reads, so paging never trips it.
   let isFullRead = true;
+  let bashCwd = null;
   try {
     const event = JSON.parse(input);
     toolInput = event.tool_input;
@@ -412,6 +420,7 @@ try {
     filePath = toolEditPath(event.tool_input);
     sessionId = event.session_id || null;
     toolName = event.tool_name || null;
+    bashCwd = typeof event.cwd === 'string' ? event.cwd : null;
     const off = event.tool_input?.offset;
     const lim = event.tool_input?.limit;
     isFullRead = (off === undefined || off === null) && (lim === undefined || lim === null);
@@ -427,6 +436,31 @@ try {
     ({ filePath, sessionId, toolName } = salvaged);
     toolInput = {};
     isFullRead = true;
+  }
+
+  // N1 (docs/audits/20260926-154904-session-history-analysis-r2.md): Bash is where the reads
+  // and edits went — on Opus 5.5, 82% of file edits and 85% of file reads. The prefilter
+  // hands over the Bash calls that look like they touch a file; here the command is parsed
+  // and recalled as the Edit or Read it stands for: the first file it WRITES (edit mode),
+  // else the first file it VIEWS (cat, sed -n, head…; read mode). Searches (grep, rg),
+  // runners and plumbing have neither and exit here, silently — for Bash, "no target" is
+  // the normal case, not the upstream field rename the probe below exists to record.
+  let viaBash = false;
+  if (toolName === 'Bash') {
+    const cmd = typeof toolInput?.command === 'string' ? toolInput.command : '';
+    const t = bashFileTargets(cmd, { cwd: bashCwd || process.cwd() });
+    // Same root the project NAME is derived from (CLAUDE_PROJECT_DIR || PWD || cwd).
+    const projectDir = inferProjectDir();
+    const eligible = (p) => !isScratchCommandPath(p, projectDir) && !isTransientPath(p);
+    const write = t.writes.find(eligible);
+    const view = write ? null : t.views.find(eligible);
+    if (!write && !view) process.exit(0);
+    filePath = write || view;
+    toolName = write ? 'Edit' : 'Read';
+    viaBash = true;
+    // A Bash view is a page (`sed -n`, `head`) as often as a whole file, so it never
+    // arms the full-re-read guard.
+    isFullRead = false;
   }
 
   // Upstream-shape probe: hook ran but neither field nor input shape matches the
@@ -768,6 +802,7 @@ try {
         obs: allRows.filter((r) => r.src === 'obs').length,
         evt: allRows.filter((r) => r.src === 'evt').length,
         mode: isRead ? 'read' : 'edit',
+        via: viaBash ? 'bash' : 'tool',
       });
     }
     const showFraming =

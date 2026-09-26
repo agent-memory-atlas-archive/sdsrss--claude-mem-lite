@@ -1585,6 +1585,63 @@ describe('hook feature sweep: standalone hook scripts', () => {
     );
   });
 
+  // Registered surface is the PREFILTER: hooks.json names the .sh, which execs
+  // pre-tool-recall.js only for commands that look like they view or write a file.
+  itHook('scripts/pre-tool-recall-bash.sh', async () => {
+    const NAME = 'hs-pretool-bash';
+    const cwd = workDir(NAME);
+    const target = join(cwd, 'widget-cache.mjs');
+    writeFileSync(target, 'export function writeWidget() {\n  invalidateWidgetCache();\n}\n');
+    const LESSON = 'Always call invalidateWidgetCache after a write, never on read';
+    const id = await seedObs(cwd, 'Fixed the widget cache invalidation race', [
+      '--type',
+      'bugfix',
+      '--importance',
+      '3',
+      '--lesson',
+      LESSON,
+      '--files',
+      target,
+    ]);
+    const payload = (command) =>
+      JSON.stringify({
+        session_id: 'cc-hooksweep-pretool-bash',
+        tool_name: 'Bash',
+        cwd,
+        tool_input: { command },
+      });
+
+    // A command that touches no file: the prefilter exits before Node, silently.
+    const quiet = await bashHook('pre-tool-recall-bash.sh', { cwd, stdin: payload('git status') });
+    expect(quiet.code).toBe(0);
+    expect(quiet.stdout).toBe('');
+
+    const r = await bashHook('pre-tool-recall-bash.sh', {
+      cwd,
+      stdin: payload("sed -i 's/invalidateWidgetCache()/noop()/' widget-cache.mjs"),
+    });
+    expect(r.code, `pre-tool-recall-bash exited ${r.code}\n${r.stderr}`).toBe(0);
+    const [envelope] = expectHookStdout(r.stdout, {
+      event: 'PreToolUse',
+      plainAllowed: false,
+      label: 'scripts/pre-tool-recall-bash.sh',
+    });
+    expect(envelope, `no PreToolUse envelope emitted:\n${r.stdout}`).toBeTruthy();
+    // Functional: a relative `sed -i` target resolved against the hook's cwd reaches the
+    // file's lesson, in edit mode.
+    const ctx = envelope.hookSpecificOutput.additionalContext;
+    expect(ctx).toContain('Lessons for widget-cache.mjs');
+    expect(ctx).toContain(`#${id}`);
+    expect(ctx).toContain(LESSON);
+    expect(ctx).toContain('Before this edit');
+
+    await expectMalformedResilience(
+      'scripts/pre-tool-recall-bash.sh',
+      { event: 'PreToolUse', plainAllowed: false },
+      (stdin, malCwd) => bashHook('pre-tool-recall-bash.sh', { cwd: malCwd, stdin }),
+    );
+  });
+
   itHook('scripts/post-tool-recall.js', async () => {
     const NAME = 'hs-postrecall';
     const cwd = workDir(NAME);

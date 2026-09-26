@@ -10,7 +10,7 @@ import {
   isSpecificTerm,
   scrubSecrets,
   LOW_SIGNAL_TITLE,
-  EDIT_TOOLS,
+  isEditEntry,
   isMetaTriggerPrompt,
   notLowSignalTitleClause,
   safeText,
@@ -262,7 +262,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   if (episodeSnapshot?.entries) {
     const seenDescs = new Set();
     const pendingDescs = episodeSnapshot.entries
-      .filter((e) => e.isError || EDIT_TOOLS.has(e.tool))
+      .filter((e) => e.isError || isEditEntry(e))
       .map((e) => e.desc)
       .filter((d) => {
         if (seenDescs.has(d)) return false;

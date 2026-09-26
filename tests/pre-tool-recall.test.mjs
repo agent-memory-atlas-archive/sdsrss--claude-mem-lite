@@ -2640,12 +2640,20 @@ describe('pre-tool-recall', () => {
     // Control for the case above: an unhandled tool keeps its own distinct key,
     // so the two populations stay separable in the log.
     it('keeps the unknown-tool key distinct from the missing-path-field key', async () => {
-      const { stdout } = await runWithEnv({ tool_name: 'Bash', tool_input: { command: 'ls' } });
+      // `Glob`, not `Bash`: since the PreToolUse:Bash leg (N1, R2 audit) Bash is a tool
+      // this script handles, and a Bash command with no file target exits silently.
+      const { stdout } = await runWithEnv({ tool_name: 'Glob', tool_input: { pattern: '**/*.mjs' } });
 
       expect(stdout).toBe('');
       const keys = hookErrorRecords().map((r) => r.scope);
       expect(keys).toContain('pre-recall:unknown-tool');
       expect(keys).not.toContain('pre-recall:no-path-field');
+    });
+
+    it('a Bash command with no file target records no hook error at all', async () => {
+      const { stdout } = await runWithEnv({ tool_name: 'Bash', tool_input: { command: 'ls' } });
+      expect(stdout).toBe('');
+      expect(hookErrorRecords()).toEqual([]);
     });
 
     // B-1 ①. The basename arm cannot save this: real rows store path-shaped

@@ -138,7 +138,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 |----------|--------|-------|
 | **Linux** | Supported | Primary development and testing platform; the whole CI matrix runs here |
 | **macOS** | Supported | Fully compatible (Intel and Apple Silicon) |
-| **Windows** | Installs, not CI-covered | The MCP server, the CLI and the `node` hooks work (`better-sqlite3` ships `win32-x64` and `win32-arm64` prebuilds, so nothing is compiled). **Three hook commands run under `bash`** — `setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh` — and need Git for Windows or WSL on `PATH`; `claude-mem-lite doctor` reports it when `bash` cannot be found. No GitHub Actions runner exercises Windows, so this rests on user reports ([#28](https://github.com/sdsrss/claude-mem-lite/issues/28)), not on a green pipeline |
+| **Windows** | Installs, not CI-covered | The MCP server, the CLI and the `node` hooks work (`better-sqlite3` ships `win32-x64` and `win32-arm64` prebuilds, so nothing is compiled). **Four hook commands run under `bash`** — `setup.sh`, `post-tool-use.sh`, `pre-agent-inject.sh`, `pre-tool-recall-bash.sh` — and need Git for Windows or WSL on `PATH`; `claude-mem-lite doctor` reports it when `bash` cannot be found. No GitHub Actions runner exercises Windows, so this rests on user reports ([#28](https://github.com/sdsrss/claude-mem-lite/issues/28)), not on a green pipeline |
 | **WSL2** | Untested | Linux under the hood, so it should behave as the Linux row; nobody has reported either way |
 
 From v5.1.0 through v6.1.0, `package.json` declared `os: ["darwin", "linux"]`. That is an npm *install*
@@ -152,7 +152,7 @@ is still outside it gets a message naming both sides of the mismatch instead of 
 - **Node.js** >= 22
 - **Claude Code** CLI installed and configured (`claude` command available)
 - **SQLite3** support (provided by `better-sqlite3` 13, which ships prebuilt binaries for 8 platforms — no compiler needed on any of them; a platform it has no prebuild for falls back to building from source)
-- **Platform**: Linux or macOS; Windows installs and runs but is not CI-covered and needs Git Bash or WSL for three hooks (see [Platform Support](#platform-support))
+- **Platform**: Linux or macOS; Windows installs and runs but is not CI-covered and needs Git Bash or WSL for four hooks (see [Platform Support](#platform-support))
 
 ## Installation
 

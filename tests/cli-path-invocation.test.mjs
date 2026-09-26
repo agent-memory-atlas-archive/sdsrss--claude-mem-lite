@@ -454,6 +454,7 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
     'const nodeHook = (entry, ...args) => `node "${LAUNCHER_PATH}"',
     'command: `bash "${PREFILTER_PATH}"`',
     'command: `bash "${AGENT_PREFILTER_PATH}"`',
+    'command: `bash "${BASH_RECALL_PREFILTER_PATH}"`',
   ];
 
   test('the sweep detector fires on the shapes it exists for', () => {

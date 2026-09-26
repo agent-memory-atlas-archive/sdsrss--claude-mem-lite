@@ -246,6 +246,15 @@ describe('buildAndSaveHandoff', () => {
         { tool: 'Edit', desc: 'Edit hook.mjs: add handoff logic', isSignificant: true, isError: false },
         { tool: 'Read', desc: 'Read schema.mjs', isSignificant: false, isError: false },
         { tool: 'Bash', desc: 'Bash error: test failed', isSignificant: false, isError: true },
+        // A Bash edit is in-flight work exactly like the Edit above (N1, R2 audit)…
+        {
+          tool: 'Bash',
+          desc: 'sed -i dispatch.mjs',
+          files: ['/proj/dispatch.mjs'],
+          bashWrites: ['/proj/dispatch.mjs'],
+        },
+        // …and a Bash read is not.
+        { tool: 'Bash', desc: 'cat config.mjs', files: ['/proj/config.mjs'] },
       ],
       files: ['/proj/hook.mjs', '/proj/schema.mjs'],
     };
@@ -254,6 +263,8 @@ describe('buildAndSaveHandoff', () => {
 
     const row = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj'`).get();
     expect(row.unfinished).toContain('handoff logic');
+    expect(row.unfinished).toContain('sed -i dispatch.mjs');
+    expect(row.unfinished).not.toContain('cat config.mjs');
     expect(row.unfinished).toContain('test failed');
     expect(row.unfinished).not.toContain('Read schema');
   });

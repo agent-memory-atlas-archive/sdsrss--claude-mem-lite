@@ -255,6 +255,46 @@ describe('Suite 1: Full Session Lifecycle', () => {
     expect(episode.files).toContain('/tmp/src/index.js');
   });
 
+  // N1 (R2 audit): on Opus 5.5 most edits are Bash. The hook must resolve a relative
+  // `sed -i` target against stdin's cwd and record it as an edit, not drop it.
+  it('post-tool-use (Bash sed -i, relative path) records the resolved file as an edit', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cd /work/proj && sed -i "s/a/b/" lib/fast-summary.mjs' },
+      tool_response: { stdout: '', stderr: '', interrupted: false },
+      cwd: '/elsewhere',
+    });
+    // tool_response must clear handlePostToolUse's 10-char floor.
+    const { exitCode } = runHook('post-tool-use', {
+      stdin: stdin.replace('"stdout":""', '"stdout":"(no output)"'),
+      env: { HOME: tmpHome },
+    });
+    expect(exitCode).toBe(0);
+    const episode = JSON.parse(readFileSync(getEpisodeFile(tmpHome), 'utf8'));
+    const e = episode.entries[0];
+    expect(e.tool).toBe('Bash');
+    expect(e.files).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.bashWrites).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.isSignificant).toBe(true);
+    expect(episode.files).not.toContain('/work/proj');
+  });
+
+  it('post-tool-use (Bash read) keeps the file as an edge but not as an edit', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: "sed -n '1,40p' lib/fast-summary.mjs" },
+      tool_response: { stdout: 'export function x() {}\n', stderr: '', interrupted: false },
+      cwd: '/work/proj',
+    });
+    runHook('post-tool-use', { stdin, env: { HOME: tmpHome } });
+    const e = JSON.parse(readFileSync(getEpisodeFile(tmpHome), 'utf8')).entries[0];
+    expect(e.files).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.bashWrites).toBeUndefined();
+    expect(e.isSignificant).toBe(false);
+  });
+
   it('multiple post-tool-use entries accumulate in episode', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
 

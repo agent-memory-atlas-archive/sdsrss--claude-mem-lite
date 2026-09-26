@@ -90,6 +90,7 @@ export const SOURCE_FILES = [
   // scripts/pre-tool-recall.js (hook fast-path) and lib/edge-attribution.mjs.
   'lib/file-edge-match.mjs',
   'lib/cite-back-hint.mjs',
+  'lib/bash-file-targets.mjs',
   // The one definition of the pre-recall cooldown path — shared by its writer
   // (scripts/pre-tool-recall.js) and both readers (cite-back-hint, edge-attribution).
   'lib/cite-recall-path.mjs',
@@ -355,6 +356,9 @@ export const HOOK_SCRIPT_FILES = [
   // prefilter leaves the registered hook command pointing at a file that is not there.
   'pre-agent-inject.sh',
   'pre-agent-inject.js',
+  // PreToolUse:Bash prefilter; execs pre-tool-recall.js (listed above) for file-touching
+  // commands. Both ends must ship, for the same reason as the pair above.
+  'pre-tool-recall-bash.sh',
   // v2.84: self-heal wrapper that detects ERR_MODULE_NOT_FOUND under the
   // install dir and runs install.mjs repair before retrying the entry.
   // hooks.json + install.mjs settings template invoke node hook entries

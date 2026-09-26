@@ -913,6 +913,9 @@ function configureHooks() {
   // Second bash prefilter, same idea one event over: skip the Node start for a
   // default-off feature (audit 2026-08-22 P2-5, see the script's header).
   const AGENT_PREFILTER_PATH = join(SCRIPTS_PATH, 'pre-agent-inject.sh');
+  // Third: the Bash leg of file recall, which starts Node only for commands that look like
+  // they view or write a file (see the script's header).
+  const BASH_RECALL_PREFILTER_PATH = join(SCRIPTS_PATH, 'pre-tool-recall-bash.sh');
   // v2.84: every Node hook invocation routes through hook-launcher.mjs so an
   // ERR_MODULE_NOT_FOUND from a partial-install drift auto-heals via
   // install.mjs repair instead of permanently bricking the hook chain.
@@ -1039,6 +1042,19 @@ function configureHooks() {
     ],
   };
 
+  // Bash leg of the same recall (docs/audits/20260926-154904-session-history-analysis-r2.md,
+  // N1): on Opus 5.5 most reads and edits are Bash commands. Parity with hooks/hooks.json.
+  const memPreToolRecallBash = {
+    matcher: 'Bash',
+    hooks: [
+      {
+        type: 'command',
+        command: `bash "${BASH_RECALL_PREFILTER_PATH}"`,
+        timeout: 3,
+      },
+    ],
+  };
+
   // P0 subagent dispatch-time injection (default off — CLAUDE_MEM_SUBAGENT_INJECT).
   // Fires on the Agent/Task dispatch so a subagent (otherwise memory-blind — #8848)
   // can receive one relevant lesson via updatedInput. Parity with hooks/hooks.json.
@@ -1058,13 +1074,13 @@ function configureHooks() {
   };
 
   // Filter out existing mem hooks, then append fresh ones
-  // PreToolUse has two separate matchers, so we register both
+  // PreToolUse has three separate matchers, so we register all three
   // Event set MUST stay equal to hooks/hooks.json's (minus scripts/setup.sh, which
   // bootstraps the plugin cache and has no settings.json counterpart) —
   // tests/audit-silent-20260814.test.mjs diffs a real `install --dev` run's
   // settings.json against the shipped manifest and reds on any new divergence.
   const hookConfigs = {
-    PreToolUse: [memPreToolRecall, memPreAgentInject],
+    PreToolUse: [memPreToolRecall, memPreToolRecallBash, memPreAgentInject],
     PostToolUse: [memPostToolUse, memPostToolRecall],
     PostToolUseFailure: [memPostToolFailure],
     PreCompact: [memPreCompact],

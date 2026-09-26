@@ -112,7 +112,7 @@ describe('doctor: bash-invoking hooks (issue #28)', () => {
     ).toBe(withBash.issues);
   });
 
-  it('TRIPWIRE: exactly three hook commands invoke bash, which is what the READMEs say', () => {
+  it('TRIPWIRE: exactly four hook commands invoke bash, which is what the READMEs say', () => {
     // Two things at once. (1) If every hook command becomes `node`, this whole check is
     // measuring a dependency the product no longer has — delete it rather than leave it
     // passing vacuously. (2) The count is RESTATED in prose that nothing else checks: both
@@ -130,11 +130,11 @@ describe('doctor: bash-invoking hooks (issue #28)', () => {
     expect(
       bash.length,
       "the bash-hook count moved — update both READMEs' Platform Support rows and doctor's message",
-    ).toBe(3);
+    ).toBe(4);
     // By NAME, not just by count: a swap that keeps the total at three would otherwise pass
     // while the READMEs name scripts that no longer run.
     expect(
       bash.map((c) => c.replace(/^bash "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\//, '').replace(/"$/, '')),
-    ).toEqual(['post-tool-use.sh', 'pre-agent-inject.sh', 'setup.sh']);
+    ).toEqual(['post-tool-use.sh', 'pre-agent-inject.sh', 'pre-tool-recall-bash.sh', 'setup.sh']);
   });
 });

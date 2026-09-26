@@ -9,6 +9,8 @@ import { basename } from 'path';
 // import this file. Cold-start scripts are unaffected — scripts/pre-tool-recall.js
 // deliberately imports nothing from the utils.mjs barrel that re-exports this.
 import { toolEditPath } from './lib/file-edge-match.mjs';
+import { bashFileTargets, isTransientPath, isScratchCommandPath } from './lib/bash-file-targets.mjs';
+export { isTransientPath };
 
 // Read/search commands whose output legitimately contains "error"-like keywords without
 // being a failure. Matched against the PRIMARY command (see isReadOnlyCommand).
@@ -524,9 +526,6 @@ function commandKind(cmd, depth = 0) {
 
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
 // uniformly to both command-parsed paths and direct file_path/path/filePath fields.
-function isExcludedPath(p) {
-  return p.startsWith('/dev/') || p.startsWith('/proc/') || p.startsWith('/tmp/');
-}
 
 /**
  * Detect significance signals in a Bash command and its response.
@@ -887,16 +886,24 @@ export function planErrorRecall(cmd, response) {
 // ─── File Paths ──────────────────────────────────────────────────────────────
 
 /**
- * Extract file paths from tool input (file_path, path, filePath, or command args).
- * Deduplicates and excludes /dev/, /proc/, and /tmp/ paths.
+ * Files a tool call touched, split so callers can tell an edit from a read.
+ * `files`: every file edge (direct path fields + all Bash targets);
+ * `writes`: the subset a Bash command WROTE (`sed -i`, `cat > f`, a python patch, …) —
+ * the Bash counterpart of an Edit/Write `file_path`, consumed via `entryEditedFiles`.
  * @param {object} input Tool input object
- * @returns {string[]} Unique array of file paths
+ * @param {{cwd?: string|null, projectDir?: string|null}} [opts] the hook's `cwd`, to resolve
+ *   relative Bash paths; the project root, whose files count even when it lives under /tmp
+ * @returns {{files: string[], writes: string[]}}
  */
-export function extractFilePaths(input) {
+export function extractFileTargets(input, opts = {}) {
   const paths = [];
-  // Direct fields (Edit/Write file_path) are kept unconditionally — an explicit edit to a
+  const writes = [];
+  if (!input || typeof input !== 'object') return { files: [], writes: [] };
+  // Direct fields (Edit/Write file_path) are kept even under /tmp — an explicit edit to a
   // /tmp path is real work the user chose to make, unlike a /tmp path that merely appears as
   // a transient argument inside a Bash command (excluded as noise in the command branch below).
+  // Session-scoped paths (isTransientPath) are the exception: they are the agent's own
+  // scratch, not the user's work.
   //
   // `toolEditPath`, not a fourth hand-spelling of the same rule: this function knew
   // file_path/path/filePath and not `notebook_path`, while hooks.json matches PostToolUse
@@ -905,27 +912,39 @@ export function extractFilePaths(input) {
   // files, so the observation built from it got no observation_files edge and no file-keyed
   // recall could reach it. Same root cause as R12 B-2; the fourth site, and the one its
   // own follow-up note did not name.
-  const editedPath = toolEditPath(input);
-  if (editedPath) paths.push(editedPath);
-  if (input.path) paths.push(input.path);
-  if (input.filePath) paths.push(input.filePath);
-  if (input.command) {
-    // Match absolute paths; extension optional to support Makefile, Dockerfile etc.
-    const match = input.command.match(/(?:^|\s)(\/[\w./-]+\w)/g);
-    if (match) {
-      for (const m of match) {
-        const p = m.trim();
-        if (
-          !isExcludedPath(p) &&
-          // Skip single-component paths like /exit, /clear — likely slash commands, not files
-          (p.indexOf('/', 1) !== -1 || /\.\w+$/.test(p))
-        ) {
-          paths.push(p);
-        }
-      }
-    }
+  for (const p of [toolEditPath(input), input.path, input.filePath]) {
+    if (typeof p === 'string' && p && !isTransientPath(p)) paths.push(p);
   }
-  return [...new Set(paths)];
+  if (typeof input.command === 'string' && input.command) {
+    // Shell-aware: cwd prefixes, relative and quoted paths, write-verb targets and
+    // interpreter-script literals (lib/bash-file-targets.mjs). The `cd` target itself is
+    // never an edge — it made every `cd <repo> && …` command look like it touched the
+    // repo root and nothing else.
+    const keep = (p) =>
+      !isScratchCommandPath(p, opts.projectDir) &&
+      !isTransientPath(p) &&
+      // Skip single-component paths like /exit, /clear — likely slash commands, not files
+      (p.indexOf('/', 1) !== -1 || /\.\w+$/.test(p));
+    const t = bashFileTargets(input.command, { cwd: opts.cwd || null });
+    for (const p of t.writes) {
+      if (!keep(p)) continue;
+      writes.push(p);
+      paths.push(p);
+    }
+    for (const p of [...t.reads, ...t.mentions]) if (keep(p)) paths.push(p);
+  }
+  return { files: [...new Set(paths)], writes: [...new Set(writes)] };
+}
+
+/**
+ * Extract file paths from tool input (file_path, path, filePath, or command args).
+ * Deduplicates and excludes /dev/, /proc/, /tmp/ command paths and session-scoped paths.
+ * @param {object} input Tool input object
+ * @param {{cwd?: string|null}} [opts] the hook's `cwd`, to resolve relative Bash paths
+ * @returns {string[]} Unique array of file paths
+ */
+export function extractFilePaths(input, opts = {}) {
+  return extractFileTargets(input, opts).files;
 }
 
 // ─── Episode Logic ───────────────────────────────────────────────────────────

@@ -139,6 +139,28 @@ export function clampImportance(val) {
 // Tools that produce file edits (used for significance detection, feedback, importance)
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 
+/**
+ * The files an episode entry EDITED: an Edit/Write/NotebookEdit entry's paths, or what a
+ * Bash command wrote (`bashWrites`, recorded by hook.mjs from extractFileTargets). Every
+ * "was this an edit" consumer goes through here or isEditEntry: nine sites asked
+ * `EDIT_TOOLS.has(e.tool)`, and on Opus 5.5 82% of file edits went through Bash
+ * (docs/audits/20260926-154904-session-history-analysis-r2.md, N1), so each of them saw
+ * a session of `sed -i` / python patches as one with no edits at all.
+ * @param {object} e episode entry
+ * @returns {string[]}
+ */
+export function entryEditedFiles(e) {
+  if (!e) return [];
+  if (EDIT_TOOLS.has(e.tool)) return e.files || [];
+  if (e.tool === 'Bash' && Array.isArray(e.bashWrites)) return e.bashWrites;
+  return [];
+}
+
+/** @param {object} e episode entry @returns {boolean} the entry edited a file */
+export function isEditEntry(e) {
+  return Boolean(e) && (EDIT_TOOLS.has(e.tool) || entryEditedFiles(e).length > 0);
+}
+
 // Stdin caps for the hook entry points (G19). Two DELIBERATE tiers, not drift:
 // full hook payloads carry tool_response bodies (256KB), while the UserPromptSubmit
 // search surface caps the prompt itself at 64KB (#9494 huge-prompt guard — search
@@ -172,7 +194,7 @@ export function computeRuleImportance(episode) {
     toolTypes.add(entry.tool);
 
     // Track error→edit debug cycle pattern
-    if (lastWasError && EDIT_TOOLS.has(entry.tool)) hasErrorThenEdit = true;
+    if (lastWasError && isEditEntry(entry)) hasErrorThenEdit = true;
     lastWasError = entry.isError || sig?.isError;
 
     if (sig?.isError && (sig?.isTest || sig?.isBuild)) {
@@ -183,12 +205,12 @@ export function computeRuleImportance(episode) {
     // referenced in a bash command (finding #7): reading auth.js / .env / schema.mjs
     // incidentally during an unrelated task must not promote the whole memory to
     // imp=3 and outrank genuine memories in top-K injection.
-    const isEdit = EDIT_TOOLS.has(entry.tool);
-    if (isEdit && files.some((f) => /\.(env|pem|key)$|\/auth\.|\/credential|\/password/i.test(f))) {
+    const edited = entryEditedFiles(entry);
+    if (edited.some((f) => /\.(env|pem|key)$|\/auth\.|\/credential|\/password/i.test(f))) {
       importance = 3;
       break;
     }
-    if (isEdit && files.some((f) => /migration|schema\.|prisma|alembic/i.test(f))) {
+    if (edited.some((f) => /migration|schema\.|prisma|alembic/i.test(f))) {
       importance = 3;
       break;
     }

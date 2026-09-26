@@ -25,7 +25,6 @@ import { homedir } from 'os';
 import {
   inferProject,
   detectBashSignificance,
-  extractFilePaths,
   isRelatedToEpisode,
   makeEntryDesc,
   scrubSecrets,
@@ -40,6 +39,7 @@ import {
 // backward-compat surface that knip already lists as unused; new shared symbols go to
 // their canonical module.
 import { inferProjectDir } from './project-utils.mjs';
+import { extractFileTargets } from './bash-utils.mjs';
 import { isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
 import { readHookStdin } from './lib/hook-stdin.mjs';
 // Aliased: `acquireLock` from hook-episode.mjs below is the episode buffer's own
@@ -677,7 +677,12 @@ async function handlePostToolUse() {
   if (!resp || resp.length < 10) return;
 
   const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
-  const files = extractFilePaths(toolInput);
+  // The hook's cwd resolves relative Bash paths (`sed -i … lib/x.mjs`); `bashWrites` is
+  // what a Bash command wrote, the Bash counterpart of an Edit's file_path (N1, R2 audit).
+  const { files, writes: bashWrites } = extractFileTargets(toolInput, {
+    cwd: typeof hookData.cwd === 'string' ? hookData.cwd : null,
+    projectDir: inferProjectDir(),
+  });
 
   // Tier 1 B: Detect significant Bash commands
   const bashSig = tool_name === 'Bash' ? detectBashSignificance(toolInput, resp) : null;
@@ -687,12 +692,14 @@ async function handlePostToolUse() {
     tool: tool_name,
     desc: scrubSecrets(makeEntryDesc(tool_name, toolInput, resp, bashSig)),
     files,
+    ...(tool_name === 'Bash' && bashWrites.length ? { bashWrites } : {}),
     ts: Date.now(),
     isError: bashSig?.isError || false,
     // isHardError gates the bugfix-shape save-nudge (lib/cite-back-hint.mjs): a real
     // failure fingerprint, not just "error" appearing in search/log output.
     isHardError: bashSig?.isHardError || false,
-    isSignificant: EDIT_TOOLS.has(tool_name) || bashSig?.isSignificant || false,
+    isSignificant:
+      EDIT_TOOLS.has(tool_name) || bashSig?.isSignificant || (tool_name === 'Bash' && bashWrites.length > 0),
     bashSig: bashSig || null,
     // CC UUID from hook stdin — lets flushEpisode split a buffer shared by
     // concurrent same-project sessions into per-session observations. Null for

@@ -14,7 +14,8 @@ import {
   computeMinHash,
   estimateJaccardFromMinHash,
   cjkBigrams,
-  EDIT_TOOLS,
+  isEditEntry,
+  entryEditedFiles,
   LOW_SIGNAL_TITLE,
   debugCatch,
   debugLog,
@@ -630,7 +631,7 @@ function linkRelatedObservations(db, savedId, obs, episode) {
 export function buildDegradedTitle(episode) {
   const files = (episode.files || []).filter(Boolean);
   const hasError = episode.entries.some((e) => e.isError);
-  const hasEdit = episode.entries.some((e) => EDIT_TOOLS.has(e.tool));
+  const hasEdit = episode.entries.some(isEditEntry);
 
   // Extract a short error hint from the first error entry's desc
   let errorHint = '';
@@ -708,7 +709,7 @@ export function saveEpisodeImmediate(episode, externalDb, scope = 'saveEpisodeIm
  */
 export function buildImmediateObservation(episode) {
   const hasError = episode.entries.some((e) => e.isError);
-  const hasEdit = episode.entries.some((e) => EDIT_TOOLS.has(e.tool));
+  const hasEdit = episode.entries.some(isEditEntry);
   const readCount = episode.entries.filter((e) => e.tool === 'Read' || e.tool === 'Grep').length;
   const isReviewPattern = !hasEdit && !hasError && readCount >= 5;
   const inferredType = hasError ? 'bugfix' : hasEdit ? 'change' : 'discovery';
@@ -761,11 +762,9 @@ export function buildImmediateObservation(episode) {
   const searchedFiles = new Set();
   for (const entry of episode.entries) {
     if (!entry.files) continue;
-    if (EDIT_TOOLS.has(entry.tool)) {
-      for (const f of entry.files) modifiedFiles.add(f);
-    } else {
-      for (const f of entry.files) searchedFiles.add(f);
-    }
+    // A Bash entry can do both: `cp a b` reads a and writes b.
+    const edited = new Set(entryEditedFiles(entry));
+    for (const f of entry.files) (edited.has(f) ? modifiedFiles : searchedFiles).add(f);
   }
   // Merge bash-tracked reads and search tool files into filesRead
   const allReads = new Set([...(episode.filesRead || []), ...searchedFiles]);

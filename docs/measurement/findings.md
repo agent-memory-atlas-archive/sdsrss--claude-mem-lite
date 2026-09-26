@@ -1485,6 +1485,37 @@ Full evidence for the first three in `docs/measurement/findings.md`.
   `mark_deps_ok` branch deletes and which directory each migration acts on, and each carries
   controls so a red arm cannot be mistaken for a harness that never reached the branch.
 
+### Bash-first capture (v6.14.0): what recovering Bash file paths did to the pre-save
+
+The N1 change (docs/audits/20260926-154904-session-history-analysis-r2.md) made Bash commands
+yield their real files and made a Bash write an edit. That moved two things the commit that
+shipped it did not measure; the pre-ship defect review did, with `benchmark/episode-flush-replay.mjs
+--json` on the base tree (`fa66e5d`) and then the head tree (`207dc38`), back to back,
+2026-09-26 ~17:35Z, over every main-thread transcript on the maintainer's machine:
+
+| arm | flushes | significant | pre-saved rows landing (upper bound) | of which dev--claude-mem-lite |
+|---|---|---|---|---|
+| fa66e5d | 7658 | 4304 | 79 | 45 |
+| 207dc38 | 8553 (+11.7%) | 5370 (+24.8%) | 18 | 0 |
+
+- **Why fewer pre-saves land.** The rows that stopped landing were error+test windows whose
+  degraded title was the entry desc (`sed -n 895,908p tests/… → …`) because the window had no
+  files. With files recovered, `buildDegradedTitle` returns `Error: <names>`, a LOW_SIGNAL
+  title, and the existing write-side noise gates drop or cap it; Bash writes also turn
+  `discovery` windows into `change` ones, which `isLowYieldChangeObs` drops. The policy is
+  the one that was already there — more rows now reach it.
+- **Who loses something.** Only the pre-save path: an install with no working LLM, and the
+  one flush whose LLM call fails (hook-llm.mjs's "keep the pre-saved row" branch). On LLM
+  success the worker clean-inserts a fresh row, so nothing is lost there. Decision: kept —
+  the rows that stopped landing had command text for titles. Re-measure this table if an
+  LLM-less install becomes a supported shape.
+- **What it costs.** +24.8% significant flushes is roughly that many more `llm-episode` calls
+  on the replayed corpus; +11.7% flushes because real paths now make `isRelatedToEpisode`
+  split windows that used to look related.
+- **The ruler's own self-check 2 FAILs on the head tree** (15.1pp gap against a 15pp
+  tolerance): its live meter was recorded by the old code. Expected until the new build has
+  written a meter of its own — do not widen the tolerance to make it pass.
+
 ## Levers measured and rejected
 
 - **A Porter tokenizer on the FTS index — measured 2026-09-14, REJECTED.** The index is
@@ -1552,7 +1583,8 @@ Lightweight persistent memory system for Claude Code. MCP server + hooks plugin.
 - **`INSTALL_COMMANDS`** — `install uninstall status doctor cleanup cleanup-hooks self-update repair rebuild-binding release`
 Seven hook events are registered in `hooks/hooks.json`: `SessionStart`, `PreCompact`,
 `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse`
-has TWO matchers, not three** — the `Skill` one went with the skill registry
+has THREE matchers** — `Edit|Write|NotebookEdit|Read`, `Bash` (a bash prefilter in front of the
+same recall, v6.14.0) and `Agent|Task`; the `Skill` one went with the skill registry
 (`docs/audits/20260906-145304.md`); `install.mjs`'s settings.json twin must stay equal to it.
 | `cli.mjs` | CLI entry point — routes subcommands to mem-cli.mjs or install.mjs |
 | `mem-cli.mjs` | CLI subcommand dispatch: retrieval / write / maintenance / data / insight / adopt families |

@@ -17,12 +17,15 @@
 # transcript's hook attachment to the pretool face by that substring of the hook COMMAND,
 # and this command line is the only one the transcript records for a Bash firing.
 
+# Read the payload FIRST, before any early exit: exiting with stdin unread hands the
+# writer an EPIPE (seen as an uncaught error in this repo's own test harness when the
+# off switch fired before the write finished). pre-agent-inject.sh drains for the same reason.
+input=$(head -c 262144)
+
 [[ -n "$CLAUDE_MEM_HOOK_RUNNING" ]] && exit 0
 # Off switch for this leg alone (Edit/Write/Read recall is unaffected).
 # Case-insensitive like the other switches (bash 3.2 on macOS has no ${var,,}).
 case "${CLAUDE_MEM_BASH_RECALL:-}" in [Oo][Ff][Ff] | 0 | [Ff][Aa][Ll][Ss][Ee] | [Nn][Oo]) exit 0 ;; esac
-
-input=$(head -c 262144)
 
 # The command string, still JSON-escaped (`\n`, `\"`) — the tests below do not need it
 # decoded. `\"command\"` also appears inside other fields only as escaped text (`\\\"`),
@@ -64,9 +67,15 @@ done
 # is most Bash tails), a pipe into `tee`, an inline or heredoc program (`python3 -c`,
 # `node -e`, `python3 - <<`; a plain `node x.mjs` runs a file, it does not edit one),
 # or an output redirection.
-start='(^|;|&&|\|\||\(|\\n)[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(sudo[[:space:]]+)?'
-verb_re="${start}(cat|head|tail|nl|less|more|bat|sed|perl|tee|cp|mv|touch|install)[[:space:]]"
-prog_re="${start}(python|python3|node)([[:space:]]+--?[A-Za-z0-9_=.-]+)*[[:space:]]+(-[a-zA-Z]*[cep]|-|<<)([[:space:]]|$|')"
+# JSON escapes a tab as `\t`, so it counts as whitespace here; wrappers (`time`, `env`,
+# `sudo -u x`, `timeout -s KILL 5`) and assignments may sit before the verb.
+ws='([[:space:]]|\\t)'
+wrap="(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|then|do|else|if|\\{|!|sudo|time|env|nice|nohup|command|timeout|-[^[:space:]]+|[0-9]+[smhd]?)${ws}+)*"
+start="(^|;|&&|\\|\\||\\(|\\\\n|\\\\t)${ws}*${wrap}"
+verb_re="${start}(cat|head|tail|nl|less|more|bat|sed|perl|tee|cp|mv|ln|touch|truncate|install)${ws}"
+# Interpreters by basename (`/usr/bin/python3`, `python3.12`); a heredoc in any spelling
+# (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`).
+prog_re="${start}([^[:space:]]*/)?(python[0-9.]*|node)(${ws}+--?[A-Za-z0-9_=.-]+)*${ws}*(-[a-zA-Z]*[cep](${ws}|$)|-(${ws}|$)|<<)"
 tee_re='\|[[:space:]]*tee[[:space:]]'
 redir_re='>[[:space:]]*[^[:space:]&|;>]'
 if [[ "$cmd" =~ $verb_re ]] || [[ "$cmd" =~ $prog_re ]] || [[ "$cmd" =~ $tee_re ]] || [[ "$scan" =~ $redir_re ]]; then

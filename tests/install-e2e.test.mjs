@@ -301,9 +301,10 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(settings.hooks.UserPromptSubmit).toBeTruthy();
     expect(settings.hooks.PreToolUse).toBeTruthy();
 
-    // PreToolUse has two separate matchers
+    // PreToolUse has three separate matchers (Edit|Write|NotebookEdit|Read, Bash, Agent|Task)
     const preToolUse = settings.hooks.PreToolUse;
-    expect(preToolUse.length).toBeGreaterThanOrEqual(2);
+    expect(preToolUse.length).toBeGreaterThanOrEqual(3);
+    expect(preToolUse.some((h) => h.matcher === 'Bash')).toBe(true);
 
     // Edit/Write/Read recall hook (v2.34.6 extended Read)
     const editMatcher = preToolUse.find((h) => h.matcher === 'Edit|Write|NotebookEdit|Read');

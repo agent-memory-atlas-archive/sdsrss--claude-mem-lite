@@ -174,3 +174,112 @@ describe('isScratchCommandPath / isTransientPath', () => {
     expect(isTransientPath('/home/u/p/lib/node_modules.mjs')).toBe(false);
   });
 });
+
+// Pre-ship defect review P2-1: a script that only PRINTS (sys.stdout.write,
+// process.stdout.write, print(..., file=sys.stderr)) wrote nothing, yet every literal it
+// named was classed a write — which silenced error recall on real failures, promoted
+// schema reads to importance 3 and made reviewer subagents count as project editors.
+// A literal is written only when it is the TARGET of a write call, directly or through a
+// variable bound to it; every other literal is a read.
+describe('bashFileTargets — interpreter literals: only write TARGETS are writes', () => {
+  it.each([
+    ['python3 -c "import sys; sys.stdout.write(open(\'tests/foo.test.mjs\').read())"', 'tests/foo.test.mjs'],
+    ['node -e "const p=require(\'./package.json\'); process.stdout.write(p.version)"', 'package.json'],
+    ['python3 -c "import sys; print(open(\'schema.mjs\').read(), file=sys.stderr)"', 'schema.mjs'],
+    ["node -e \"console.log(require('fs').readFileSync('lib/a.mjs','utf8'))\"", 'lib/a.mjs'],
+  ])('%s reads %s and writes nothing', (cmd, rel) => {
+    const r = t(cmd);
+    expect(r.writes).toEqual([]);
+    expect(r.reads).toContain(`${REPO}/${rel}`);
+  });
+
+  it.each([
+    ["python3 - <<'EOF'\np = 'lib/a.mjs'\ns = open(p).read()\nopen(p, 'w').write(s)\nEOF", 'lib/a.mjs'],
+    [
+      "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('lib/a.mjs')\np.write_text(p.read_text())\nEOF",
+      'lib/a.mjs',
+    ],
+    ["python3 -c \"open('out.json', 'w').write('{}')\"", 'out.json'],
+    [
+      "node -e \"const fs=require('fs'); const f='lib/a.mjs'; fs.writeFileSync(f, fs.readFileSync(f,'utf8'))\"",
+      'lib/a.mjs',
+    ],
+    ["node -e \"require('fs').writeFileSync('lib/a.mjs', 'x')\"", 'lib/a.mjs'],
+    ["python3 -c \"import shutil; shutil.copy('lib/a.mjs', 'lib/b.mjs')\"", 'lib/b.mjs'],
+  ])('%s writes %s', (cmd, rel) => {
+    expect(t(cmd).writes).toEqual([`${REPO}/${rel}`]);
+  });
+
+  it('a patch script reading one file and writing another splits them', () => {
+    const cmd = "python3 - <<'EOF'\nsrc = open('lib/a.mjs').read()\nopen('lib/b.mjs', 'w').write(src)\nEOF";
+    const r = t(cmd);
+    expect(r.writes).toEqual([`${REPO}/lib/b.mjs`]);
+    expect(r.reads).toEqual([`${REPO}/lib/a.mjs`]);
+  });
+});
+
+describe('bashFileTargets — indirect write targets in patch scripts', () => {
+  it('a python helper whose first parameter is opened for writing', () => {
+    const cmd =
+      "python3 - <<'EOF'\ndef edit(path, pairs):\n    s = open(path).read()\n    open(path, 'w').write(s)\nedit('lib/a.mjs', [('x', 'y')])\nsrc = open('lib/b.mjs').read()\nEOF";
+    const r = t(cmd);
+    expect(r.writes).toEqual([`${REPO}/lib/a.mjs`]);
+    expect(r.reads).toEqual([`${REPO}/lib/b.mjs`]);
+  });
+
+  it('a JS arrow helper and a JS edit table', () => {
+    expect(
+      t(
+        "node -e \"const fs=require('fs'); const rep=(p,a,b)=>fs.writeFileSync(p, fs.readFileSync(p,'utf8').replace(a,b)); rep('lib/a.mjs','x','y')\"",
+      ).writes,
+    ).toEqual([`${REPO}/lib/a.mjs`]);
+    expect(
+      t(
+        "node - <<'EOF'\nconst fs=require('fs');\nconst edits=[['lib/a.mjs','x','y'],['lib/b.mjs','p','q']];\nfor (const [f,a,b] of edits) fs.writeFileSync(f, fs.readFileSync(f,'utf8').replace(a,b));\nEOF",
+      ).writes,
+    ).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
+  });
+
+  it('a read-only helper does not turn its callers into writes', () => {
+    const cmd = "python3 - <<'EOF'\ndef show(path):\n    print(open(path).read())\nshow('lib/a.mjs')\nEOF";
+    expect(t(cmd).writes).toEqual([]);
+  });
+});
+
+describe('bashFileTargets — loops over literal lists', () => {
+  it.each([
+    [
+      "python3 - <<'EOF'\nfor p in ['lib/a.mjs', 'lib/b.mjs']:\n    s = open(p).read()\n    open(p, 'w').write(s)\nEOF",
+    ],
+    [
+      "node -e \"const fs=require('fs'); for (const p of ['lib/a.mjs','lib/b.mjs']) fs.writeFileSync(p, fs.readFileSync(p,'utf8'))\"",
+    ],
+  ])('%s writes both', (cmd) => {
+    expect(t(cmd).writes).toEqual([`${REPO}/lib/a.mjs`, `${REPO}/lib/b.mjs`]);
+  });
+});
+
+// Pre-ship defect review P3-2: shell keywords and wrapper options are not verbs, and a
+// `cd` inside a subshell does not outlive it.
+describe('bashFileTargets — keywords, wrappers, subshells', () => {
+  it.each([
+    ['if true; then sed -i s/a/b/ lib/x.mjs; fi', 'writes'],
+    ['for i in 1; do sed -i s/a/b/ lib/x.mjs; done', 'writes'],
+    ['{ cat lib/x.mjs; }', 'views'],
+    ['! cat lib/x.mjs', 'views'],
+    ['sudo -u bob cat lib/x.mjs', 'views'],
+    ['timeout -s KILL 5 cat lib/x.mjs', 'views'],
+    ['time cat lib/x.mjs', 'views'],
+    ['env FOO=1 cat lib/x.mjs', 'views'],
+  ])('%s → %s lib/x.mjs', (cmd, field) => {
+    expect(t(cmd)[field]).toEqual([`${REPO}/lib/x.mjs`]);
+  });
+
+  it('a cd inside a subshell does not leak to the next command', () => {
+    expect(t('(cd sub && cat a.js); cat b.js').views).toEqual([`${REPO}/sub/a.js`, `${REPO}/b.js`]);
+  });
+
+  it('jq --arg takes a name AND a value', () => {
+    expect(t("jq --arg name value '.f' data.json").reads).toEqual([`${REPO}/data.json`]);
+  });
+});

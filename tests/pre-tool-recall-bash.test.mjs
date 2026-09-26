@@ -29,6 +29,7 @@ function run(cmd, args, input, env) {
     child.stdout.on('data', (d) => (stdout += d));
     child.on('close', () => resolveP({ stdout }));
     child.on('error', reject);
+    child.stdin.on('error', () => {}); // a hook may exit before reading everything
     child.stdin.end(JSON.stringify(input));
     setTimeout(() => {
       child.kill();
@@ -123,6 +124,29 @@ describe('PreToolUse:Bash file recall', () => {
     );
   });
 
+  // Pre-ship review P3-3: a Bash page (`sed -n`) wrote the file's cooldown entry with
+  // reread.full=false, and a later full Read exited at the cooldown without arming the
+  // guard — so a Bash view silenced the repeated-read guard for that file all session.
+  it('a Bash page does not disarm the repeated-read guard for later full Reads', async () => {
+    const big = join(projectDir, 'lib', 'big.mjs');
+    writeFileSync(big, 'export const line = "some reasonably long content for token mass";\n'.repeat(400));
+    const read = { tool_name: 'Read', session_id: 'sr', tool_input: { file_path: big } };
+    await viaPrefilter(bash("sed -n '1,20p' lib/big.mjs", 'sr'), env());
+    await viaScript(read, env()); // first full read: arms the guard
+    const { stdout } = await viaScript(read, env()); // unchanged full re-read: warns
+    expect(stdout).toMatch(/big\.mjs/);
+    expect(JSON.parse(stdout).hookSpecificOutput.additionalContext).toMatch(/already|re-?read/i);
+  });
+
+  it('control: without the Bash page, Read then Read warns the same way', async () => {
+    const big = join(projectDir, 'lib', 'big2.mjs');
+    writeFileSync(big, 'export const line = "some reasonably long content for token mass";\n'.repeat(400));
+    const read = { tool_name: 'Read', session_id: 'sr2', tool_input: { file_path: big } };
+    await viaScript(read, env());
+    const { stdout } = await viaScript(read, env());
+    expect(JSON.parse(stdout).hookSpecificOutput.additionalContext).toMatch(/already|re-?read/i);
+  });
+
   it('meters the firing as via bash', async () => {
     await viaPrefilter(bash('head -n 5 lib/m.mjs'), env({ CLAUDE_MEM_METRICS: '1' }));
     const day = new Date().toISOString().slice(0, 10);
@@ -179,6 +203,18 @@ describe('PreToolUse:Bash file recall', () => {
       ["sed -i 's/a/b/' lib/m.mjs", true],
       ['python3 - <<EOF\nopen("lib/m.mjs")\nEOF', true],
       ['echo x > lib/out.json', true],
+      // Pre-ship review P3-1: shapes the node side recalls that the prefilter used to skip.
+      ['python3 <<EOF\nopen("lib/m.mjs", "w")\nEOF', true],
+      ['python3 <<"EOF"\nopen("lib/m.mjs", "w")\nEOF', true],
+      ['python3 <<-EOF\nopen("lib/m.mjs", "w")\nEOF', true],
+      ["/usr/bin/python3 -c \"open('lib/out.json','w')\"", true],
+      ["python3.12 -c \"open('lib/out.json','w')\"", true],
+      ['truncate -s 0 lib/x.log', true],
+      ['ln -sf lib/a.mjs lib/b.mjs', true],
+      ['time cat lib/m.mjs', true],
+      ['env FOO=1 cat lib/m.mjs', true],
+      ['for l in 1 2; do sed -n "1,${l}p" lib/m.mjs; done', true],
+      ['echo hi\n\tcat lib/m.mjs', true],
       ['git status', false],
       ['node cli.mjs search foo | head -5', false], // a pipe tail reads stdin, not a file
       ['npx vitest run tests/x.test.mjs 2>&1 | tail -20', false],

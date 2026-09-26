@@ -548,6 +548,26 @@ try {
           recordMetric(DATA_DIR, { event: 'reread_warn' }); // tier-1 firing counter (②)
         }
       }
+      // ② arming. The guard is armed by the FIRST full Read of a file, but the first touch is
+      // now often a Bash page (`sed -n`), which records `reread.full = false` — and every
+      // later Read landed here and exited, so the guard stayed disarmed all session
+      // (pre-ship review P3-3). A full Read of an entry not yet armed for full reads arms it.
+      if (
+        isRead &&
+        isFullRead &&
+        !REREAD_GUARD_OFF &&
+        typeof entry === 'object' &&
+        !(entry.reread && entry.reread.full)
+      ) {
+        const meta = readFileMeta(filePath);
+        if (meta) {
+          cooldown[filePath] = {
+            ...entry,
+            reread: { mtimeMs: meta.mtimeMs, tokens: meta.tokens, full: true },
+          };
+          writeCooldown(cooldownPath, cooldown, isSessionScoped);
+        }
+      }
       process.exit(0); // already recalled this file in-session
     }
   } else {

@@ -224,6 +224,30 @@ describe('extractStructuredSummary — markdown heading reports', () => {
     expect(performance.now() - t0).toBeLessThan(100);
   });
 
+  // Claims review of 44ad93e: three shapes the first cut got wrong or left unpinned.
+  it('`**Failed.** Nothing.` is an inline header, not text of the section before it', () => {
+    const r = extractStructuredSummary('**Not done**\n- the relabel\n**Failed.** Nothing.');
+    expect(r).toEqual({ done: '', notDone: '- the relabel', failed: 'Nothing.', uncertain: '' });
+  });
+
+  it('a closing question after a blank line ends the last block section', () => {
+    const r = extractStructuredSummary('## Uncertain\n- 无。\n\n要推送并发 v6.13.4 吗？');
+    expect(r.uncertain).toBe('- 无。');
+  });
+
+  it('a long paragraph that ends in a question is still section content', () => {
+    const para = `macOS 这一格我在本地无法验证：${'只有 CI 的 macOS leg 覆盖得到，'.repeat(6)}要我现在 push 吗？`;
+    expect(extractStructuredSummary(`## Uncertain\n- 无。\n\n${para}`).uncertain).toBe(`- 无。\n${para}`);
+  });
+
+  it('a 剩下 / 未做 bullet inside a block section stays in that section', () => {
+    const r = extractStructuredSummary(
+      '**Uncertain**\n- 剩下的挂账里 D#37 是唯一的另一条 P2\n- 未做 Windows 验证',
+    );
+    expect(r.notDone).toBe('');
+    expect(r.uncertain).toBe('- 剩下的挂账里 D#37 是唯一的另一条 P2\n- 未做 Windows 验证');
+  });
+
   it('a heading with more words, or a bare "Done." line, is not a section', () => {
     const r = extractStructuredSummary('## Done criteria\n- x\n\nDone.\n\nThe tests pass.');
     expect(r).toEqual({ done: '', notDone: '', failed: '', uncertain: '' });

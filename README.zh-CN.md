@@ -199,6 +199,23 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.14.0
+
+**四个默认行为变化，各有独立的关闭开关。** 没有 schema 变更、没有迁移：旧版本仍能打开数据库，
+全部回退就是固定到 `claude-mem-lite@6.13.6`。
+
+- **查看或写入文件的 Bash 命令执行前，也会做文件召回**（`cat`、`sed -n`、`head`；`sed -i`、
+  `cat > f`、python 补丁）。新模型的读写大多走 Bash，实测引用率最高的召回面几乎不再触发。
+  **第四个 hook 命令走 `bash`**：`pre-tool-recall-bash.sh`；在 Windows 上与另外三个一样需要
+  Git Bash 或 WSL。关闭：`CLAUDE_MEM_BASH_RECALL=off`。
+- **error recall 不再回应你故意制造的失败**（刚写好或刚改过的测试文件跑红），也不回应只打印数据、
+  退出码为 0 的命令。没有开关，回退请固定 6.13.6。从这个版本起 `citation-stats` 里的
+  `error_recall` 计数会下降，不要跨版本直接比较。
+- **自动捕获的教训必须引用原文。** episode 摘要器忽略变异测试探针、agent 自己失败的内联脚本，以及
+  不修改项目的子代理调用；不引用窗口内任何原文的教训会被丢弃（event 保留，importance 降为 1）。
+  关闭：`CLAUDE_MEM_EPISODE_INPUT_FILTER=off` / `CLAUDE_MEM_LESSON_GROUNDING=off`。
+- **不再注入 `[mem] episode flushed: N entries` 这一行。** 它后面的提示不变。
+
 ## 升级到 6.13.0
 
 **只有一个默认行为变化：SessionStart 不再注入 `### Key Events`。** 这一节在每个会话开头列出

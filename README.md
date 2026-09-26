@@ -237,6 +237,29 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.14.0
+
+**Four defaults change; each has its own off switch.** No schema change and no migration: an
+older build still opens the database, so reverting everything is pinning
+`claude-mem-lite@6.13.6`.
+
+- **File recall now also fires before Bash commands that view or write a file** (`cat`,
+  `sed -n`, `head`; `sed -i`, `cat > f`, a python patch) — on recent models most reads and
+  edits go through Bash, and the recall face with the highest measured cite rate had almost
+  stopped firing. A **fourth hook command runs under `bash`**, `pre-tool-recall-bash.sh`; on
+  Windows it needs Git Bash or WSL like the other three. Off: `CLAUDE_MEM_BASH_RECALL=off`.
+- **Error recall stays quiet on a failure you meant to cause** (running a test file you just
+  wrote or edited) and on commands that only print data and exit 0. No switch; pin 6.13.6 to
+  revert. `error_recall` counts in `citation-stats` drop from here on — do not compare them
+  across this version.
+- **Auto-captured lessons must quote what happened.** The episode summarizer ignores
+  mutation-test probes, the agent's own failing inline scripts and subagent calls that do not
+  edit the project, and a lesson that quotes nothing from its window is dropped (the event is
+  kept, at importance 1). Off: `CLAUDE_MEM_EPISODE_INPUT_FILTER=off` /
+  `CLAUDE_MEM_LESSON_GROUNDING=off`.
+- **The `[mem] episode flushed: N entries` line is no longer injected.** The hints that
+  followed it are unchanged.
+
 ## Upgrading to 6.13.0
 
 **One default changes: SessionStart no longer injects `### Key Events`.** That section listed

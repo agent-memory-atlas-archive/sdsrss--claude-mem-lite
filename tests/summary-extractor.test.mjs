@@ -268,6 +268,17 @@ describe('extractStructuredSummary — markdown heading reports', () => {
     expect(r.notDone).toBe('- tag');
   });
 
+  // Round-3 delta review P3-1 / P3-2.
+  it('headers indented with a no-break or ideographic space, or after a BOM, still parse', () => {
+    for (const lead of ['\u00a0', '\u3000', '\ufeff']) {
+      expect(extractStructuredSummary(`${lead}**Done**\n- A`).done).toBe('- A');
+    }
+  });
+
+  it('a closing question that starts with `#42` is still skipped (only a heading is kept)', () => {
+    expect(extractStructuredSummary('## Uncertain\n- 无。\n\n#42 要一起关掉吗？').uncertain).toBe('- 无。');
+  });
+
   it('bold inside an inline tail keeps its closing markup', () => {
     expect(extractStructuredSummary('**Done:** shipped **v2.1**').done).toBe('shipped **v2.1**');
   });

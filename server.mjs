@@ -1750,7 +1750,9 @@ async function runExport(db, args) {
   // reads back (v3.42 HIGH-2: this handler used to carry a narrower 16-col SELECT, silently
   // dropping text/aliases/citation-signals on the advertised MCP backup→restore flow).
   const probed = db
-    .prepare(`SELECT ${EXPORT_COLUMNS_SQL} FROM observations ${where} ORDER BY created_at_epoch DESC LIMIT ?`)
+    .prepare(
+      `SELECT ${EXPORT_COLUMNS_SQL} FROM observations ${where} ORDER BY created_at_epoch DESC, id DESC LIMIT ?`,
+    )
     .all(...params, exportLimit + 1);
   const rows = probed.slice(0, exportLimit);
   const moreAvailable = probed.length > exportLimit;

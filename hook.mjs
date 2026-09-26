@@ -1905,7 +1905,7 @@ function runSessionStartAutoMaintain(db, project) {
           WHERE ${liveObsFilterSql('')}
             AND created_at_epoch > ?
             AND title IS NOT NULL AND title != ''
-          ORDER BY created_at_epoch DESC LIMIT ${SCAN_LIMIT}
+          ORDER BY created_at_epoch DESC, id DESC LIMIT ${SCAN_LIMIT}
         `,
           )
           .all(STALE_AGE);

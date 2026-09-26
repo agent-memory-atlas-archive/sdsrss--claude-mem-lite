@@ -222,15 +222,12 @@ export function findReenrichCandidates(db, limit = 10, { scope = 'narrow', proje
     -- explicitly, on a budget of 6, where a boundary tie decides which rows reach the LLM
     -- on a given run. Caught later by a test driving scope 'wide'; the original boundary
     -- case drove only 'narrow', so nothing went red.
-    -- NOT FIXED, AND NAMED SO THE COMPLETENESS CLAIM IS TRUE: findSmartCompressCandidates
-    -- carries an eighth ordering, "ORDER BY project, created_at_epoch" -- ASCENDING, no id
-    -- term, no LIMIT. It is outside the seven by construction and is left alone under Iron
-    -- Law #1: it feeds clusterForCompression, and a tie can move cluster MEMBERSHIP
-    -- because that function's own sort is stable, so SQL order survives as the tiebreak
-    -- and decides where a 14-day sub-cluster window is anchored. Phase-2 removed the
-    -- vector branch this used to hide behind, so the hazard is no longer gated on a
-    -- default-off env flag -- it is unconditional now. Still no failing case has been
-    -- built, so it stays unjudged, not cleared; the removal RAISED its priority.
+    -- The EIGHTH ordering, findSmartCompressCandidates' ASCENDING "project,
+    -- created_at_epoch", ends on id too since the N3 census (2026-09-26). It feeds
+    -- clusterForCompression, whose stable sort keeps SQL order as the tiebreak. An ASC tie
+    -- already came back in ascending rowid (R11 section 5, 60 of 60 runs), so the term pins
+    -- that order instead of leaving it to the query plan; it changes no measured output.
+    -- tests/order-by-created-at-guard.test.mjs now holds every such ordering in the tree.
     -- This comment is INSIDE a template literal, so it must never contain a backtick.
     ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
@@ -1401,7 +1398,7 @@ export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) 
       AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
       AND created_at_epoch < ?
       ${projectClause}
-    ORDER BY project, created_at_epoch
+    ORDER BY project, created_at_epoch, id
   `);
   return project ? stmt.all(cutoff, project) : stmt.all(cutoff);
 }

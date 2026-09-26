@@ -628,7 +628,7 @@ function searchRecent(db, project, limit) {
       AND ${liveObsFilterSql('')}
       AND created_at_epoch > ?
       AND ${notLowSignalTitleClause('')}
-    ORDER BY created_at_epoch DESC
+    ORDER BY created_at_epoch DESC, id DESC
     LIMIT ?
   `,
     )

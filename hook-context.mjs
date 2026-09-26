@@ -850,11 +850,11 @@ export function buildSessionContextLines(
       `
     SELECT id, title, priority,
            ROW_NUMBER() OVER (
-             ORDER BY priority DESC, created_at_epoch ASC
+             ORDER BY priority DESC, created_at_epoch ASC, id ASC
            ) AS ordinal
     FROM deferred_work
     WHERE project = ? AND status = 'open'
-    ORDER BY priority DESC, created_at_epoch ASC
+    ORDER BY priority DESC, created_at_epoch ASC, id ASC
     LIMIT 5
   `,
     )

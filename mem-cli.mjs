@@ -2206,7 +2206,7 @@ function cmdExport(db, args) {
       `
     SELECT ${EXPORT_COLUMNS_SQL}
     FROM observations WHERE ${wheres.join(' AND ')}
-    ORDER BY created_at_epoch DESC LIMIT ?
+    ORDER BY created_at_epoch DESC, id DESC LIMIT ?
   `,
     )
     .all(...params, limit);

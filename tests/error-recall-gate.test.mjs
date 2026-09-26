@@ -21,7 +21,7 @@
 //   - otherwise → the same merged term list extractErrorKeywords already produced
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -470,4 +470,104 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     );
     expect(block, `error-recall did not fire on a real error:\n${stdout}`).toBeTruthy();
   }, 40000);
+
+  // ── N2 (2026-09-26): what the surface injects must be about a failure the corpus can
+  // explain. Each silent case has a live control on the SAME text, so "silent" cannot be
+  // satisfied by text that matches nothing.
+  const RED_OUT = 'FAIL tests/red.test.mjs > shared temp file\nAssertionError: expected 2 to be 3';
+  const RED_CMD = 'npx vitest run tests/red.test.mjs 2>&1 | grep -E "×|FAIL|AssertionError"';
+
+  async function fireFailure(command, error) {
+    const r = await fire(process.execPath, [HOOK_PATH, 'post-tool-failure'], {
+      cwd,
+      stdin: JSON.stringify({
+        hook_event_name: 'PostToolUseFailure',
+        session_id: 'cc-errgate',
+        tool_name: 'Bash',
+        tool_input: { command },
+        error,
+      }),
+    });
+    expect(r.code, `post-tool-failure exited ${r.code}\n${r.stderr}`).toBe(0);
+    return r.stdout.includes('Related memories found for this error');
+  }
+
+  it('N2: a TDD RED on a test written in this episode is silent, on BOTH hook events', async () => {
+    // Control first, before the write: the same command and output DO inject.
+    const before = await firePostTool(RED_CMD, RED_OUT);
+    expect(
+      before.block,
+      `control: the RED text must match the seeded vitest row:\n${before.stdout}`,
+    ).toBeTruthy();
+    expect(await fireFailure('npx vitest run tests/red.test.mjs', RED_OUT), 'failure-path control').toBe(
+      true,
+    );
+
+    const w = await fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
+      cwd,
+      stdin: JSON.stringify({
+        session_id: 'cc-errgate',
+        tool_name: 'Write',
+        tool_input: { file_path: join(cwd, 'tests', 'red.test.mjs'), content: "it('x', () => {});" },
+        tool_response: 'File created successfully at: tests/red.test.mjs',
+      }),
+    });
+    expect(w.code, w.stderr).toBe(0);
+
+    const after = await firePostTool(RED_CMD, RED_OUT);
+    expect(after.block, 'the agent just wrote this test; the RED is the point').toBeFalsy();
+    expect(await fireFailure('npx vitest run tests/red.test.mjs', RED_OUT), 'unpiped RED exits 1').toBe(
+      false,
+    );
+    // An UNEDITED test failing in the same episode is a real failure and still injects.
+    const other = await firePostTool(
+      'npx vitest run tests/other.test.mjs 2>&1 | tail',
+      RED_OUT.replace(/red\.test/g, 'other.test'),
+    );
+    expect(other.block, 'an unedited test still fires').toBeTruthy();
+
+    // The Bash-write shape (most Opus 5.5 edits): the entry's capture-time `writes` flag is
+    // what makes a Bash entry an edit, so its WIRING is asserted on the buffer itself. An
+    // end-to-end RED here cannot be built at HEAD: this fixture lives under /tmp, and
+    // extractFilePaths drops /tmp paths (and all relative ones) from Bash commands.
+    const fireBash = (command, stdout) =>
+      fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
+        cwd,
+        stdin: JSON.stringify({
+          session_id: 'cc-errgate',
+          tool_name: 'Bash',
+          tool_input: { command },
+          tool_response: { stdout, stderr: '', interrupted: false, isImage: false },
+        }),
+      });
+    expect((await fireBash("cat >> tests/red2.test.mjs <<'EOF'\nit('y', () => {});\nEOF", '')).code).toBe(0);
+    expect((await fireBash('sed -n 1,5p tests/red2.test.mjs', "it('y', () => {});")).code).toBe(0);
+    const runtime = join(dataDir, 'runtime');
+    const epName = readdirSync(runtime).find((f) => /^ep-.*\.json$/.test(f));
+    const bashEntries = JSON.parse(readFileSync(join(runtime, epName), 'utf8')).entries.filter(
+      (e) => e.tool === 'Bash',
+    );
+    expect(bashEntries.at(-2).writes, 'the heredoc append is an edit').toBe(true);
+    expect(bashEntries.at(-1).writes, 'the sed -n read is not').toBe(false);
+  }, 60000);
+
+  it('N2: an exit-0 command that PRINTS error text is silent; the same text from a run is not', async () => {
+    const node = await firePostTool(
+      `node -e 'console.log(require("fs").readFileSync("s.jsonl","utf8"))'`,
+      'FAIL tests/a.test.mjs > shared temp file\nAssertionError: expected 2 to be 3',
+    );
+    expect(node.block, 'node -e printing a transcript').toBeFalsy();
+    const gh = await firePostTool(
+      'gh run view 1 --log-failed 2>&1 | grep -E "FAIL|AssertionError"',
+      'FAIL tests/a.test.mjs > shared temp file\nAssertionError: expected 2 to be 3',
+    );
+    expect(gh.block, 'gh --log-failed').toBeFalsy();
+    // Control: the preceding test's `npx vitest run tests/a.test.mjs` case fires on this
+    // exact text; a script FILE printing it is a program that ran, and fires too.
+    const script = await firePostTool(
+      'node scripts/replay.mjs 2>&1 | tail',
+      'FAIL tests/a.test.mjs > shared temp file\nAssertionError: expected 2 to be 3',
+    );
+    expect(script.block, 'a script file is not a data printer').toBeTruthy();
+  }, 60000);
 });

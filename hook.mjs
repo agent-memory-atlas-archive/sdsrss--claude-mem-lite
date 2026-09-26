@@ -149,6 +149,9 @@ import { injectedIdsFileName, keyContextIdsFileName, readInjectedMarker } from '
 import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-marker.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
+import { errorRecallSuppression } from './lib/error-recall-gate.mjs';
+// Direct, not via the utils.mjs barrel (see the project-utils import above).
+import { bashCommandWrites } from './bash-utils.mjs';
 import {
   buildAndSaveHandoff,
   consumeHandoff,
@@ -744,6 +747,9 @@ async function handlePostToolUse() {
     isSignificant:
       EDIT_TOOLS.has(tool_name) || bashSig?.isSignificant || (tool_name === 'Bash' && bashWrites.length > 0),
     bashSig: bashSig || null,
+    // Did this Bash call EDIT files (vs read or run them)? `files` cannot say: a `sed -n`
+    // read and a `cat >> f <<EOF` name the same path. error-recall's TDD-RED gate reads it.
+    writes: tool_name === 'Bash' ? bashCommandWrites(toolInput?.command) : false,
     // CC UUID from hook stdin — lets flushEpisode split a buffer shared by
     // concurrent same-project sessions into per-session observations. Null for
     // legacy/stdin-less invocations (→ single __none__ group = old behavior).
@@ -767,7 +773,10 @@ async function handlePostToolUse() {
   // (G8, roadmap 2026-07-18), and was self-recursive: the hint string itself
   // contains 'error', so a later command echoing it re-triggered recall.
   // entry.isError above keeps the loose semantics on purpose (episode narrative).
-  if (bashSig?.isHardError) {
+  // N2: a hard error is not always one the corpus can explain — see errorRecallSuppressed.
+  // PostToolUse never sees a non-zero exit (the host routes those to PostToolUseFailure),
+  // so this path is exit 0 by construction.
+  if (bashSig?.isHardError && !errorRecallSuppressed(toolInput, resp, hookData.session_id, true)) {
     const d = getDb();
     if (d) triggerErrorRecall(d, toolInput, resp);
   }
@@ -851,6 +860,35 @@ async function handlePostToolUse() {
 }
 
 // ─── Error-Triggered Recall (Tier 2 G) ─────────────────────────────────────
+
+/**
+ * N2 (session-history analysis r2): stay silent on a deliberate TDD RED and on an exit-0
+ * command that merely PRINTS error text. The decision is lib/error-recall-gate.mjs; this
+ * hands it the episode buffer the hook already keeps (read without the lock: a snapshot is
+ * enough, and writeEpisode replaces the file by rename) and meters what it silenced, so the
+ * suppressed volume is readable next to `error_recall` rather than inferred from its drop.
+ * Fails OPEN: anything thrown here means the firing proceeds exactly as before.
+ *
+ * @returns {boolean} true ⇒ do not inject.
+ */
+function errorRecallSuppressed(toolInput, response, ccSession, exitZero) {
+  try {
+    const verdict = errorRecallSuppression({
+      cmd: toolInput?.command,
+      response,
+      entries: readEpisodeRaw()?.entries,
+      ccSession: ccSession || null,
+      exitZero,
+      projectDir: inferProjectDir(),
+    });
+    if (!verdict) return false;
+    recordMetric(DB_DIR, { event: 'error_recall_suppressed', reason: verdict.reason, exitZero });
+    return true;
+  } catch (e) {
+    debugCatch(e, 'errorRecallSuppressed');
+    return false;
+  }
+}
 
 /**
  * @param {object} db Open handle.
@@ -994,6 +1032,8 @@ async function handlePostToolFailure() {
 
   const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
   if (typeof toolInput?.command !== 'string' || !toolInput.command) return;
+  // Only the TDD-RED half can apply here (exitZero false): an unpiped RED exits 1.
+  if (errorRecallSuppressed(toolInput, error, hookData.session_id, false)) return;
 
   let db = null;
   try {

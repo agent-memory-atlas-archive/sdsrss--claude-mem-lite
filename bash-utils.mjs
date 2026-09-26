@@ -524,6 +524,140 @@ function commandKind(cmd, depth = 0) {
   return sawRead ? 'read' : 'neutral';
 }
 
+// ─── Data printers and writers (error-recall N2) ─────────────────────────────
+
+// Interpreters whose INLINE program (`-e`/`-c`/a heredoc on stdin) is the agent's own
+// throwaway code. Run by a script FILE they are a program like any other.
+const INLINE_INTERPRETER_RE = /^(?:node|nodejs|bun|python(?:\d+(?:\.\d+)?)?)$/;
+
+// A redirection operator token (`>`, `2>>`, `&>`, `<`, `<<-`), optionally glued to its target.
+const REDIRECT_TOKEN_RE = /^(?:\d*|&)(?:>>?\|?|<<?-?)(.*)$/;
+
+/**
+ * True when one simple command runs an INLINE program or prints a CI log — the shapes
+ * whose output at exit 0 is data (a transcript line, a log excerpt, a script's own
+ * `assert`), not a failure of anything the corpus could explain.
+ */
+function isPrinterElement(text) {
+  const toks = shellWords(text);
+  let i = 0;
+  while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
+  const prog = toks[i];
+  if (!prog) return false;
+  const args = toks.slice(i + 1);
+  // `gh run view … --log[-failed]`: a CI log is somebody else's failure, reprinted.
+  if (prog === 'gh') return args.some((a) => a === '--log' || a === '--log-failed');
+  if (!INLINE_INTERPRETER_RE.test(prog)) return false;
+  const py = prog.startsWith('python');
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (py ? a === '-c' || a === '-' : /^-(?:e|p|pe|ep)$|^--(?:eval|print)(?:=|$)/.test(a)) return true;
+    const redirect = REDIRECT_TOKEN_RE.exec(a);
+    if (redirect) {
+      if (!redirect[1]) k++; // `<< EOF` / `> f`: the next word is the operand, not a script
+      continue;
+    }
+    // A positional is a script file (or `-m`'s module): a program, not an inline print.
+    if (!a.startsWith('-') || (py && a === '-m')) return false;
+  }
+  // No positional at all: the program comes from stdin, i.e. a heredoc.
+  return /<</.test(text);
+}
+
+/** 'print' | 'read' | 'neutral' | 'other' — commandKind with printers admitted. */
+function printKind(cmd, depth = 0) {
+  if (depth > MAX_SUBST_DEPTH) return 'other';
+  const parsed = splitStatements(cmd);
+  if (!parsed) return 'other';
+  let sawPrint = false;
+  for (const body of parsed.subs) {
+    const kind = printKind(body, depth + 1);
+    if (kind === 'other') return 'other';
+    if (kind === 'print') sawPrint = true;
+  }
+  for (const pipeline of parsed.statements) {
+    for (const element of pipeline) {
+      if (isPrinterElement(element)) {
+        sawPrint = true;
+        continue;
+      }
+      if (classifySimpleCommand(element) === 'other') return 'other';
+    }
+  }
+  return sawPrint ? 'print' : 'read';
+}
+
+/**
+ * True when the command's only programs are inline scripts (`node -e/-p`, `python3 -c`,
+ * `python3 - <<EOF`, a heredoc-fed interpreter) or `gh … --log[-failed]`, plus reads
+ * (isReadOnlyCommand's verbs) and neutral set-up. Parsed with the same statement/pipeline
+ * splitter, so `node -e '…'; npm test` and `python3 - <<PY … PY` followed by a vitest run
+ * are NOT printers: the real run is judged on its own.
+ *
+ * Deliberately a SEPARATE predicate from isReadOnlyCommand, not a new verb in it: that one
+ * also decides `isError` for the episode narrative and the bugfix save-nudge, and an inline
+ * script that crashes is a real error there. Only error-recall's injection is narrowed.
+ */
+export function isDataPrintingCommand(cmd) {
+  if (typeof cmd !== 'string' || !cmd) return false;
+  return printKind(stripNonCommands(cmd)) === 'print';
+}
+
+// Verbs that write the file(s) they are given.
+const WRITE_VERBS = new Set(['tee', 'cp', 'mv', 'install', 'patch', 'truncate', 'dd', 'rsync']);
+// An inline program writing a file. Scanned on the RAW text: to the shell parser a heredoc
+// body or a `-e` argument is data, so the writes inside it are invisible there.
+const INLINE_WRITE_RE =
+  /\b(?:writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|write_text|write_bytes)\s*\(|\bopen\s*\([^)]*,\s*(?:mode\s*=\s*)?['"][wax]b?\+?['"]/;
+
+function elementWrites(text) {
+  const toks = shellWords(text);
+  for (let k = 0; k < toks.length; k++) {
+    const m = /^(?:\d|&)?>>?\|?(.*)$/.exec(toks[k]);
+    if (!m) continue;
+    const target = (m[1] || toks[k + 1] || '').replace(/['"]/g, '');
+    // `2>&1` duplicates a descriptor and `>/dev/null` discards: neither edits a file.
+    if (target && !target.startsWith('&') && !target.startsWith('/dev/')) return true;
+  }
+  let i = 0;
+  while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
+  const verb = toks[i];
+  const args = toks.slice(i + 1);
+  if (!verb) return false;
+  if (WRITE_VERBS.has(verb)) return true;
+  if (
+    (verb === 'sed' || verb === 'perl') &&
+    args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'))
+  )
+    return true;
+  return verb === 'git' && ['apply', 'checkout', 'restore', 'mv'].includes(args[0]);
+}
+
+function commandWrites(cmd, depth = 0) {
+  if (depth > MAX_SUBST_DEPTH) return false;
+  const parsed = splitStatements(cmd);
+  if (!parsed) return false;
+  if (parsed.subs.some((body) => commandWrites(body, depth + 1))) return true;
+  return parsed.statements.some((pipeline) => pipeline.some(elementWrites));
+}
+
+/**
+ * True when a Bash command EDITS files: an output redirection to a real path, `tee`,
+ * `sed -i`/`perl -i`, `cp`/`mv`, `git apply|checkout|restore`, or an inline program that
+ * calls a file-writing API.
+ *
+ * Command-level on purpose. WHICH files it wrote is extractFilePaths' job (the episode
+ * entry's `files`); this only says the entry is an edit rather than a read or a test run,
+ * which a file list cannot say: `sed -n 1,50p tests/x.test.mjs` and
+ * `cat >> tests/x.test.mjs <<EOF` name the same path. error-recall's TDD-RED gate needs
+ * the difference — reading a test before running it is how a REAL failure is investigated.
+ */
+export function bashCommandWrites(cmd) {
+  if (typeof cmd !== 'string' || !cmd) return false;
+  if (INLINE_WRITE_RE.test(cmd)) return true;
+  return commandWrites(stripNonCommands(cmd));
+}
+
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
 // uniformly to both command-parsed paths and direct file_path/path/filePath fields.
 

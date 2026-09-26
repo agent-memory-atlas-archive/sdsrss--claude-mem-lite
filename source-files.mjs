@@ -209,6 +209,9 @@ export const SOURCE_FILES = [
   // injection) and by benchmark/error-recall-suite.mjs (offline calibration) — the
   // hook is the one that breaks on a missing manifest entry.
   'lib/error-recall-core.mjs',
+  // N2: error-recall's suppression gate (deliberate TDD RED, exit-0 data printers).
+  // Statically imported by hook.mjs on BOTH PostToolUse and PostToolUseFailure.
+  'lib/error-recall-gate.mjs',
   // D#170: the PostToolUseFailure gate. hook.mjs imports it on the failure path and
   // benchmark/error-recall-live-replay.mjs scores the SAME predicate, so a missing
   // registration would ship a hook that cannot load its own filter.

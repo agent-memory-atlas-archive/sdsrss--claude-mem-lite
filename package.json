@@ -130,6 +130,7 @@
     "lib/keyctx-marker.mjs",
     "lib/inject-search-core.mjs",
     "lib/error-recall-core.mjs",
+    "lib/error-recall-gate.mjs",
     "lib/tool-refusal.mjs",
     "lib/relevance-floor.mjs",
     "lib/get-core.mjs",

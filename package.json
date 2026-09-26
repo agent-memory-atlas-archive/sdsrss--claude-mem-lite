@@ -28,6 +28,7 @@
     "audit:metrics": "node scripts/audit-metrics.mjs --md",
     "audit:baseline": "node scripts/audit-metrics.mjs --run-tests --md",
     "test": "mkdir -p \"$HOME/.cache/tmp\" && TMPDIR=\"$HOME/.cache/tmp\" vitest run",
+    "test:ci-env": "mkdir -p \"$HOME/.cache/tmp\" && CI=true GITHUB_ACTIONS=true FORCE_COLOR=1 TMPDIR=\"$HOME/.cache/tmp\" vitest run",
     "test:smoke": "mkdir -p \"$HOME/.cache/tmp\" && TMPDIR=\"$HOME/.cache/tmp\" vitest run tests/smoke.test.mjs",
     "test:coverage": "mkdir -p \"$HOME/.cache/tmp\" && TMPDIR=\"$HOME/.cache/tmp\" vitest run --coverage",
     "benchmark": "node benchmark/benchmark.mjs",

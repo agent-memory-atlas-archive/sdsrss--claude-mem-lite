@@ -17,7 +17,7 @@ before retrieval, measurement, release, migration or schema work.**
 
 | Task | Command |
 |------|---------|
-| Setup · tests | `npm install` (Node >=22 toolchain) · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` |
+| Setup · tests | `npm install` (Node >=22 toolchain) · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` · **before tagging: `npm run test:ci-env`** (CI colour/env; v6.13.0 burned a version on it) |
 | Coverage | `npm run test:coverage` (gate: statements 81 / branches 75 / functions 87 / lines 83) |
 | Lint · shell | `npx eslint .` · `shellcheck scripts/*.sh` |
 | Format | `npm run format` — **run it twice**, `tests/hook-update.test.mjs` needs a second pass to reach a fixed point. `format:check` is gated in CI and pre-commit |

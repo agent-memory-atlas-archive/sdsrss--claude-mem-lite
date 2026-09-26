@@ -17,7 +17,7 @@
 // on and still fires — a gate that silenced everything would pass the suppressing half.
 import { describe, it, expect } from 'vitest';
 import { errorRecallSuppression } from '../lib/error-recall-gate.mjs';
-import { bashCommandWrites, isDataPrintingCommand, detectBashSignificance } from '../bash-utils.mjs';
+import { extractFileTargets, isDataPrintingCommand, detectBashSignificance } from '../bash-utils.mjs';
 
 const REPO = '/home/u/proj';
 const SESSION = 'cc-1';
@@ -31,7 +31,20 @@ const VITEST_RED =
 const RED_CMD = 'npx vitest run tests/red.test.mjs -t "stale row" 2>&1 | grep -E "✓|×|FAIL|AssertionError"';
 
 const editEntry = (file, over = {}) => ({ tool: 'Edit', files: [file], ccSession: SESSION, ...over });
-const bashEntry = (files, over = {}) => ({ tool: 'Bash', files, ccSession: SESSION, writes: false, ...over });
+// A Bash entry exactly as hook.mjs captures it: `files` and `bashWrites` both come from the
+// shipped extractFileTargets, resolved against the project, so these cases exercise the
+// real read/write split rather than a hand-written one.
+const bashEntry = (command, over = {}) => {
+  const { files, writes } = extractFileTargets({ command }, { cwd: REPO, projectDir: REPO });
+  return {
+    tool: 'Bash',
+    files,
+    ...(writes.length ? { bashWrites: writes } : {}),
+    ccSession: SESSION,
+    ...over,
+  };
+};
+const APPEND = "cat >> tests/red.test.mjs <<'EOF'\nit('rejects the stale row', () => {});\nEOF";
 
 const red = (entries, over = {}) =>
   errorRecallSuppression({
@@ -58,10 +71,26 @@ describe('TDD RED — the failing test file was edited in this episode', () => {
     expect(red([editEntry(`${REPO}/tests/red.test.mjs`)])).toMatchObject({ reason: 'tdd-red' });
   });
 
-  it('suppresses when a Bash entry WROTE it (the heredoc-append shape)', () => {
-    // Opus 5.5 writes most files through Bash; the episode keeps its file list and the
-    // capture-time `writes` flag is what says the call was an edit.
-    expect(red([bashEntry(['tests/red.test.mjs'], { writes: true })])).toMatchObject({ reason: 'tdd-red' });
+  it('suppresses when an earlier Bash call WROTE it (relative heredoc append → bashWrites)', () => {
+    // Opus 5.5 writes most files through Bash; `bashWrites` is what says the call was an edit.
+    expect(bashEntry(APPEND).bashWrites, 'premise: the append is captured as a write').toEqual([
+      `${REPO}/tests/red.test.mjs`,
+    ]);
+    expect(red([bashEntry(APPEND)])).toMatchObject({ reason: 'tdd-red' });
+  });
+
+  it('suppresses when THIS call wrote the test and then ran it (write-and-run in one Bash call)', () => {
+    // The call joins the buffer only after recall ran, so its own writes arrive separately.
+    const cmd = `${APPEND}\n${RED_CMD}`;
+    const { writes } = extractFileTargets({ command: cmd }, { cwd: REPO, projectDir: REPO });
+    expect(red([], { cmd, currentWrites: writes })).toMatchObject({ reason: 'tdd-red' });
+  });
+
+  it('CONTROL: a call that writes some OTHER file and runs the test still fires', () => {
+    const cmd = `${RED_CMD} > out.txt`;
+    const { writes } = extractFileTargets({ command: cmd }, { cwd: REPO, projectDir: REPO });
+    expect(writes, 'premise: the call does write a file').toEqual([`${REPO}/out.txt`]);
+    expect(red([], { cmd, currentWrites: writes })).toBeNull();
   });
 
   it('suppresses on the host-flagged failure path too (an unpiped RED exits 1)', () => {
@@ -75,19 +104,19 @@ describe('TDD RED — the failing test file was edited in this episode', () => {
     expect(red(undefined)).toBeNull();
   });
 
-  it('CONTROL: a Bash entry that only READ the test (writes:false) is not an edit', () => {
+  it('CONTROL: a Bash call that only READ the test is not an edit, though its `files` names it', () => {
     // 106 of the 1101 measured firings name a test that a prior Bash call only read or
     // grepped. Reading a test before running it is how a real failure is investigated.
-    expect(red([bashEntry([`${REPO}/tests/red.test.mjs`])])).toBeNull();
+    const read = bashEntry('sed -n 1,50p tests/red.test.mjs');
+    expect(read.files, 'premise: the read IS in files').toEqual([`${REPO}/tests/red.test.mjs`]);
+    expect(red([read])).toBeNull();
   });
 
-  it('CONTROL: an earlier RUN of the same test is not an edit — the run command does not set `writes`', () => {
+  it('CONTROL: an earlier RUN of the same test is not an edit', () => {
     // So a real failure re-run after reading the test keeps firing on every run.
-    const runCmd = `cd ${REPO} && npx vitest run ${REPO}/tests/red.test.mjs 2>&1 | tail`;
-    expect(bashCommandWrites(runCmd)).toBe(false);
-    expect(
-      red([bashEntry([`${REPO}/tests/red.test.mjs`], { writes: bashCommandWrites(runCmd) })]),
-    ).toBeNull();
+    const run = bashEntry(`cd ${REPO} && npx vitest run tests/red.test.mjs 2>&1 | tail`);
+    expect(run.files, 'premise: the run IS in files').toContain(`${REPO}/tests/red.test.mjs`);
+    expect(red([run])).toBeNull();
   });
 
   it('CONTROL: fires when the output names an UNEDITED test file too (full-suite run)', () => {
@@ -250,33 +279,5 @@ describe('isDataPrintingCommand', () => {
     ['a real run inside a substitution', 'node -e "$(npm test)"'],
   ])('does not: %s', (_n, cmd) => {
     expect(isDataPrintingCommand(cmd)).toBe(false);
-  });
-});
-
-describe('bashCommandWrites — the capture-time "this Bash call edited files" flag', () => {
-  it.each([
-    ['heredoc append', "cat >> tests/x.test.mjs <<'EOF'\nit('a', () => {});\nEOF"],
-    ['heredoc create', "cd /r && cat > tests/x.test.mjs <<'EOF'\nx\nEOF"],
-    ['sed -i', "sed -i 's/a/b/' tests/x.test.mjs"],
-    ['perl -pi', "perl -pi -e 's/a/b/' f"],
-    ['tee', 'printf x | tee tests/x.test.mjs'],
-    ['cp', 'cp a.mjs tests/x.test.mjs'],
-    ['python open-w', "python3 - <<'PY'\np='t.py'; open(p,'w').write(s)\nPY"],
-    ['node writeFileSync', `node -e "require('fs').writeFileSync('a','b')"`],
-    ['git apply', 'git apply fix.patch'],
-  ])('writes: %s', (_n, cmd) => {
-    expect(bashCommandWrites(cmd)).toBe(true);
-  });
-
-  it.each([
-    ['sed -n read', 'sed -n 1,50p tests/x.test.mjs'],
-    ['/dev/null redirect', 'grep x f 2>/dev/null | head'],
-    ['fd dup', 'npm test 2>&1 | tail'],
-    ['a test run', 'cd /r && npx vitest run tests/a.test.mjs'],
-    ['a quoted > in an argument', 'grep -E "a > b" f'],
-    ['a > inside a quoted heredoc body', "cat <<'EOF'\na > b\nEOF"],
-    ['non-string', undefined],
-  ])('does not: %s', (_n, cmd) => {
-    expect(bashCommandWrites(cmd)).toBe(false);
   });
 });

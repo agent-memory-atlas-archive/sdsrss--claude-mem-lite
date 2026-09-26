@@ -605,61 +605,6 @@ export function isDataPrintingCommand(cmd) {
   return printKind(stripNonCommands(cmd)) === 'print';
 }
 
-// Verbs that write the file(s) they are given.
-const WRITE_VERBS = new Set(['tee', 'cp', 'mv', 'install', 'patch', 'truncate', 'dd', 'rsync']);
-// An inline program writing a file. Scanned on the RAW text: to the shell parser a heredoc
-// body or a `-e` argument is data, so the writes inside it are invisible there.
-const INLINE_WRITE_RE =
-  /\b(?:writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|write_text|write_bytes)\s*\(|\bopen\s*\([^)]*,\s*(?:mode\s*=\s*)?['"][wax]b?\+?['"]/;
-
-function elementWrites(text) {
-  const toks = shellWords(text);
-  for (let k = 0; k < toks.length; k++) {
-    const m = /^(?:\d|&)?>>?\|?(.*)$/.exec(toks[k]);
-    if (!m) continue;
-    const target = (m[1] || toks[k + 1] || '').replace(/['"]/g, '');
-    // `2>&1` duplicates a descriptor and `>/dev/null` discards: neither edits a file.
-    if (target && !target.startsWith('&') && !target.startsWith('/dev/')) return true;
-  }
-  let i = 0;
-  while (i < toks.length && (/^\w+=/.test(toks[i]) || CMD_WRAPPERS.has(toks[i]))) i++;
-  const verb = toks[i];
-  const args = toks.slice(i + 1);
-  if (!verb) return false;
-  if (WRITE_VERBS.has(verb)) return true;
-  if (
-    (verb === 'sed' || verb === 'perl') &&
-    args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'))
-  )
-    return true;
-  return verb === 'git' && ['apply', 'checkout', 'restore', 'mv'].includes(args[0]);
-}
-
-function commandWrites(cmd, depth = 0) {
-  if (depth > MAX_SUBST_DEPTH) return false;
-  const parsed = splitStatements(cmd);
-  if (!parsed) return false;
-  if (parsed.subs.some((body) => commandWrites(body, depth + 1))) return true;
-  return parsed.statements.some((pipeline) => pipeline.some(elementWrites));
-}
-
-/**
- * True when a Bash command EDITS files: an output redirection to a real path, `tee`,
- * `sed -i`/`perl -i`, `cp`/`mv`, `git apply|checkout|restore`, or an inline program that
- * calls a file-writing API.
- *
- * Command-level on purpose. WHICH files it wrote is extractFilePaths' job (the episode
- * entry's `files`); this only says the entry is an edit rather than a read or a test run,
- * which a file list cannot say: `sed -n 1,50p tests/x.test.mjs` and
- * `cat >> tests/x.test.mjs <<EOF` name the same path. error-recall's TDD-RED gate needs
- * the difference — reading a test before running it is how a REAL failure is investigated.
- */
-export function bashCommandWrites(cmd) {
-  if (typeof cmd !== 'string' || !cmd) return false;
-  if (INLINE_WRITE_RE.test(cmd)) return true;
-  return commandWrites(stripNonCommands(cmd));
-}
-
 // Paths excluded from observation capture (ephemeral / virtual filesystems) — applied
 // uniformly to both command-parsed paths and direct file_path/path/filePath fields.
 

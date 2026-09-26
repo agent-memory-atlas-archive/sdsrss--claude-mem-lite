@@ -21,7 +21,7 @@
 //   - otherwise → the same merged term list extractErrorKeywords already produced
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'child_process';
-import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -483,6 +483,7 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
       stdin: JSON.stringify({
         hook_event_name: 'PostToolUseFailure',
         session_id: 'cc-errgate',
+        cwd,
         tool_name: 'Bash',
         tool_input: { command },
         error,
@@ -526,29 +527,62 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
     );
     expect(other.block, 'an unedited test still fires').toBeTruthy();
 
-    // The Bash-write shape (most Opus 5.5 edits): the entry's capture-time `writes` flag is
-    // what makes a Bash entry an edit, so its WIRING is asserted on the buffer itself. An
-    // end-to-end RED here cannot be built at HEAD: this fixture lives under /tmp, and
-    // extractFilePaths drops /tmp paths (and all relative ones) from Bash commands.
+    // The Bash-write shape (most Opus 5.5 edits), end to end: a RELATIVE heredoc append is
+    // captured as `bashWrites`, and that is what makes it an edit. A `sed -n` read of a test
+    // lands in `files` too, and must NOT silence that test's failure.
     const fireBash = (command, stdout) =>
       fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
         cwd,
         stdin: JSON.stringify({
           session_id: 'cc-errgate',
+          cwd,
           tool_name: 'Bash',
           tool_input: { command },
           tool_response: { stdout, stderr: '', interrupted: false, isImage: false },
         }),
       });
+    const redOf = (name) => ({
+      cmd: RED_CMD.replace('red.test', `${name}.test`),
+      out: RED_OUT.replace(/red\.test/g, `${name}.test`),
+    });
+    const r2 = redOf('red2');
+    expect((await firePostTool(r2.cmd, r2.out)).block, 'control: red2 before its write').toBeTruthy();
     expect((await fireBash("cat >> tests/red2.test.mjs <<'EOF'\nit('y', () => {});\nEOF", '')).code).toBe(0);
-    expect((await fireBash('sed -n 1,5p tests/red2.test.mjs', "it('y', () => {});")).code).toBe(0);
-    const runtime = join(dataDir, 'runtime');
-    const epName = readdirSync(runtime).find((f) => /^ep-.*\.json$/.test(f));
-    const bashEntries = JSON.parse(readFileSync(join(runtime, epName), 'utf8')).entries.filter(
-      (e) => e.tool === 'Bash',
+    expect((await firePostTool(r2.cmd, r2.out)).block, 'a Bash-written test is an edit too').toBeFalsy();
+
+    const r3 = redOf('red3');
+    expect((await fireBash('sed -n 1,5p tests/red3.test.mjs', "it('z', () => {});")).code).toBe(0);
+    expect((await firePostTool(r3.cmd, r3.out)).block, 'a READ of the test is not an edit').toBeTruthy();
+
+    // Written and run in ONE call: this call's own writes, not yet in the buffer.
+    const r4 = redOf('red4');
+    const oneCall = await fire(process.execPath, [HOOK_PATH, 'post-tool-use'], {
+      cwd,
+      stdin: JSON.stringify({
+        session_id: 'cc-errgate',
+        cwd,
+        tool_name: 'Bash',
+        tool_input: { command: `cat > tests/red4.test.mjs <<'EOF'\nit('w', () => {});\nEOF\n${r4.cmd}` },
+        tool_response: r4.out,
+      }),
+    });
+    expect(oneCall.code, oneCall.stderr).toBe(0);
+    expect(oneCall.stdout, 'write-and-run in one call').not.toContain(
+      'Related memories found for this error',
     );
-    expect(bashEntries.at(-2).writes, 'the heredoc append is an edit').toBe(true);
-    expect(bashEntries.at(-1).writes, 'the sed -n read is not').toBe(false);
+    // The same shape unpiped exits 1, so it arrives on PostToolUseFailure, which resolves
+    // the call's own writes itself. Control: the run alone, with no write, still fires there.
+    const r5 = redOf('red5');
+    expect(await fireFailure('npx vitest run tests/red5.test.mjs', r5.out), 'failure-path control').toBe(
+      true,
+    );
+    expect(
+      await fireFailure(
+        `cat > tests/red5.test.mjs <<'EOF'\nit('v', () => {});\nEOF\nnpx vitest run tests/red5.test.mjs`,
+        r5.out,
+      ),
+      'write-and-run in one call, host-flagged',
+    ).toBe(false);
   }, 60000);
 
   it('N2: an exit-0 command that PRINTS error text is silent; the same text from a run is not', async () => {

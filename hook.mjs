@@ -150,8 +150,6 @@ import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-m
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
 import { errorRecallSuppression } from './lib/error-recall-gate.mjs';
-// Direct, not via the utils.mjs barrel (see the project-utils import above).
-import { bashCommandWrites } from './bash-utils.mjs';
 import {
   buildAndSaveHandoff,
   consumeHandoff,
@@ -747,9 +745,6 @@ async function handlePostToolUse() {
     isSignificant:
       EDIT_TOOLS.has(tool_name) || bashSig?.isSignificant || (tool_name === 'Bash' && bashWrites.length > 0),
     bashSig: bashSig || null,
-    // Did this Bash call EDIT files (vs read or run them)? `files` cannot say: a `sed -n`
-    // read and a `cat >> f <<EOF` name the same path. error-recall's TDD-RED gate reads it.
-    writes: tool_name === 'Bash' ? bashCommandWrites(toolInput?.command) : false,
     // CC UUID from hook stdin — lets flushEpisode split a buffer shared by
     // concurrent same-project sessions into per-session observations. Null for
     // legacy/stdin-less invocations (→ single __none__ group = old behavior).
@@ -776,7 +771,11 @@ async function handlePostToolUse() {
   // N2: a hard error is not always one the corpus can explain — see errorRecallSuppressed.
   // PostToolUse never sees a non-zero exit (the host routes those to PostToolUseFailure),
   // so this path is exit 0 by construction.
-  if (bashSig?.isHardError && !errorRecallSuppressed(toolInput, resp, hookData.session_id, true)) {
+  // `bashWrites` is passed because this call joins the buffer only after recall has run.
+  if (
+    bashSig?.isHardError &&
+    !errorRecallSuppressed(toolInput, resp, hookData.session_id, true, bashWrites)
+  ) {
     const d = getDb();
     if (d) triggerErrorRecall(d, toolInput, resp);
   }
@@ -871,13 +870,14 @@ async function handlePostToolUse() {
  *
  * @returns {boolean} true ⇒ do not inject.
  */
-function errorRecallSuppressed(toolInput, response, ccSession, exitZero) {
+function errorRecallSuppressed(toolInput, response, ccSession, exitZero, currentWrites) {
   try {
     const verdict = errorRecallSuppression({
       cmd: toolInput?.command,
       response,
       entries: readEpisodeRaw()?.entries,
       ccSession: ccSession || null,
+      currentWrites,
       exitZero,
       projectDir: inferProjectDir(),
     });
@@ -1032,8 +1032,13 @@ async function handlePostToolFailure() {
 
   const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
   if (typeof toolInput?.command !== 'string' || !toolInput.command) return;
-  // Only the TDD-RED half can apply here (exitZero false): an unpiped RED exits 1.
-  if (errorRecallSuppressed(toolInput, error, hookData.session_id, false)) return;
+  // Only the TDD-RED half can apply here (exitZero false): an unpiped RED exits 1. The
+  // call's own writes resolve against the same cwd/project the PostToolUse capture uses.
+  const currentWrites = extractFileTargets(toolInput, {
+    cwd: typeof hookData.cwd === 'string' ? hookData.cwd : null,
+    projectDir: inferProjectDir(),
+  }).writes;
+  if (errorRecallSuppressed(toolInput, error, hookData.session_id, false, currentWrites)) return;
 
   let db = null;
   try {

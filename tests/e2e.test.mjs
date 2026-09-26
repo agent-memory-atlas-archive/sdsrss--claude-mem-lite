@@ -597,7 +597,9 @@ describe('Suite 2: Episode Buffer Management', () => {
     // aggregates over the WHOLE episode (both sessions' entries), gated by
     // anySignificant && RECEIPT_EVENTS — spec §4 #7.
     const { stdout } = runHook('session-start', { stdin: JSON.stringify({ source: 'clear' }), env });
-    expect(stdout).toMatch(/\[mem\] episode flushed: 2 entries/); // aggregate receipt, no throw
+    // No bookkeeping receipt (removed: the model cannot act on it) and nothing else to say
+    // for two clean edits.
+    expect(stdout).not.toMatch(/episode flushed/);
 
     const db = openTestDb(tmpHome);
     try {
@@ -670,6 +672,26 @@ describe('Suite 2: Episode Buffer Management', () => {
     }
   });
 
+  it('a flush with nothing actionable emits no receipt at all', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const outs = [];
+    for (let i = 0; i < 11; i++) {
+      outs.push(
+        runHook('post-tool-use', {
+          stdin: makeToolPayload(
+            'Edit',
+            { file_path: '/tmp/src/quiet.js', old_string: `old${i}`, new_string: `new${i}` },
+            'OK — edited file',
+          ),
+          env: { HOME: tmpHome },
+        }).stdout,
+      );
+    }
+    // Premise: the 11th call really flushed (the buffer restarted), so silence is the rule.
+    expect(getFlushFiles(tmpHome).length).toBeGreaterThanOrEqual(1);
+    expect(outs.join('')).toBe('');
+  });
+
   it('PostToolUse flush emits receipt JSON with correct event tag', () => {
     // v2.33.5: positive test for the PostToolUse receipt emission path.
     // Complements the Stop-must-not-emit assertion above — if a future edit
@@ -680,8 +702,18 @@ describe('Suite 2: Episode Buffer Management', () => {
     // EPISODE_BUFFER_SIZE = 10. The bufferFull check runs BEFORE the new
     // entry is appended, so the 11th call (when episode already holds 10)
     // is the one that triggers flushEpisode → receipt stdout.
+    // Entry 0 is a failing test run so the flushed episode is error+edit and carries the
+    // unsaved-bugfix hint — the receipt's only content since the bookkeeping line went.
+    runHook('post-tool-use', {
+      stdin: makeToolPayload(
+        'Bash',
+        { command: 'npx vitest run tests/receipt.test.js' },
+        'FAIL tests/receipt.test.js\nAssertionError: expected 1 to be 2\n Tests  1 failed (1)',
+      ),
+      env: { HOME: tmpHome },
+    });
     let flushStdout = '';
-    for (let i = 0; i < 11; i++) {
+    for (let i = 1; i < 11; i++) {
       const { stdout } = runHook('post-tool-use', {
         stdin: makeToolPayload(
           'Edit',
@@ -694,7 +726,7 @@ describe('Suite 2: Episode Buffer Management', () => {
         ),
         env: { HOME: tmpHome },
       });
-      if (stdout && stdout.includes('episode flushed')) flushStdout = stdout;
+      if (stdout && stdout.includes('Unsaved bugfix-shape')) flushStdout = stdout;
     }
 
     // The flush-triggering call MUST produce a PostToolUse-tagged receipt.
@@ -703,7 +735,8 @@ describe('Suite 2: Episode Buffer Management', () => {
     expect(parsed.suppressOutput).toBe(true);
     expect(parsed.hookSpecificOutput).toBeDefined();
     expect(parsed.hookSpecificOutput.hookEventName).toBe('PostToolUse');
-    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/\[mem\] episode flushed: \d+ entries/);
+    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/Unsaved bugfix-shape/);
+    expect(parsed.hookSpecificOutput.additionalContext).not.toMatch(/episode flushed/);
   });
 
   it('SessionStart flush receipt + dashboard arrive as ONE envelope', () => {
@@ -718,7 +751,16 @@ describe('Suite 2: Episode Buffer Management', () => {
     // against the pre-v3.70 code (pre-tag review, test-effectiveness SHOULD-FIX-1).
     // Now it pins the real contract: exactly one document, carrying both surfaces.
     runHook('session-start', { env: { HOME: tmpHome } });
-    // Build a leftover episode (below the 10-entry auto-flush threshold).
+    // Build a leftover episode (below the 10-entry auto-flush threshold): a failing test run
+    // then edits, so the flush has a hint to contribute.
+    runHook('post-tool-use', {
+      stdin: makeToolPayload(
+        'Bash',
+        { command: 'npx vitest run tests/carry.test.js' },
+        'FAIL tests/carry.test.js\nAssertionError: expected 1 to be 2\n Tests  1 failed (1)',
+      ),
+      env: { HOME: tmpHome },
+    });
     for (let i = 0; i < 2; i++) {
       runHook('post-tool-use', {
         stdin: makeToolPayload(
@@ -744,8 +786,8 @@ describe('Suite 2: Episode Buffer Management', () => {
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.suppressOutput).toBe(true);
     expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart');
-    // Both surfaces ride it: the flushed episode receipt and the dashboard.
-    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/\[mem\] episode flushed: \d+ entries/);
+    // Both surfaces ride it: the flushed episode's hint and the dashboard.
+    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/Unsaved bugfix-shape/);
     // And nothing rides outside it.
     expect(
       stdout

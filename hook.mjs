@@ -530,19 +530,17 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
   });
   if (writefail) return;
 
-  // Aggregate receipt over the whole episode, gated exactly as before
-  // (isSignificant → anySignificant). v2.33.4: Stop rejects hookSpecificOutput.
+  // Flush-time hints, gated exactly as before (isSignificant → anySignificant). v2.33.4:
+  // Stop rejects hookSpecificOutput.
+  //
+  // The `[mem] episode flushed: N entries (Bash×9, …)` line that used to lead this block is
+  // gone. It was bookkeeping — the model can do nothing with it — injected on every
+  // significant flush (7 times after the R1 fix deployed, and in the analysing session
+  // itself; docs/audits/20260926-154904-session-history-analysis-r2.md §3). Only the two
+  // hints below are actionable, so the block is emitted only when one of them fires.
   if (anySignificant && RECEIPT_EVENTS.has(hookEventName)) {
     try {
-      const entries = episode.entries || [];
-      const toolCounts = {};
-      for (const e of entries) toolCounts[e.tool] = (toolCounts[e.tool] || 0) + 1;
-      const toolSummary = Object.entries(toolCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([t, n]) => `${t}×${n}`)
-        .join(', ');
-      const lines = [`[mem] episode flushed: ${entries.length} entries (${toolSummary})`];
+      const lines = [];
       // v2.83: error→fix nudge lifted to lib/cite-back-hint.mjs::buildUnsavedBugfixHint
       // so the wording (count + "Save now" verb) stays in sync with cite-back.
       const bugfixHint = buildUnsavedBugfixHint(episode);
@@ -559,7 +557,7 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
       // Code's parser takes the whole thing as plain text (lib/hook-stdout.mjs).
       // The older comment here claimed a line-based parser made two objects safe
       // as long as each got its own line; the 2.1.233 bundle has no such parser.
-      queueHookContext(hookEventName, lines.join('\n'));
+      if (lines.length > 0) queueHookContext(hookEventName, lines.join('\n'));
     } catch {
       /* never block on receipt */
     }

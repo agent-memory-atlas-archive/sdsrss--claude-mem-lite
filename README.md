@@ -239,7 +239,7 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 
 ## Upgrading to 6.14.0
 
-**Four defaults change; each has its own off switch.** No schema change and no migration: an
+**Five defaults change; three have an off switch.** No schema change and no migration: an
 older build still opens the database, so reverting everything is pinning
 `claude-mem-lite@6.13.6`.
 

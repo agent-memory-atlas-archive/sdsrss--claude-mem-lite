@@ -2,6 +2,59 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.14.0 — memory now sees work done through Bash, and stops injecting what the model cannot use
+
+**Upgrade note.** No schema change and no migration. Five default behaviours change; three
+have an off switch, and reverting everything is pinning `claude-mem-lite@6.13.6`:
+
+| Change | Off switch |
+|---|---|
+| File recall also fires before Bash commands that view or write a file (a fourth hook command runs under `bash`: `pre-tool-recall-bash.sh`) | `CLAUDE_MEM_BASH_RECALL=off` (any case) |
+| Error recall stays quiet on a deliberate failing-test run and on commands that only print data | — (pin 6.13.6) |
+| The episode summarizer ignores mutation probes, the agent's own failing inline scripts and subagent calls that do not edit the project | `CLAUDE_MEM_EPISODE_INPUT_FILTER=off` |
+| An auto-captured event lesson that quotes nothing from its window is dropped (the event stays, at importance 1) | `CLAUDE_MEM_LESSON_GROUNDING=off` |
+| The `[mem] episode flushed: N entries` line is no longer injected | — (pin 6.13.6) |
+
+Windows: the new hook needs `bash` like the other three (Git for Windows or WSL);
+`claude-mem-lite doctor` reports it when `bash` is missing.
+
+- **Reads and edits made through Bash are remembered and recalled.** On recent models most
+  file edits are `sed -i`, `cat > f <<EOF` or a python patch, and most reads are `cat` /
+  `sed -n`. The capture side took paths only when they were absolute and unquoted, so a
+  relative path, a quoted path or anything after `cd <repo> &&` gave no file or just the repo
+  root. Replayed over this project's own sessions, the share of Bash edit commands with a real
+  file recovered went from 3.3% to 87.3% (73.4% record the written file itself), and reads
+  from 2.7% to 88.9%. A Bash edit now also counts as an edit everywhere an Edit does (whether an episode is kept, the "unsaved
+  bugfix" nudge, cite-back, session handoff). Lessons for a file are now shown before a Bash
+  command views or writes it, as they are before Read and Edit; searches (`grep`, `rg`),
+  test runs and other commands stay silent. A bash prefilter decides in about 4 ms whether
+  to start Node at all; on this project's sessions it started Node for 52% of Bash commands
+  and missed 1 of 3,232 that had a file to recall. Parsing is bounded, so an unusual command
+  cannot hold the hook past its timeout.
+- **Error recall no longer answers a failure you meant to cause.** A run of a test file you
+  just wrote or edited is a TDD red step, and recall stays quiet on it; so does a command
+  that only prints data (`node -e`, `python3 -c`, `gh … --log`, `jq`) and exits 0 while its
+  output happens to contain someone else's error text. Real failures still fire.
+- **Auto-captured lessons have to quote what happened.** The episode summarizer now sees the
+  window's failing output, the comments an edit adds and commit messages, and a lesson that
+  quotes none of them is dropped. Mutation-test probes and the agent's own failing inline
+  scripts are no longer summarized as product bugs, and a subagent's reads and probes stay out
+  of the main session's episodes (its edits to the project are still recorded). Key Events
+  stays off at session start.
+- **No more `[mem] episode flushed: N entries` line in context.** It was a receipt the model
+  could not act on. The unsaved-bugfix and cite-back hints that followed it are unchanged.
+- **Newest-first lists no longer put the older of two same-millisecond rows first.** 27
+  orderings on `created_at_epoch` now break ties by id — `recent`, `timeline`, activity,
+  browse, exports, dedup scans. A timeline also no longer drops rows that share its anchor's
+  exact millisecond.
+- **Session-scoped paths stay out of file links.** The harness scratchpad, spilled tool
+  output (`tool-results/`) and `node_modules/` are no longer recorded as the files a memory
+  is about.
+- Development: `npm run test:ci-env` runs the suite under CI's environment (v6.13.0's CI-only
+  failure reproduces in it), and test workers now drop the `GIT_*` variables a git hook
+  exports — committing from a linked worktree ran fixture `git init`s against the real
+  repository and turned it bare.
+
 ## v6.13.6 — a late background summary no longer overwrites a newer one
 
 **Upgrade note.** Fixes only; no schema change and no migration. Reverting is pinning

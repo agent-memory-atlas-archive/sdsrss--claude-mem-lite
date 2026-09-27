@@ -199,6 +199,18 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.17.0
+
+**两处默认行为改变，其中一处有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定
+`claude-mem-lite@6.16.0`。
+
+- **编辑前的 lesson 提示只在某条 lesson 改变了这次改动时，才请模型提一次它的 `#NN`。** 不再要求在
+  下一条回复里对每条 lesson 逐一表态“采纳 / 不适用”——那会让回复里出现成串的 lesson 编号。恢复旧提示：
+  `CLAUDE_MEM_SALIENCE=verdict`。已接入的项目会在下次 SessionStart 时把 CLAUDE.md 托管行和详细文档
+  换成对应的新写法；想保留旧文本设 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。
+- **SessionStart 的 "Deferred Work" 列表（5 行）在还有更多未完成事项时，末尾加一行 "+N more open"。**
+  没有开关，回退请固定 6.16.0。
+
 ## 升级到 6.16.0
 
 **三处默认行为改变，其中一处有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定

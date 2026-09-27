@@ -237,6 +237,19 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.17.0
+
+**Two defaults change; one has a switch.** No schema change and no migration, so reverting
+everything is pinning `claude-mem-lite@6.16.0`.
+
+- **The pre-edit lesson line asks for a lesson's `#NN` only where it changed the edit.** It no
+  longer asks for an applied / not-applicable verdict on every lesson in your next reply, which
+  put lesson-id lists into replies. Old directive: `CLAUDE_MEM_SALIENCE=verdict`. Adopted
+  projects get the matching CLAUDE.md managed row and detail doc on the next SessionStart;
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps the old text.
+- **SessionStart's "Deferred Work" list ends with "+N more open"** when more than its 5 rows
+  are open. No switch; pin 6.16.0 to revert.
+
 ## Upgrading to 6.16.0
 
 **Three defaults change; one has an off switch.** No schema change and no migration, so

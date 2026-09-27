@@ -2,6 +2,51 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.17.0 — the pre-edit lesson line stops asking for a verdict on every lesson
+
+**Upgrade note.** No schema change and no migration. Two default behaviours change; one has a
+switch, and reverting everything is pinning `claude-mem-lite@6.16.0`:
+
+| Change | Switch |
+|---|---|
+| The pre-edit lesson line asks for a lesson's `#NN` only where it changed the edit, once; it no longer asks for a per-lesson `'#NN applied'` / `'#NN n/a — <reason>'` verdict in your next reply. The CLAUDE.md managed row and the detail doc say the same | `CLAUDE_MEM_SALIENCE=verdict` (the directive only) |
+| The SessionStart "Deferred Work" list (5 rows) ends with "+N more open …" when more items are open | — (pin 6.16.0) |
+
+Adopted projects get the new CLAUDE.md managed row and detail doc rewritten on the next
+SessionStart, as on every template change; `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps the old
+text.
+
+- **The pre-edit lesson line stops asking for a verdict on every lesson.** It asked the agent
+  to answer every lesson it was shown, including the ones that did not apply. Those answers
+  (`#NN n/a — …`) have not counted as adoption since 6.13.0 — citation decay ignores them — but they put lists
+  of lesson ids into the replies you read: on the maintainer's transcripts, 335 of 2,007 `#NN`
+  mentions were such dismissals, and 98 of 1,890 text-only replies carried one
+  (`docs/audits/20260927-d98-dismissal-baseline.md`). The agent is now asked to name a lesson
+  only where it changed the work; whether replies actually carry fewer ids is measured after
+  this release. The citation itself stays: replacements that infer adoption from later tool
+  activity were measured and rejected (6.16.0 notes). The opt-in `bind` and `bridge` arms keep
+  their wording. The SessionStart "cite-recall" note counts a dismissal as an answer, so it may
+  fire more often now that a lesson that did not apply gets no reply.
+- **Fix: memory rows the 10,000-character hook limit cut were still recorded as delivered.**
+  A prompt naming a long deferred item could push the prompt-time memory rows past the limit;
+  they were dropped from the output but still written to the de-duplication marker, so a
+  later prompt inside the dedup window could skip them as already shown, and counted as
+  injected. The same held for SessionStart / PreCompact Key Context rows. Only rows shown
+  whole are recorded now (the D#108 gap named in 6.16.0). One exception: the first deferred
+  item named in a prompt counts as shown once its heading line is, because its detail is cut
+  the same way on every re-injection; any other item counts only when shown whole.
+- **Fix: `defer list` / `mem_defer_list` said nothing when a page left items out.** With 11
+  open items the default page showed 10 and no hint that an eleventh existed. They now end
+  with a line saying how many were not shown and how to raise the limit (`--limit` on the CLI,
+  `limit` on the MCP tool).
+- **Fix: the update banner kept offering a version you already run** (#35). In plugin mode
+  Claude Code applies the update, so the cached "vX available" flag stayed until the next
+  successful network check, up to a day later; both the SessionStart banner and the throttled
+  check now compare it with the running version.
+- The `<session-summary>` tag in a resumed session's handoff names who wrote its Done text
+  (`report`, `titles` or `haiku`) instead of always saying `haiku`.
+- Dev dependencies: six minor/patch updates (#32).
+
 ## v6.16.0 — injected memory stays within the host's 10,000-character limit, and two recall wordings run side by side
 
 **Upgrade note.** No schema change and no migration. Three default behaviours change; one has

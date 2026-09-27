@@ -564,6 +564,18 @@ describe('handleLLMEpisode — D#69 grounding', () => {
     expect(system).not.toMatch(/Look hard before giving up/);
   });
 
+  it('grounds outcomes in the user message, where the actions actually are', async () => {
+    // The instruction lives in the system message; the actions follow in the user message.
+    // Wording that points "above" sends the model at the schema, not at the actions.
+    callLLM.mockResolvedValue(reply({ type: 'bugfix', lesson_learned: quoting }));
+    await runWith();
+    const { user, system } = callLLM.mock.calls[0][0];
+    expect(system).toMatch(/Grounding: state only outcomes the user message shows/);
+    expect(system).toMatch(/passed, failed, was verified or confirmed unless that result appears/);
+    expect(system).not.toMatch(/(listed|shown) above/);
+    expect(user).not.toMatch(/Grounding:/);
+  });
+
   it('keeps a quoting lesson at the model importance', async () => {
     callLLM.mockResolvedValue(reply({ type: 'bugfix', lesson_learned: quoting }));
     await runWith();

@@ -91,17 +91,18 @@ describe('search marks machine-written observations', () => {
     (await handleSearchForTest(db, { query: 'gizmo', project: 'prov' }, {})).content[0].text.split('\n');
   const rowAt = (lines, id) => lines.findIndex((l) => l.startsWith(`#${id} `));
 
-  async function cliLines() {
+  async function cliOut(extra = []) {
     let out = '';
     const orig = process.stdout.write;
     process.stdout.write = (s) => ((out += s), true);
     try {
-      await cmdSearchForTest(db, ['gizmo', '--project', 'prov'], {});
+      await cmdSearchForTest(db, ['gizmo', '--project', 'prov', ...extra], {});
     } finally {
       process.stdout.write = orig;
     }
-    return out.split('\n');
+    return out;
   }
+  const cliLines = async () => (await cliOut()).split('\n');
 
   it('MCP tags only the machine-written row and explains the tag', async () => {
     const lines = await mcpLines();
@@ -132,5 +133,11 @@ describe('search marks machine-written observations', () => {
     expect(lines[rowAt(lines, autoId)]).toContain(' 🤖 ');
     expect(lines[rowAt(lines, manualId)]).not.toContain('🤖');
     expect(lines.join('\n')).toContain(LEGEND);
+  });
+
+  it('CLI --json carries the flag on observation rows', async () => {
+    const { results } = JSON.parse(await cliOut(['--json']));
+    const byId = Object.fromEntries(results.filter((r) => r.source === 'obs').map((r) => [r.id, r.auto]));
+    expect(byId).toEqual({ [manualId]: false, [autoId]: true });
   });
 });

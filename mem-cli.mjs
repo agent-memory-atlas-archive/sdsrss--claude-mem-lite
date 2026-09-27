@@ -566,6 +566,8 @@ async function cmdSearch(db, args, { llm } = {}) {
         importance: r.importance ?? null,
         files_modified: r.files_modified || null,
         body_tokens: r.bodyTokens ?? null,
+        // Events carry no session id, so only observations can say who wrote them.
+        ...(r.source === 'obs' ? { auto: r.auto === true } : {}),
       };
     });
     out(

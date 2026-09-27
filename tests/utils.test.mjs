@@ -1201,6 +1201,41 @@ describe('makeEntryDesc', () => {
     expect(desc).toContain('ERROR');
   });
 
+  describe('Bash output keeps its head and its trailing verdict', () => {
+    // A check prints its verdict last. Every fixture puts the verdict past the first 100
+    // characters, so a head-only cut of any length up to the budget fails these tests.
+    const HEAD = 'Checking 866 ingredient lines across 66 recipes';
+    const VERDICT = 'digit-start but no amount/unit parsed: 0';
+
+    it('keeps the verdict of an output longer than the budget', () => {
+      const resp = `${HEAD}\n${'recipe ok\n'.repeat(20)}${VERDICT}`;
+      const desc = makeEntryDesc('Bash', { command: 'python3 check.py' }, resp, { isError: false });
+      expect(desc).toContain(HEAD.slice(0, 30));
+      expect(desc).toContain(VERDICT);
+      expect(desc).toContain('…');
+      expect(desc.length).toBeLessThanOrEqual('python3 check.py → '.length + 100);
+    });
+
+    it('keeps the verdict of an output longer than the 4096-char scrub window', () => {
+      const resp = `${HEAD}\n${'x'.repeat(6000)}\n${VERDICT}`;
+      const desc = makeEntryDesc('Bash', { command: 'python3 check.py' }, resp, { isError: false });
+      expect(desc).toContain(HEAD.slice(0, 30));
+      expect(desc).toContain(VERDICT);
+    });
+
+    it('scrubs a secret at the end of an output longer than the scrub window', () => {
+      const resp = `${HEAD}\n${'x'.repeat(6000)}\ntoken: ghp_${'a'.repeat(36)}`;
+      const desc = makeEntryDesc('Bash', { command: 'env' }, resp, { isError: false });
+      expect(desc).not.toMatch(/a{8}/);
+      expect(desc.endsWith('token: ***')).toBe(true);
+    });
+
+    it('leaves an output within the budget whole', () => {
+      const desc = makeEntryDesc('Bash', { command: 'ls' }, 'a.txt\nb.txt', { isError: false });
+      expect(desc).toBe('ls → a.txt b.txt');
+    });
+  });
+
   it('describes Grep tool', () => {
     const desc = makeEntryDesc('Grep', { pattern: 'TODO' }, 'src/foo.js:10: TODO fix');
     expect(desc).toContain('Search');

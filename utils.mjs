@@ -56,7 +56,7 @@ export {
 } from './bash-utils.mjs';
 
 // Internal imports for functions that remain in this module
-import { truncate } from './format-utils.mjs';
+import { normalizeInline, truncate } from './format-utils.mjs';
 import { stripTestSuffix } from './bash-utils.mjs';
 // Static, and deliberately the dependency-free resolver (node:os + node:path only) —
 // debugCatch's sampler must not pull in the DB layer. See its comment below.
@@ -287,6 +287,27 @@ function scrubTruncate(str, max) {
   return truncate(_scrubSecrets(str.slice(0, DESC_SCRUB_WINDOW)), max);
 }
 
+// Head+tail cut for command output. A check usually prints its verdict last ("...parsed: 0",
+// "3 passed"); a head-only cut hands the episode summarizer an unresolved-looking fragment,
+// and it has written a bugfix narrative for a check that passed. The tail comes from its own
+// scrub window at the END of the original string: taking it from the head window would drop
+// the verdict of any output longer than DESC_SCRUB_WINDOW.
+const DESC_HEAD_SHARE = 0.5;
+function scrubTruncateEnds(str, max) {
+  if (typeof str !== 'string' || str === '') return truncate(str, max);
+  const head = normalizeInline(_scrubSecrets(str.slice(0, DESC_SCRUB_WINDOW)));
+  const whole = str.length <= DESC_SCRUB_WINDOW;
+  if (whole && head.length <= max) return head;
+  const tailSrc = whole ? head : normalizeInline(_scrubSecrets(str.slice(-DESC_SCRUB_WINDOW)));
+  const headLen = Math.ceil(max * DESC_HEAD_SHARE);
+  const tailLen = max - headLen - 1;
+  let tail = tailSrc.slice(-tailLen);
+  const first = tail.charCodeAt(0);
+  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+  const cut = truncate(head, headLen);
+  return `${cut}${cut.endsWith('…') ? '' : ' …'}${tail}`;
+}
+
 export function makeEntryDesc(toolName, input, resp, opts) {
   switch (toolName) {
     case 'Edit':
@@ -302,7 +323,7 @@ export function makeEntryDesc(toolName, input, resp, opts) {
       const isErr =
         opts?.isError ??
         (/\berror\b|\bfail(ed|ure)?\b|\bexception\b|\bpanic\b/i.test(resp) && resp.length > 30);
-      const snippet = scrubTruncate(resp, 60);
+      const snippet = scrubTruncateEnds(resp, 100);
       return isErr ? `${cmd} → ERROR: ${snippet}` : `${cmd} → ${snippet}`;
     }
     case 'Grep':

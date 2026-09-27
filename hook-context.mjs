@@ -713,10 +713,12 @@ export function buildSessionContextLines(
     // The collector records the line as the caller will SEE it: this function's return runs
     // neutralizeContextDelimiters over the whole body, and idsShownWhole matches exact lines,
     // so a row carrying a delimiter tag was shown yet never booked (D#115 P3-1). Matches the
-    // block-level pass for any tag closed on its own line. An UNclosed tag's attribute tail
-    // (CONTEXT_DELIMITER_RE's `[^>]*`, which does not stop at a newline) can run to a later
-    // row's `>` in the block pass, and the rows it spans then go unbooked, as before this fix.
-    // 0 of 178 live importance>=2 rows carry a tag (2026-09-27).
+    // block-level pass for any tag closed on its own line. Two cases still differ, and leave a
+    // shown row unbooked as before this fix: an UNclosed tag whose attribute tail
+    // (CONTEXT_DELIMITER_RE's `[^>]*` does not stop at a newline) runs to a later row's `>` —
+    // the rows at the two ends of that span; and the block pass failing closed (32+ nested
+    // forged tags, defangToFixpoint strips every `<` / `>`) — any shown row holding `<` or
+    // `>`. 0 of 178 live importance>=2 rows carry a tag (2026-09-27).
     const bookedLine = (e) => ({ id: e.id, text: neutralizeContextDelimiters(e.line) });
 
     if (fileLessons.length > 0 && !quiet) {

@@ -794,6 +794,22 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
   // D#115 follow-up (v6.17.1 pre-tag review): mem_defer_list pages at most 50 and `defer list`
   // at most 100, so past those totals "with a larger limit lists them" is advice nobody can
   // follow. At or under 50 open the line is unchanged.
+  // The cutoffs themselves: 50 is still listable by both surfaces, 51 is not; 100 is still
+  // listable by `defer list`, 101 is not (v6.17.1 delta review P3-3).
+  it.each([
+    [50, /^\+45 more open — mem_defer_list \/ `defer list` with a larger limit lists them$/m],
+    [51, /^\+46 more open — `defer list --limit 100` lists them$/m],
+    [100, /^\+95 more open — `defer list --limit 100` lists them$/m],
+    [101, /^\+96 more open — `defer list --limit 100` lists the first 100$/m],
+  ])('at %i open the more line reads correctly', (n, re) => {
+    for (let i = 0; i < n; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section =
+      buildSessionContextLines(db, 'test')
+        .split('### Deferred Work')[1]
+        ?.split(/^###\s/m)[0] || '';
+    expect(section).toMatch(re);
+  });
+
   it('names the CLI maximum when mem_defer_list cannot list them all', () => {
     for (let i = 0; i < 60; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
     const section =

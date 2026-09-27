@@ -791,6 +791,28 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
     );
   });
 
+  // D#115 follow-up (v6.17.1 pre-tag review): mem_defer_list pages at most 50 and `defer list`
+  // at most 100, so past those totals "with a larger limit lists them" is advice nobody can
+  // follow. At or under 50 open the line is unchanged.
+  it('names the CLI maximum when mem_defer_list cannot list them all', () => {
+    for (let i = 0; i < 60; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section =
+      buildSessionContextLines(db, 'test')
+        .split('### Deferred Work')[1]
+        ?.split(/^###\s/m)[0] || '';
+    expect(section).toMatch(/^\+55 more open — `defer list --limit 100` lists them$/m);
+  });
+
+  it('says only the first 100 are listable past the CLI maximum', () => {
+    for (let i = 0; i < 120; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section =
+      buildSessionContextLines(db, 'test')
+        .split('### Deferred Work')[1]
+        ?.split(/^###\s/m)[0] || '';
+    expect(section).toMatch(/^\+115 more open — `defer list --limit 100` lists the first 100$/m);
+    expect(section).not.toContain('with a larger limit lists them');
+  });
+
   it('a list that fits prints no "more" line', () => {
     for (let i = 0; i < 5; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
     const section = extractSection(buildSessionContextLines(db, 'test'), 'Deferred Work');

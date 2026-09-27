@@ -712,8 +712,11 @@ export function buildSessionContextLines(
     const { fileLessonQuota, keyContextQuota } = sectionQuotas(fileLessons.length, keyContext.length);
     // The collector records the line as the caller will SEE it: this function's return runs
     // neutralizeContextDelimiters over the whole body, and idsShownWhole matches exact lines,
-    // so a row carrying a delimiter tag was shown yet never booked (D#115 P3-1). Idempotent
-    // with the block-level pass.
+    // so a row carrying a delimiter tag was shown yet never booked (D#115 P3-1). Matches the
+    // block-level pass for any tag closed on its own line. An UNclosed tag's attribute tail
+    // (CONTEXT_DELIMITER_RE's `[^>]*`, which does not stop at a newline) can run to a later
+    // row's `>` in the block pass, and the rows it spans then go unbooked, as before this fix.
+    // 0 of 178 live importance>=2 rows carry a tag (2026-09-27).
     const bookedLine = (e) => ({ id: e.id, text: neutralizeContextDelimiters(e.line) });
 
     if (fileLessons.length > 0 && !quiet) {
@@ -886,11 +889,16 @@ export function buildSessionContextLines(
     }
     // The list is capped at 5 and used to stop there silently, so 10 open items read as a
     // 5-item backlog. The total is the same statement's COUNT(*) OVER (), taken before LIMIT.
-    const hidden = Number(deferredItems[0].open_total) - deferredItems.length;
+    const openTotal = Number(deferredItems[0].open_total);
+    const hidden = openTotal - deferredItems.length;
     // Both listing surfaces page at 10, so the line names the knob rather than promising "all".
+    // Their maxima differ (mem_defer_list 50, `defer list` 100): past 50 only the CLI can list
+    // them, past 100 nothing lists them all (v6.17.1 pre-tag review).
     if (hidden > 0)
       deferredLines.push(
-        `+${hidden} more open — mem_defer_list / \`defer list\` with a larger limit lists them`,
+        openTotal <= 50
+          ? `+${hidden} more open — mem_defer_list / \`defer list\` with a larger limit lists them`
+          : `+${hidden} more open — \`defer list --limit 100\` lists ${openTotal <= 100 ? 'them' : 'the first 100'}`,
       );
     deferredLines.push('');
   }

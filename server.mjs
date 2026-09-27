@@ -17,7 +17,8 @@ import {
   formatSchemaSkewNotice,
 } from './lib/schema-skew.mjs';
 import { reRankWithContext, runIdleCleanup, buildServerInstructions } from './search-scoring.mjs';
-import { searchObservationsHybrid } from './search-engine.mjs';
+import { searchObservationsHybrid, snippetAddsInfo } from './search-engine.mjs';
+import { autoHeaderNote, autoLegend, autoTag } from './lib/provenance.mjs';
 import {
   deepSearch,
   resolveDeepMode,
@@ -461,7 +462,7 @@ function formatSearchOutput(
   // explicitly requested OR semantics — there's no "fallback" in that path.
   const fallbackHint = orFallbackFired && !args.or ? ' (relaxed AND→OR)' : '';
   lines.push(
-    `Found ${countLabel} result(s)${qLabel}${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}\n`,
+    `Found ${countLabel} result(s)${qLabel}${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paginatedResults)}\n`,
   );
 
   // `~Nt` = estimated tokens to fetch this row's full body via mem_get (attachBodyTokens).
@@ -470,9 +471,9 @@ function formatSearchOutput(
   for (const r of paginatedResults) {
     if (r.source === 'obs') {
       lines.push(
-        `#${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
+        `#${r.id} ${typeIcon(r.type)} [${r.type}]${autoTag(r)} ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
       );
-      if (r.snippet && r.snippet.length > 10 && r.snippet !== r.title) {
+      if (snippetAddsInfo(r.snippet, r.title)) {
         lines.push(`     ${truncate(r.snippet, 100)}`);
       }
     } else if (r.source === 'session') {
@@ -900,7 +901,7 @@ server.registerTool(
       const renderFields = obsFieldFilter || OBS_FIELDS;
       for (const row of rows) {
         foundBySource.obs.add(row.id);
-        const lines = [`── #${row.id} ──`];
+        const lines = [`── #${row.id}${autoHeaderNote(row)} ──`];
         // Retraction first (shared with the CLI `get` via get-core) — see supersededNotice.
         const retracted = supersededNotice(row);
         if (retracted) lines.push(retracted);

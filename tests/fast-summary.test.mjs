@@ -33,6 +33,7 @@ beforeEach(() => {
   // session_summaries.memory_session_id is an FK onto sdk_sessions: seed the parent or
   // every insert here fails on the constraint rather than on its subject.
   for (const id of ['s1', 's2', 's3', 's4']) insertSession(db, { id, project: 'p' });
+  for (const id of ['q0', 'q1', 'q2']) insertSession(db, { id: `s-${id}`, project: 'p' });
   for (const id of ['starWords', 'starRun', 'boldRun', 'openBold', 'openFence', 'pipes', 'starsOnly'])
     insertSession(db, { id: `s-${id}`, project: 'p' });
 });
@@ -665,6 +666,35 @@ describe('the final reply as a Done floor (D#121)', () => {
     db.prepare("DELETE FROM session_summaries WHERE memory_session_id = 's1'").run();
     stop('s1', { tail: 'Set the config: retries=3|timeout=30 and restart.' }, '');
     expect(one('s1').completed).toBe('Set the config: retries=3|timeout=30 and restart.');
+  });
+
+  // v6.18.0 security review P1: the check ran on the reply as written, the store on the
+  // text with list / quote markers removed. A marker between a label and its value hid the
+  // pair from the check; removing it for storage brought them together. The check now runs
+  // on what is stored.
+  it('checks the text it stores: a label and value split by list or quote markers write no floor', () => {
+    const value = 'S3cr3t' + '-Value_77';
+    stop('s1', { tail: `Staging creds:\n- **Password**:\n  - \`${value}\`` }, '');
+    expect(one('s1').completed).not.toContain(value);
+    stop('s2', { tail: `Staging creds:\n> password:\n> ${value}\nDone with setup.` }, '');
+    expect(one('s2').completed).not.toContain(value);
+  });
+
+  // Security review P2-1: the scrubber has pre-existing quadratic patterns, and scrubbing the
+  // WHOLE reply three times pushed a crafted 200k-char reply past Stop's 5 s timeout. Only the
+  // head is stored, so only a bounded head is examined.
+  it('examines a bounded head: crafted scrubber-quadratic input stays fast', () => {
+    const N = 200_000;
+    const shapes = [
+      "'" + 'secret'.repeat(N / 6),
+      '"' + 'password'.repeat(N / 8),
+      '-----BEGIN ' + 'PRIVATE KEY-----\n'.repeat(N / 17),
+    ];
+    shapes.forEach((text, i) => {
+      const t0 = performance.now();
+      stop(`s-q${i}`, { tail: text }, '');
+      expect(performance.now() - t0, `shape ${i} took too long`).toBeLessThan(1000);
+    });
   });
 
   it('a secret-bearing reply leaves an earlier floor in place', () => {

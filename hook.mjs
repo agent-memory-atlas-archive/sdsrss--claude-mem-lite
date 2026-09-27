@@ -1262,8 +1262,11 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
     let structuredCompleted = '';
     let structuredNotDone = '';
     let structuredNotes = '';
+    // The raw final reply rides along: with no Done in it, its head is the row's Done floor
+    // (D#121, lib/fast-summary.mjs writeStopSummary).
+    let tail = null;
     try {
-      const tail = transcriptPath ? extractTailAssistantText(transcriptPath) : null;
+      tail = transcriptPath ? extractTailAssistantText(transcriptPath) : null;
       if (tail) {
         const s = extractStructuredSummary(tail);
         structuredCompleted = s.done;
@@ -1280,7 +1283,7 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
     writeStopSummary(db, {
       sessionId,
       project,
-      report: { done: structuredCompleted, notDone: structuredNotDone, lines: structuredNotes },
+      report: { done: structuredCompleted, notDone: structuredNotDone, lines: structuredNotes, tail },
       source: readFastSummarySource(db, sessionId),
       now: new Date(),
       limits: FAST_SUMMARY_LIMITS.stop,

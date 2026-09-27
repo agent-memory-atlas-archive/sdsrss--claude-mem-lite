@@ -17,7 +17,10 @@ import {
   writeStopSummary,
   writeClearSummary,
   mergeModelSummary,
+  summarySourceLabel,
   FAST_SUMMARY_LIMITS,
+  TAIL_FLOOR_CHARS,
+  TAIL_MIN_REPLACE,
 } from '../lib/fast-summary.mjs';
 import { insertSession } from './test-helpers.mjs';
 
@@ -502,6 +505,146 @@ describe('one summary row per session', () => {
 // newer one's model fields. A worker now carries its Stop's epoch; sdk_sessions.completed_at_epoch
 // holds the session's LATEST Stop, and a worker whose Stop is older than that writes nothing —
 // the newer Stop's worker summarizes the newer window.
+// D#121: a session whose final reply carries no report (every session of a user without
+// that convention — 0/30 in docs/audits/20260927-d114-default-user-corpus.md) used to get
+// only its opening prompt as Last Session. Stop now keeps the head of the final reply as a
+// Done floor: report > model > tail > titles (tasks/specs/d121-tail-floor.md).
+describe('the final reply as a Done floor (D#121)', () => {
+  const limits = FAST_SUMMARY_LIMITS.stop;
+  const T = NOW.getTime();
+  const one = (sid) => {
+    const rows = db.prepare('SELECT * FROM session_summaries WHERE memory_session_id = ?').all(sid);
+    expect(rows, 'premise: exactly one row').toHaveLength(1);
+    return rows[0];
+  };
+  const stop = (sid, report = {}, titles = 'titles now', at = T) =>
+    writeStopSummary(db, {
+      sessionId: sid,
+      project: 'p',
+      report,
+      source: { request: 'opening', completed: titles },
+      now: new Date(at),
+      limits,
+    });
+  const clear = (sid, values) =>
+    writeClearSummary(db, {
+      sessionId: sid,
+      project: 'p',
+      values: { request: 'opening', ...values },
+      limits: FAST_SUMMARY_LIMITS.sessionStart,
+      now: new Date(T + 10_000),
+    });
+  const model = (sid, fields) =>
+    mergeModelSummary(db, { sessionId: sid, project: 'p', fields, now: new Date(T + 60_000) });
+  // Realistic lengths: task replies in the corpus ran 801+ chars, closing ones 15–187.
+  const REPLY =
+    'I fixed the parser: `parse()` now rejects an empty header, and the suite passes. ' +
+    'The change is in src/parse.mjs, with a new case in tests/parse.test.mjs; I did not ' +
+    'touch the CLI, and nothing is committed yet. The root cause was that the header split ' +
+    'returned one empty field for an empty line, which the length check accepted as a valid ' +
+    'single-column header. The new check rejects a header whose every field is empty, and ' +
+    'the error names the line number so the caller can point at the bad input.';
+  const SECOND =
+    'Second answer: the retry loop now backs off exponentially and caps at 30 s, so a flaky ' +
+    'upstream no longer pins a core. I added a test for the cap and ran the whole suite, ' +
+    'which passes; the old fixed delay is gone. The jitter is drawn per attempt rather than ' +
+    'once per request, which keeps several clients from retrying in lockstep, and the cap ' +
+    'applies before the jitter so the worst case stays at 30 s plus one jitter interval.';
+  const WELCOME = "You're welcome!";
+  let savedEnv;
+  beforeEach(() => {
+    savedEnv = process.env.CLAUDE_MEM_SUMMARY_TAIL;
+    delete process.env.CLAUDE_MEM_SUMMARY_TAIL;
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.CLAUDE_MEM_SUMMARY_TAIL;
+    else process.env.CLAUDE_MEM_SUMMARY_TAIL = savedEnv;
+  });
+
+  it('premise: the short reply used below is under the replace threshold, the long one over it', () => {
+    expect(WELCOME.length).toBeLessThan(TAIL_MIN_REPLACE);
+    expect(REPLY.length).toBeGreaterThanOrEqual(TAIL_MIN_REPLACE);
+  });
+
+  it('without a report, the flattened head of the final reply is the Done, tagged tail', () => {
+    stop('s1', {
+      tail: `## Result\n\n${REPLY}\n\n\`\`\`js\nparse('')\n\`\`\`\n- **Next:** node_modules untouched`,
+    });
+    const r = one('s1');
+    expect(r.completed.startsWith('Result I fixed the parser: parse() now rejects an empty header')).toBe(
+      true,
+    );
+    expect(r.completed).not.toMatch(/[#`*]/);
+    expect(r.completed.length).toBeLessThanOrEqual(TAIL_FLOOR_CHARS);
+    expect(parseSummaryNotes(r.notes)).toMatchObject({ done: 'tail', left: 'other' });
+  });
+
+  it('keeps identifiers and inline arrows intact while flattening', () => {
+    stop('s1', { tail: 'Moved node_modules handling so a -> b holds for every_case here, as asked.' });
+    expect(one('s1').completed).toBe(
+      'Moved node_modules handling so a -> b holds for every_case here, as asked.',
+    );
+  });
+
+  it('cuts at TAIL_FLOOR_CHARS, scrubbing before the cut', () => {
+    const secret = 'gh' + 'p_' + 'C'.repeat(36);
+    stop('s1', { tail: `${'x'.repeat(TAIL_FLOOR_CHARS - 10)} token ${secret} tail` });
+    const r = one('s1');
+    expect(r.completed.length).toBeLessThanOrEqual(TAIL_FLOOR_CHARS);
+    expect(r.completed).not.toContain('ghp_CCCC');
+  });
+
+  it('beats titles on later turns, and a later substantive reply replaces it', () => {
+    stop('s1', { tail: REPLY }, 'turn1 titles');
+    stop('s1', {}, 'turn2 titles');
+    expect(one('s1').completed.startsWith('I fixed the parser')).toBe(true);
+    stop('s1', { tail: SECOND });
+    expect(one('s1').completed.startsWith('Second answer')).toBe(true);
+  });
+
+  it('a short closing reply does not replace it, but may create the first floor', () => {
+    stop('s1', { tail: REPLY });
+    stop('s1', { tail: WELCOME });
+    expect(one('s1').completed.startsWith('I fixed the parser')).toBe(true);
+    stop('s2', { tail: WELCOME }, '');
+    expect(one('s2').completed).toBe(WELCOME);
+  });
+
+  it('a report replaces it and is then protected from later tails', () => {
+    stop('s1', { tail: REPLY });
+    stop('s1', { done: 'REPORT-DONE' });
+    stop('s1', { tail: REPLY });
+    expect(one('s1').completed).toBe('REPORT-DONE');
+    expect(parseSummaryNotes(one('s1').notes).done).toBe('report');
+  });
+
+  it('a model reply replaces it; a later tail does not replace the model', () => {
+    stop('s1', { tail: REPLY });
+    model('s1', { completed: 'MODEL-DONE' });
+    stop('s1', { tail: SECOND });
+    expect(one('s1').completed).toBe('MODEL-DONE');
+  });
+
+  it('/clear titles do not replace it', () => {
+    stop('s1', { tail: REPLY });
+    clear('s1', { completed: 'fresh titles' });
+    expect(one('s1').completed.startsWith('I fixed the parser')).toBe(true);
+  });
+
+  it('CLAUDE_MEM_SUMMARY_TAIL=0 keeps the titles fallback', () => {
+    process.env.CLAUDE_MEM_SUMMARY_TAIL = '0';
+    stop('s1', { tail: REPLY }, 'only titles');
+    expect(one('s1').completed).toBe('only titles');
+    expect(parseSummaryNotes(one('s1').notes).done).toBe('titles');
+  });
+
+  it('round-trips the tag and labels it last-reply for the handoff', () => {
+    const p = { done: 'tail', left: 'other', lines: '' };
+    expect(parseSummaryNotes(formatSummaryNotes(p))).toEqual(p);
+    expect(summarySourceLabel(formatSummaryNotes(p))).toBe('last-reply');
+  });
+});
+
 describe('a model reply from a superseded Stop does not land (P3-6)', () => {
   const T = NOW.getTime();
   const setLatestStop = (sid, epoch) =>

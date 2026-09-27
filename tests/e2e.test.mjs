@@ -1259,6 +1259,28 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     expect(rows[0].remaining_items).toContain('KEPT-LEFT');
   });
 
+  // D#121: a user who writes no Done / Not done report. Stop used to leave Completed empty
+  // (no observation titles either), so the next SessionStart showed only the opening prompt.
+  it("without any report, the head of the final reply becomes Last Session's Completed", () => {
+    runHook('session-start', { env: env() });
+    const sid = getSessionIdFromFile(tmpHome);
+    seedPrompt(sid);
+    const reply =
+      '## Summary\n\nI fixed the retry loop in `src/net.mjs`: it now backs off exponentially and caps ' +
+      'at 30 s, so a flaky upstream no longer pins a core. I added a test for the cap; the suite passes.';
+    turn('fix the retry loop', reply);
+    stop();
+    const rows = rowsOf(sid);
+    expect(rows, 'premise: the Stop wrote the row').toHaveLength(1);
+    expect(rows[0].completed.startsWith('Summary I fixed the retry loop in src/net.mjs')).toBe(true);
+    expect(rows[0].notes.startsWith('donetail ')).toBe(true);
+
+    const next = runHook('session-start', { env: env() });
+    const ctx = JSON.parse(next.stdout).hookSpecificOutput.additionalContext;
+    expect(ctx, 'premise: Last Session rendered').toContain('### Last Session');
+    expect(ctx).toMatch(/^Completed: Summary I fixed the retry loop in src\/net\.mjs/m);
+  });
+
   it('a later turn that reports only a Not done replaces the old Not done and keeps the Done', () => {
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);
@@ -1274,7 +1296,14 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     expect(rows[0].remaining_items).not.toContain('OLD-LEFT');
   });
 
-  it('without a report, each Stop refreshes the observation titles instead of keeping the first turn', () => {
+  // Since D#121 a reply without a report is itself the Done floor, so the titles refresh is
+  // the path of the opt-out (CLAUDE_MEM_SUMMARY_TAIL=0) — asserted there.
+  it('without a report, each Stop refreshes the observation titles instead of keeping the first turn (tail floor off)', () => {
+    const titlesOnly = () =>
+      runHook('stop', {
+        stdin: JSON.stringify({ session_id: 'cc-4b', transcript_path: transcript }),
+        env: { ...env(), CLAUDE_MEM_SUMMARY_TAIL: '0' },
+      });
     runHook('session-start', { env: env() });
     const sid = getSessionIdFromFile(tmpHome);
     seedPrompt(sid);
@@ -1291,13 +1320,13 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     };
     addObs('FIRST-TURN-OBS');
     turn('start', 'Looked around.');
-    stop();
+    titlesOnly();
     expect(rowsOf(sid)[0]?.completed, 'premise: the first Stop stored the titles').toContain(
       'FIRST-TURN-OBS',
     );
     addObs('LATER-TURN-OBS');
     turn('go on', 'Changed a file.');
-    stop();
+    titlesOnly();
     const rows = rowsOf(sid);
     expect(rows).toHaveLength(1);
     expect(rows[0].completed).toContain('LATER-TURN-OBS');

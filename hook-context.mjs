@@ -882,7 +882,11 @@ export function buildSessionContextLines(
     // The list is capped at 5 and used to stop there silently, so 10 open items read as a
     // 5-item backlog. The total is the same statement's COUNT(*) OVER (), taken before LIMIT.
     const hidden = Number(deferredItems[0].open_total) - deferredItems.length;
-    if (hidden > 0) deferredLines.push(`+${hidden} more open — mem_defer_list / \`defer list\` shows all`);
+    // Both listing surfaces page at 10, so the line names the knob rather than promising "all".
+    if (hidden > 0)
+      deferredLines.push(
+        `+${hidden} more open — mem_defer_list / \`defer list\` with a larger limit lists them`,
+      );
     deferredLines.push('');
   }
 

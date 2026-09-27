@@ -60,7 +60,7 @@
 - **Episode 批处理** -- 将相关文件操作分组为连贯的 episode，再进行 LLM 编码
 - **错误触发回忆** -- Bash 出错时自动搜索记忆，浮现相关的历史修复方案
 - **主动文件历史** -- 编辑文件时，自动显示该文件相关的历史观察记录
-- **会话摘要** -- 会话结束时通过后台 worker（使用 `claude -p`）生成 LLM 摘要
+- **会话摘要** -- 每次 Stop 时从助手自己的最终报告直接生成（不调模型）；旧的后台模型摘要需设 `CLAUDE_MEM_LLM_SUMMARY=1` 才开启
 - **项目作用域上下文** -- 将最近的记忆注入 `CLAUDE.md` 和会话启动上下文
 - **观察类型** -- 分类为 `decision`、`bugfix`、`feature`、`refactor`、`discovery` 或 `change`
 - **重要度分级** -- LLM 为每条观察分配 1-3 级重要度（日常/关注/关键）
@@ -470,7 +470,7 @@ text, narrative, concepts, facts, files_read, files_modified,
 importance, related_ids, created_at, created_at_epoch
 ```
 
-**session_summaries** -- LLM 生成的会话摘要
+**session_summaries** -- 每个会话的摘要（Stop 时的报告提取；仅在 `CLAUDE_MEM_LLM_SUMMARY=1` 时由模型撰写）
 ```
 id, memory_session_id, project, request, investigated,
 learned, completed, next_steps, files_read, files_edited, notes
@@ -529,7 +529,8 @@ Stop
   -> 刷新最终 episode 缓冲区
   -> 保存交接快照（/exit 时）
   -> 标记会话为已完成
-  -> 启动 LLM 摘要 worker（轮询等待）
+  -> 从助手的最终报告写入会话摘要（同步，不调模型）
+  -> 启动 LLM 摘要 worker（轮询等待）—— 仅当 CLAUDE_MEM_LLM_SUMMARY=1
 ```
 
 ### Episode 编码

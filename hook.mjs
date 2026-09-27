@@ -1571,9 +1571,12 @@ function trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptP
         let gate = { gateInjected: null, gateRecalled: null, gateRatio: null };
         try {
           const gateInjectedIds = unionSurfaces(extractInjectedBySurface(transcriptPath, { mainOnly: true }));
-          // The nudge asks whether the agent ANSWERED what the hooks showed it, and
-          // `#NN n/a — <reason>` is a complete answer: counting it as silence would nag
-          // an agent for following the convention to the letter.
+          // The nudge asks whether the agent ANSWERED what the hooks showed it, so a
+          // `#NN n/a — <reason>` still counts. Since D#98 the default directive asks for no
+          // reply on a lesson that did not apply, so that silence now reads as a miss here and
+          // the gate fires more (projected 78/95 → up to 87/95 qualifying sessions,
+          // docs/audits/20260927-d98-dismissal-baseline.md). Left as is: the gate already fired
+          // on most sessions and self-silences after 3; D#111's readout re-measures it.
           const gateCited = extractCitationsFromTranscript(transcriptPath, {
             mainOnly: true,
             includeDismissed: true,

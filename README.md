@@ -644,7 +644,8 @@ Stop
   -> Flush final episode buffer
   -> Save handoff snapshot (type 'exit')
   -> Mark session completed
-  -> Spawn LLM summary worker (poll-based wait)
+  -> Write the session summary from the assistant's final report (sync, no model call)
+  -> Spawn LLM summary worker (poll-based wait) -- only when CLAUDE_MEM_LLM_SUMMARY=1
   -> Keep the session file  <- Stop fires per TURN; deleting it here re-minted a mem
      session every turn and left the SessionStart /clear branch unreachable (v5.4.0)
 ```
@@ -1073,7 +1074,7 @@ and names can change between releases.
 | `CLAUDE_MEM_TASK_IMPERATIVE` | `on`/`1` injects the single most relevant lesson at prompt position under an imperative template. | _(off)_ |
 | `CLAUDE_MEM_SUBAGENT_INJECT` | Dispatch-time memory injection for subagents. | _(off)_ |
 | `CLAUDE_MEM_RECALL_FRAMING` | First line of a PreToolUse / PostToolUse recall block. `ab` gives each session one of two wordings, the older "system-injected context, continue your planned action" or a plain statement of source, so their cite-rates can be compared in one run (`benchmark/citation-live-replay.mjs --by-framing`); `legacy` / `factual` pin one. | `ab` |
-| `CLAUDE_MEM_SALIENCE` | Selects how the pre-edit lesson line asks for a response: unset = name a lesson's `#NN` only where it changed the edit; `verdict` = the pre-6.17 per-lesson `applied` / `n/a` verdict; `bind` / `bridge` = comprehension-bridge arms; `legacy` = no directive. | _(unset)_ |
+| `CLAUDE_MEM_SALIENCE` | Selects how the pre-edit lesson line asks for a response: unset = name a lesson's `#NN` only where it changed the edit; `verdict` = the pre-6.17 per-lesson `applied` / `n/a` verdict (the directive only: the adoption row in CLAUDE.md and the detail doc keep the new wording); `bind` / `bridge` = comprehension-bridge arms (`bridge` keeps the pre-6.17 verdict wording as its fallback); `legacy` = no directive. | _(unset)_ |
 | `CLAUDE_MEM_EDGE_DECAY` | Enables decay of file↔observation edges. | _(off)_ |
 | `CLAUDE_MEM_EDGE_DECAY_K` | Edge-decay threshold when the flag above is on (clamped to ≥1). | `3` |
 

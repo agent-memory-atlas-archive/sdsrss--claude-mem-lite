@@ -33,6 +33,7 @@ import * as taskReaderModule from './lib/task-reader.mjs';
 // so a named import could not be spied on in tests.
 import * as pausedReaderModule from './lib/paused-reader.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
+import { summarySourceLabel } from './lib/fast-summary.mjs';
 
 /**
  * Build and save a handoff snapshot to session_handoffs table.
@@ -1035,7 +1036,7 @@ function renderHandoffFromRow(handoff, db, project) {
     let summary = db
       .prepare(
         `
-      SELECT completed, next_steps, remaining_items FROM session_summaries
+      SELECT completed, next_steps, remaining_items, notes FROM session_summaries
       WHERE memory_session_id = ? AND project = ?
       ORDER BY created_at_epoch DESC, id DESC LIMIT 1
     `,
@@ -1049,7 +1050,7 @@ function renderHandoffFromRow(handoff, db, project) {
       summary = db
         .prepare(
           `
-        SELECT completed, next_steps, remaining_items FROM session_summaries
+        SELECT completed, next_steps, remaining_items, notes FROM session_summaries
         WHERE project = ?
         ORDER BY ABS(created_at_epoch - ?) ASC, id DESC LIMIT 1
       `,
@@ -1058,7 +1059,9 @@ function renderHandoffFromRow(handoff, db, project) {
     }
     if (summary && (summary.completed || summary.next_steps || summary.remaining_items)) {
       lines.push('');
-      lines.push('<session-summary source="haiku">');
+      // Provenance from the row's own tag, not a constant: it read "haiku" on every row, and
+      // since D#95 the model summary is opt-in, so most rows are the Stop report extract.
+      lines.push(`<session-summary source="${summarySourceLabel(summary.notes)}">`);
       // Defang: these come from session_summaries, populated by Haiku OR by
       // extractStructuredSummary over the assistant transcript tail — replayed text that can
       // carry tool-XML / forged authority tags, same class as working_on above (audit MED-4).

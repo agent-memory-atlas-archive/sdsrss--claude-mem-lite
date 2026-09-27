@@ -1628,8 +1628,9 @@ ${obsList}`;
           ? JSON.stringify(llmParsed.key_decisions)
           : null;
 
-      // Upgrade the session's summary row instead of creating another. This worker runs after
-      // EVERY Stop (one per assistant turn) and again from SessionStart's /clear path; selecting
+      // Upgrade the session's summary row instead of creating another. When opted in
+      // (CLAUDE_MEM_LLM_SUMMARY=1, D#95) this worker runs after EVERY Stop (one per assistant
+      // turn) and again from SessionStart's /clear path; selecting
       // only a `notes = 'fast'` row found nothing once the first run had upgraded it, and each
       // later turn INSERTed (one live session: 37 rows in 65 minutes). mergeModelSummary lands
       // on the session's newest row and keeps a report's Done / Not done over the model's

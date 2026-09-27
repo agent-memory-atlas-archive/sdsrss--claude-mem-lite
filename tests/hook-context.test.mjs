@@ -786,7 +786,9 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
     const deferredLines = (section.match(/^\d+\.\s/gm) || []).length;
     expect(deferredLines).toBe(5);
     // A capped list says so — 7 open read as 5 with nothing pointing at the rest.
-    expect(section).toMatch(/^\+2 more open — mem_defer_list \/ `defer list` shows all$/m);
+    expect(section).toMatch(
+      /^\+2 more open — mem_defer_list \/ `defer list` with a larger limit lists them$/m,
+    );
   });
 
   it('a list that fits prints no "more" line', () => {

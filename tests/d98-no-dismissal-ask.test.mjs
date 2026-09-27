@@ -18,20 +18,33 @@ import { join } from 'path';
 import { REPO, walkShipped, relShipped, sourceWithoutComments } from './shipped-tree.mjs';
 import { buildClaudeMdBlock, getDetailDoc } from '../adopt-content.mjs';
 
-// The dismissal template in either language: `n/a — <reason>`, `n/a — <理由>`.
-const DISMISSAL_ASK = /n\/a — </;
-const ALLOWED = [
-  {
-    file: 'scripts/pre-tool-recall.js',
-    line: /^\s*(?:const )?(?:VERDICT|BIND)_DIRECTIVE\b|^\s*"(?:apply each lesson|For each lesson)/,
-  },
-];
+// The per-lesson verdict ask, in any spelling found so far: the `n/a — <reason>` template
+// (either language), and an `applied` / `n/a` pairing (`#NN applied` or `#NN n/a`, 或).
+const DISMISSAL_ASK = /n\/a — <|#NN:? applied\W{0,3}\s*(?:or|或)\s*\W{0,3}#NN:? n\/a/i;
+
+// Allowed only INSIDE the bodies of the two opt-in constants — keyed on which declaration a
+// line belongs to, not on what the line looks like, so reverting ACK_DIRECTIVE's body to the
+// old verdict string is caught here too (pre-ship review P3-2).
+const OPT_IN_CONSTANTS = ['VERDICT_DIRECTIVE', 'BIND_DIRECTIVE'];
+function optInBodyLines(text) {
+  const lines = text.split('\n');
+  const inBody = new Set();
+  lines.forEach((line, i) => {
+    const m = line.match(/^\s*const ([A-Z_]+) =/);
+    if (!m || !OPT_IN_CONSTANTS.includes(m[1])) return;
+    for (let j = i; j < lines.length; j++) {
+      inBody.add(j);
+      if (/;\s*$/.test(lines[j])) break;
+    }
+  });
+  return inBody;
+}
 
 function offending(rel, text) {
+  const allowed = rel === 'scripts/pre-tool-recall.js' ? optInBodyLines(text) : new Set();
   const hits = [];
   text.split('\n').forEach((line, i) => {
-    if (!DISMISSAL_ASK.test(line)) return;
-    if (ALLOWED.some((a) => a.file === rel && a.line.test(line))) return;
+    if (!DISMISSAL_ASK.test(line) || allowed.has(i)) return;
     hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 120)}`);
   });
   return hits;
@@ -65,6 +78,18 @@ describe('D#98 — no shipped text asks for #NN dismissals', () => {
     const src = sourceWithoutComments(join(REPO, 'scripts/pre-tool-recall.js'));
     const allowedLines = src.split('\n').filter((l) => DISMISSAL_ASK.test(l));
     expect(allowedLines.length).toBeGreaterThanOrEqual(2); // VERDICT + BIND bodies
+    expect(optInBodyLines(src).size).toBeGreaterThanOrEqual(4); // both declarations found
     expect(offending('scripts/pre-tool-recall.js', src)).toEqual([]);
+  });
+
+  it('the pattern catches both spellings of the ask (pre-ship review P3-3)', () => {
+    for (const t of [
+      "state '#NN applied' or '#NN n/a — <reason>'",
+      'answer each with `#NN applied` or `#NN n/a`',
+      '（`#NN applied` 或 `#NN n/a`）',
+    ])
+      expect(DISMISSAL_ASK.test(t), t).toBe(true);
+    // Saying a dismissal need not be written is not asking for one.
+    expect(DISMISSAL_ASK.test('写成 `#NN n/a` 的驳回不算采纳')).toBe(false);
   });
 });

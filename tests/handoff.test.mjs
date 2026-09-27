@@ -916,6 +916,29 @@ describe('renderHandoffInjection', () => {
     expect(result).toContain('</session-summary>');
   });
 
+  // Pre-ship review P3-7: the tag said source="haiku" on every row, and since D#95 the model
+  // summary is opt-in, so most rows are the Stop report extract. The label comes from the
+  // row's own notes tag now.
+  it('labels the session summary with the provenance its notes record', () => {
+    db.prepare(
+      `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+      VALUES ('p', 'exit', 's1', 'work', ?)`,
+    ).run(Date.now());
+    seedSession(db, 's1', 'p');
+    const put = (notes) => {
+      db.prepare('DELETE FROM session_summaries').run();
+      db.prepare(
+        `INSERT INTO session_summaries (memory_session_id, project, request, completed, notes, created_at, created_at_epoch)
+        VALUES ('s1', 'p', 'req', 'finished stuff', ?, datetime('now'), ?)`,
+      ).run(notes, Date.now());
+      return renderHandoffInjection(db, 'p').match(/<session-summary source="([a-z]+)">/)?.[1];
+    };
+    expect(put('donereport leftreport')).toBe('report');
+    expect(put('fast')).toBe('titles');
+    expect(put('llm')).toBe('haiku');
+    expect(put(null)).toBe('haiku'); // legacy rows: written by the model before tags existed
+  });
+
   it('enriches with the project summary even when handoff.session_id is a CC-UUID (prod id mismatch)', () => {
     // Regression: in production session_handoffs.session_id is the Claude Code UUID, but
     // session_summaries is keyed by the mem-internal memory_session_id — the exact match

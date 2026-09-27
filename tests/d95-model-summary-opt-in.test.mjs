@@ -16,7 +16,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync, execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { modelSummaryOptedIn } from '../lib/fast-summary.mjs';
 
@@ -28,12 +28,17 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Wait until no process still names this sandbox — the detached worker included. */
+/**
+ * Wait until no process still names this sandbox. The worker's argv carries the project
+ * name, which is derived from the sandbox dir's basename (`mem-d95-XXXX--proj`), while the
+ * full root appears only in its ENV, which `pgrep -f` does not read (pre-ship review P3-4).
+ */
 async function quiesce(root) {
+  const tag = basename(root);
   for (let i = 0; i < 50; i++) {
     let out;
     try {
-      out = execFileSync('pgrep', ['-f', root], { encoding: 'utf8' });
+      out = execFileSync('pgrep', ['-f', tag], { encoding: 'utf8' });
     } catch {
       return; // pgrep exits 1 when nothing matches
     }
@@ -125,8 +130,11 @@ describe('D#95 — the model session summary is opt-in', () => {
         .slice(Math.max(0, i - 4), i + 1)
         .filter((l) => !/^\s*(\/\/|\*)/.test(l))
         .join('\n');
-      expect(window, `hook.mjs:${i + 1}`).toContain('modelSummaryOptedIn()');
-      expect(window, `hook.mjs:${i + 1}`).toContain('CLAUDE_MEM_SKIP_SUMMARY');
+      // The exact conjunction: `!SKIP || modelSummaryOptedIn()` would carry both names and
+      // spawn by default (pre-ship review P3-5 — the /clear site has no behavioural arm).
+      expect(window, `hook.mjs:${i + 1}`).toContain(
+        '!process.env.CLAUDE_MEM_SKIP_SUMMARY && modelSummaryOptedIn()',
+      );
     }
   });
 });

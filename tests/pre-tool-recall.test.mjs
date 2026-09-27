@@ -1470,6 +1470,7 @@ describe('pre-tool-recall', () => {
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
       expect(ctx).not.toContain(ACK_MARK);
+      expect(ctx).not.toContain("'#NN applied'");
     });
 
     it('Read: stays passive — no ack directive on the quiet 1-lesson injection', async () => {
@@ -1484,6 +1485,7 @@ describe('pre-tool-recall', () => {
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
       expect(ctx).not.toContain(ACK_MARK);
+      expect(ctx).not.toContain("'#NN applied'");
     });
 
     it('Read→Edit same session: Edit emits a compact ack nudge naming the Read-time IDs', async () => {
@@ -1513,6 +1515,25 @@ describe('pre-tool-recall', () => {
       expect(ctx).not.toContain('recover orphaned children');
       // #7758 framing guard: still announces itself as system-injected continuation.
       expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
+    });
+
+    // Pre-ship review P2-2: the `bridge` arm's fallback directive is the one its efficacy
+    // readings were taken with, so D#98 left it on the pre-6.17 verdict wording.
+    it('Read→Edit under CLAUDE_MEM_SALIENCE=bridge keeps the verdict directive', async () => {
+      const filePath = join(projectDir, 'maintain.mjs');
+      const env = envFor({ CLAUDE_MEM_SALIENCE: 'bridge' });
+      await runScript(
+        { tool_name: 'Read', tool_input: { file_path: filePath }, session_id: 'sess-sal-br' },
+        env,
+      );
+      const { stdout } = await runScript(
+        { tool_name: 'Edit', tool_input: { file_path: filePath }, session_id: 'sess-sal-br' },
+        env,
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toMatch(/were shown when you Read/); // premise: the ack line fired
+      expect(ctx).toContain("'#NN n/a — <reason>'");
+      expect(ctx).not.toContain(ACK_MARK);
     });
 
     // The ack line re-renders ids from the cooldown entry, which holds obs AND event ids

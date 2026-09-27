@@ -153,7 +153,9 @@ const SALIENCE_BRIDGE = process.env.CLAUDE_MEM_SALIENCE === 'bridge';
 // text-only replies carried one (216 transcripts, 2026-09-27; tasks/specs/d98-*).
 // A behavioural signal instead of the citation was measured and rejected (C1,
 // docs/audits/20260927-c1-adoption-signal-denominators.md), so the applied half stays.
-// CLAUDE_MEM_SALIENCE=verdict restores the old wording.
+// CLAUDE_MEM_SALIENCE=verdict restores the old wording. The `bridge` arm keeps it too: it is an
+// experimental arm benchmark/efficacy-harness.mjs measures, and changing its fallback text
+// would make readings before and after this change incomparable (pre-ship review P2-2).
 const VERDICT_DIRECTIVE =
   "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.";
 const ACK_DIRECTIVE =
@@ -166,7 +168,7 @@ const BIND_DIRECTIVE =
   "For each lesson: state the one concrete check it forces on the line(s) you're editing, quote the edit line that satisfies it, then report '#NN: <check> — pass' or '#NN: n/a — <why this edit can't reach it>'.";
 const ACTIVE_DIRECTIVE = SALIENCE_BIND
   ? BIND_DIRECTIVE
-  : process.env.CLAUDE_MEM_SALIENCE === 'verdict'
+  : process.env.CLAUDE_MEM_SALIENCE === 'verdict' || SALIENCE_BRIDGE
     ? VERDICT_DIRECTIVE
     : ACK_DIRECTIVE;
 const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file

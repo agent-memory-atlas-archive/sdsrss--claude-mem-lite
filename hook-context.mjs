@@ -862,7 +862,8 @@ export function buildSessionContextLines(
     SELECT id, title, priority,
            ROW_NUMBER() OVER (
              ORDER BY priority DESC, created_at_epoch ASC, id ASC
-           ) AS ordinal
+           ) AS ordinal,
+           COUNT(*) OVER () AS open_total
     FROM deferred_work
     WHERE project = ? AND status = 'open'
     ORDER BY priority DESC, created_at_epoch ASC, id ASC
@@ -878,6 +879,10 @@ export function buildSessionContextLines(
       const pTag = d.priority === 3 ? '🔴' : d.priority === 1 ? '⚪' : '🟡';
       deferredLines.push(`${d.ordinal}. ${pTag} [P${d.priority}] ${truncate(d.title, 120)} (D#${d.id})`);
     }
+    // The list is capped at 5 and used to stop there silently, so 10 open items read as a
+    // 5-item backlog. The total is the same statement's COUNT(*) OVER (), taken before LIMIT.
+    const hidden = Number(deferredItems[0].open_total) - deferredItems.length;
+    if (hidden > 0) deferredLines.push(`+${hidden} more open — mem_defer_list / \`defer list\` shows all`);
     deferredLines.push('');
   }
 

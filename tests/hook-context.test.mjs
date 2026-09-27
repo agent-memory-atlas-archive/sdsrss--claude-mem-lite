@@ -785,6 +785,15 @@ describe('buildSessionContextLines: Deferred Work block (deferred_work-backed)',
     const section = lines.split('### Deferred Work')[1]?.split(/^###\s/m)[0] || '';
     const deferredLines = (section.match(/^\d+\.\s/gm) || []).length;
     expect(deferredLines).toBe(5);
+    // A capped list says so — 7 open read as 5 with nothing pointing at the rest.
+    expect(section).toMatch(/^\+2 more open — mem_defer_list \/ `defer list` shows all$/m);
+  });
+
+  it('a list that fits prints no "more" line', () => {
+    for (let i = 0; i < 5; i++) insertDeferred(db, { project: 'test', title: `item ${i}`, priority: 2 });
+    const section = extractSection(buildSessionContextLines(db, 'test'), 'Deferred Work');
+    expect((section.match(/^\d+\.\s/gm) || []).length).toBe(5); // premise: the block rendered
+    expect(section).not.toMatch(/more open/);
   });
 
   it('omits block entirely when no open items', () => {

@@ -10,21 +10,49 @@
 //   4. STRUCTURAL: no registered hook entry point writes stdout except through the two
 //      capped writers, so a new plain write cannot bypass the cap unnoticed.
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { HOOK_TEXT_CAP, capHookText, writePlainHookText, resetPlainHookText } from '../lib/hook-text-cap.mjs';
+import Database from 'better-sqlite3';
+import {
+  HOOK_TEXT_CAP,
+  capHookText,
+  writePlainHookText,
+  resetPlainHookText,
+  idsShownWhole,
+} from '../lib/hook-text-cap.mjs';
 import {
   queueHookContext,
   queueHookSystemMessage,
   flushHookStdout,
   resetHookStdout,
+  previewHookContext,
 } from '../lib/hook-stdout.mjs';
+import { initSchema } from '../schema.mjs';
+import { keyContextIdsFileName } from '../lib/injected-ids.mjs';
+import { handlePreCompact } from '../hook-precompact.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** A subprocess env that cannot read or write the real install. */
+function sandboxEnv(root, data) {
+  const home = join(root, 'home');
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (/^(CLAUDE_MEM_|MEM_|CLAUDE_PLUGIN_)/.test(k)) delete env[k];
+  delete env.CLAUDE_PROJECT_DIR;
+  delete env.PWD;
+  return Object.assign(env, {
+    HOME: home,
+    CLAUDE_MEM_DIR: data,
+    CLAUDE_MEM_SKIP_UPDATE: '1',
+    CLAUDE_MEM_SKIP_REPOS: '1',
+    MEM_NO_AUTO_ADOPT: '1',
+  });
+}
 
 function rows(n, width = 90) {
   return Array.from({ length: n }, (_, i) => `- #${i + 1} ${'x'.repeat(width)}`);
@@ -151,20 +179,9 @@ describe('a real overflow through a shipped surface (subprocess)', () => {
 
   it('UserPromptSubmit deferred-work block with a 30K detail stays under the cap', () => {
     const data = join(ROOT, 'data');
-    const home = join(ROOT, 'home');
     const cwd = join(ROOT, 'proj-textcap');
-    for (const d of [data, join(home, '.claude'), cwd]) mkdirSync(d, { recursive: true });
-    const env = { ...process.env };
-    for (const k of Object.keys(env)) if (/^(CLAUDE_MEM_|MEM_|CLAUDE_PLUGIN_)/.test(k)) delete env[k];
-    delete env.CLAUDE_PROJECT_DIR;
-    delete env.PWD;
-    Object.assign(env, {
-      HOME: home,
-      CLAUDE_MEM_DIR: data,
-      CLAUDE_MEM_SKIP_UPDATE: '1',
-      CLAUDE_MEM_SKIP_REPOS: '1',
-      MEM_NO_AUTO_ADOPT: '1',
-    });
+    for (const d of [data, cwd]) mkdirSync(d, { recursive: true });
+    const env = sandboxEnv(ROOT, data);
     const detail = rows(320)
       .map((l) => `item ${l.slice(2)}`)
       .join('\n'); // ~30K, one line per row; must not start with '-' (a CLI flag)
@@ -187,6 +204,245 @@ describe('a real overflow through a shipped surface (subprocess)', () => {
     expect(r.stdout).toContain('Overflowing deferred item');
     expect(r.stdout.length).toBeLessThanOrEqual(HOOK_TEXT_CAP);
     expect(r.stdout).toContain('not shown — hook output limit');
+  });
+});
+
+// D#108: every surface books what it injected — the dedup marker (which suppresses a row on
+// BOTH UserPromptSubmit faces for the window), injection_count (a noise signal ranking reads)
+// and the Key Context marker. Booked before this fix from the rows the surface RENDERED, so a
+// row the cap then dropped was suppressed as if the model had seen it.
+describe('only what the cap kept is booked as delivered (D#108)', () => {
+  beforeEach(() => {
+    resetPlainHookText();
+    resetHookStdout();
+  });
+
+  it('writePlainHookText returns exactly what it wrote, and nothing once no room is left', () => {
+    const written = [];
+    const write = (s) => written.push(s);
+    const first = writePlainHookText(rows(150).join('\n'), { write }); // ~14K → trimmed
+    expect(`${first}\n`).toBe(written[0]);
+    const second = writePlainHookText('- #9001 late row', { write }); // budget spent → note
+    expect(`${second}\n`).toBe(written[1]);
+    expect(second).not.toContain('late row');
+    writePlainHookText('n'.repeat(9_000), { write: () => {}, cap: HOOK_TEXT_CAP * 3 }); // unrelated cap
+    resetPlainHookText();
+    writePlainHookText('z'.repeat(9_990), { write: () => {} });
+    expect(writePlainHookText('- #9002 no room even for a note', { write: () => {} })).toBe('');
+  });
+
+  it('idsShownWhole keeps an entry only when all of its text survived', () => {
+    const entries = rows(150).map((line, i) => ({ id: i + 1, text: line }));
+    const multi = { id: 'D7', text: 'D#7 head\n  detail one\n  detail two' };
+    const shown = capHookText([multi.text, ...entries.map((e) => e.text)].join('\n'));
+    const kept = idsShownWhole(shown, [multi, ...entries]);
+    expect(kept[0]).toBe('D7');
+    const n = shown.split('\n').filter((l) => /^- #\d+ x{90}$/.test(l)).length;
+    expect(n).toBeGreaterThan(0);
+    expect(n).toBeLessThan(150); // premise: the cap really dropped rows
+    expect(kept).toEqual(['D7', ...entries.slice(0, n).map((e) => e.id)]);
+    // a multi-line entry cut after its head is not "shown"
+    const cut = capHookText(`D#8 head\n${'  detail\n'.repeat(3000)}`);
+    expect(
+      idsShownWhole(cut, [{ id: 'D8', text: `D#8 head\n${'  detail\n'.repeat(3000)}`.trimEnd() }]),
+    ).toEqual([]);
+  });
+
+  it('previewHookContext is exactly the additionalContext the flush writes', () => {
+    queueHookContext('SessionStart', rows(80).join('\n'));
+    queueHookContext('SessionStart', rows(80).join('\n'));
+    const preview = previewHookContext();
+    let out = '';
+    flushHookStdout({ write: (s) => (out += s) });
+    expect(preview).toBe(JSON.parse(out).hookSpecificOutput.additionalContext);
+    expect(preview).toContain('not shown — hook output limit'); // premise: capped
+  });
+
+  describe('subprocess: UserPromptSubmit rows the cap dropped are not booked', () => {
+    const ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-book-'));
+    afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+
+    /** A fresh store per case: rows and markers from one case must not feed the next. */
+    function sandbox(name, extraEnv = {}) {
+      const data = join(ROOT, name, 'data');
+      const cwd = join(ROOT, name, 'proj-textcap-book');
+      for (const d of [data, cwd]) mkdirSync(d, { recursive: true });
+      const env = { ...sandboxEnv(join(ROOT, name), data), ...extraEnv };
+      const cli = (args) =>
+        spawnSync(process.execPath, [join(REPO, 'cli.mjs'), ...args], { cwd, env, encoding: 'utf8' });
+      const ups = (session, prompt) =>
+        spawnSync(process.execPath, [join(REPO, 'scripts', 'user-prompt-search.js')], {
+          cwd,
+          env,
+          encoding: 'utf8',
+          input: JSON.stringify({ session_id: session, prompt }),
+        });
+      // Distinct vocabulary per row: `save` skips a row too similar to an existing one.
+      const saveObs = (k) => {
+        // 12 tokens: long enough that the rendered title (70) and lesson (50) are both cut to
+        // their display width, which the partial-trim case below sizes its window from.
+        const uniq = (tag) => Array.from({ length: 12 }, (_, j) => `${tag}${k}x${j}`).join(' ');
+        const s = cli([
+          'save',
+          `zorbleWidget cache invalidation ${uniq('n')}`,
+          '--title',
+          `zorbleWidget cache invalidation ${uniq('t')}`,
+          '--lesson',
+          `zorbleWidget lesson ${uniq('l')}`,
+          '--type',
+          'bugfix',
+          '--importance',
+          '2',
+        ]);
+        expect(s.status, s.stderr).toBe(0);
+        const m = s.stdout.match(/Saved #(\d+)/);
+        expect(m, s.stdout).not.toBeNull();
+        return Number(m[1]);
+      };
+      const deferWithDetail = (title, detail) => {
+        const add = cli(['defer', 'add', title, '--detail', detail]);
+        expect(add.status, add.stderr).toBe(0);
+        return Number((add.stdout + add.stderr).match(/D#(\d+)/)[1]);
+      };
+      const markerIds = (session) => {
+        const dir = join(data, 'runtime');
+        const f = readdirSync(dir).find((n) => n.startsWith('.claude-mem-injected-') && n.endsWith(session));
+        return f ? JSON.parse(readFileSync(join(dir, f), 'utf8')).ids.map(String) : [];
+      };
+      const injectionCounts = (ids) => {
+        const db = new Database(join(data, 'claude-mem-lite.db'), { readonly: true });
+        try {
+          return ids.map(
+            (id) => db.prepare('SELECT injection_count c FROM observations WHERE id = ?').get(id).c,
+          );
+        } finally {
+          db.close();
+        }
+      };
+      return { ups, saveObs, deferWithDetail, markerIds, injectionCounts };
+    }
+    const shownIn = (stdout, ids) => ids.filter((id) => new RegExp(`(^|\\n)#${id} `).test(stdout));
+
+    it('a D# block that spends the budget leaves the FTS rows unbooked', () => {
+      const sb = sandbox('none');
+      const obsIds = [1, 2, 3].map(sb.saveObs);
+      const detail = rows(320)
+        .map((l) => `item ${l.slice(2)}`)
+        .join('\n');
+      const did = sb.deferWithDetail('Overflowing deferred item', detail);
+
+      const r = sb.ups('cc-book-a', `please pick up D#${did} and fix the zorbleWidget cache invalidation`);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`D#${did}`); // premise: the D# block fired
+      expect(shownIn(r.stdout, obsIds)).toEqual([]);
+      const booked = sb.markerIds('cc-book-a');
+      for (const id of obsIds)
+        expect(booked, `#${id} was dropped by the cap but booked`).not.toContain(String(id));
+      expect(booked, 'the D# item was cut short, so it is not booked either').not.toContain(`D${did}`);
+      expect(sb.injectionCounts(obsIds)).toEqual([0, 0, 0]);
+
+      // Premise for the NO above: without the D# block the same rows are shown and booked,
+      // so the marker/count reads can say yes.
+      const p = sb.ups('cc-book-b', 'fix the zorbleWidget cache invalidation');
+      expect(p.status, p.stderr).toBe(0);
+      const shownIds = shownIn(p.stdout, obsIds);
+      expect(shownIds.length).toBeGreaterThan(0);
+      expect(sb.markerIds('cc-book-b')).toEqual(expect.arrayContaining(shownIds.map(String)));
+      expect(sb.injectionCounts(shownIds).every((c) => c === 1)).toBe(true);
+    });
+
+    // The case the all-dropped one above cannot see: with nothing shown the booking block is
+    // skipped whole, so booking every candidate instead of the shown ones stays green there.
+    //
+    // Narrow by construction. The FTS block is at most five rows (~660 characters) and the cap
+    // keeps a 500-character reserve, so it is cut PART-way only when the D# block leaves
+    // between ~682 and ~701 characters of the handler's 10,000 (rows at full display width). The D# block is therefore
+    // built to an exact length, and the premises below fail loudly if the format drifts
+    // out of the window rather than letting the booking asserts pass on an uncut block.
+    it('a partly trimmed FTS block books exactly the rows it showed', () => {
+      const sb = sandbox('partial', { CLAUDE_MEM_UPS_MAX_RESULTS: '5' });
+      const obsIds = Array.from({ length: 5 }, (_, i) => sb.saveObs(i + 1));
+      const title = 'Partly overflowing deferred item';
+      const header = '[mem] Deferred work referenced in prompt (open items, full detail):';
+      const head = `D#1 🟡 [P2] ${title}`; // premise-checked: a fresh store's first D# is 1
+      const target = 10_000 - 690 - 1; // leaves 690 of the budget: inside the window
+      let left = target - header.length - 1 - head.length - 1;
+      const detailLines = [];
+      while (left > 0) {
+        const sep = detailLines.length ? 1 : 0;
+        const w = Math.min(97, left - 2 - sep);
+        detailLines.push('d'.repeat(Math.max(1, w)));
+        left -= Math.max(1, w) + 2 + sep;
+      }
+      expect([header, head, ...detailLines.map((l) => `  ${l}`)].join('\n').length).toBe(target);
+      const did = sb.deferWithDetail(title, detailLines.join('\n'));
+      expect(did).toBe(1);
+
+      const r = sb.ups('cc-book-p', `please pick up D#${did} and fix the zorbleWidget cache invalidation`);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain('not shown — hook output limit'); // premise: the cap fired
+      const shown = shownIn(r.stdout, obsIds);
+      expect(shown.length, `premise: some rows shown\n${r.stdout.slice(-900)}`).toBeGreaterThan(0);
+      expect(shown.length, 'premise: some rows cut').toBeLessThan(obsIds.length);
+      const cut = obsIds.filter((id) => !shown.includes(id));
+
+      const booked = sb.markerIds('cc-book-p');
+      for (const id of shown) expect(booked).toContain(String(id));
+      for (const id of cut) expect(booked, `#${id} was cut but booked`).not.toContain(String(id));
+      expect(sb.injectionCounts(shown).every((c) => c === 1)).toBe(true);
+      expect(sb.injectionCounts(cut).every((c) => c === 0)).toBe(true);
+    });
+  });
+
+  describe('PreCompact: Key Context rows cut by the cap are not booked', () => {
+    const ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-keyctx-'));
+    afterAll(() => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      rmSync(ROOT, { recursive: true, force: true });
+    });
+
+    it('a Last Session line that fills the budget leaves the Key Context ids out of the marker', () => {
+      vi.stubEnv('CLAUDE_PROJECT_DIR', ROOT); // unadopted → Key Context renders
+      vi.stubEnv('CLAUDE_MEM_QUIET_HOOKS', '');
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const db = new Database(':memory:');
+      initSchema(db);
+      const P = 'p-keyctx-cap';
+      const now = Date.now();
+      for (const s of ['s0', 's1']) {
+        db.prepare(
+          `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+           VALUES (?, ?, ?, ?, ?, 'active')`,
+        ).run(s, s, P, new Date(now).toISOString(), now);
+      }
+      const ins = db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, lesson_learned, importance, created_at, created_at_epoch)
+         VALUES ('s1', ?, 't', 'decision', ?, 'keep it', 2, ?, ?)`,
+      );
+      const ids = [1, 2, 3].map((k) =>
+        Number(ins.run(P, `Key row ${k}`, new Date(now).toISOString(), now + k).lastInsertRowid),
+      );
+      const summary = (lessons) =>
+        db
+          .prepare(
+            `INSERT INTO session_summaries (memory_session_id, project, request, lessons, created_at, created_at_epoch)
+             VALUES ('s0', ?, 'req', ?, ?, ?)`,
+          )
+          .run(P, JSON.stringify(lessons), new Date(now).toISOString(), now);
+
+      // premise: with a normal summary the rows render and are booked
+      summary(['short']);
+      handlePreCompact({ db, project: P, sessionId: 'sk', runtimeDir: ROOT });
+      const file = join(ROOT, keyContextIdsFileName(P, 'sk'));
+      expect(JSON.parse(readFileSync(file, 'utf8')).ids.sort()).toEqual([...ids].sort());
+
+      db.prepare('DELETE FROM session_summaries').run();
+      summary(['l'.repeat(4_000), 'm'.repeat(4_000), 'n'.repeat(4_000)]);
+      handlePreCompact({ db, project: P, sessionId: 'sk', runtimeDir: ROOT });
+      expect(JSON.parse(readFileSync(file, 'utf8')).ids).toEqual([]);
+      db.close();
+    });
   });
 });
 

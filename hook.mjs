@@ -98,8 +98,13 @@ import {
 } from './lib/fast-summary.mjs';
 import { formatHookError } from './lib/native-binding-hint.mjs';
 import { recordHookError } from './lib/hook-telemetry.mjs';
-import { queueHookContext, queueHookSystemMessage, flushHookStdout } from './lib/hook-stdout.mjs';
-import { writePlainHookText, resetPlainHookText } from './lib/hook-text-cap.mjs';
+import {
+  queueHookContext,
+  queueHookSystemMessage,
+  flushHookStdout,
+  previewHookContext,
+} from './lib/hook-stdout.mjs';
+import { writePlainHookText, resetPlainHookText, idsShownWhole } from './lib/hook-text-cap.mjs';
 import { shouldRecallOnFailure } from './lib/tool-refusal.mjs';
 import {
   entryInputTags,
@@ -2861,7 +2866,9 @@ async function handleSessionStart() {
       runtimeDir: RUNTIME_DIR,
       project,
       sessionId: ccSessionId,
-      ids: contextCollector.keyContextIds || [],
+      // Only the rows the cap keeps: flushHookStdout caps additionalContext at the
+      // dispatcher's exit, and nothing is queued for the model after this point (D#108).
+      ids: idsShownWhole(previewHookContext(), contextCollector.keyContextLines),
     });
 
     // One-time migration: remove any stale <claude-mem-context> block left in

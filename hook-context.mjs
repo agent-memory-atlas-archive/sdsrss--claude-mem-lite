@@ -580,7 +580,12 @@ export function buildSessionContextLines(
   currentCcSessionId = null,
   collector = null,
 ) {
-  if (collector) collector.keyContextIds = [];
+  if (collector) {
+    collector.keyContextIds = [];
+    // The same rows as {id, text: rendered line}, so a caller can book only the ones the
+    // hook-output cap keeps (D#108; lib/hook-text-cap.mjs idsShownWhole).
+    collector.keyContextLines = [];
+  }
   // 1. Token-budgeted observation selection
   const selected = selectWithTokenBudget(db, project, 2000);
   const observations = selected.observations;
@@ -711,14 +716,20 @@ export function buildSessionContextLines(
       summaryLines.push('### File Lessons');
       summaryLines.push(...shown.map((e) => e.line));
       summaryLines.push('');
-      if (collector) collector.keyContextIds.push(...shown.map((e) => e.id));
+      if (collector) {
+        collector.keyContextIds.push(...shown.map((e) => e.id));
+        collector.keyContextLines.push(...shown.map((e) => ({ id: e.id, text: e.line })));
+      }
     }
     if (keyContext.length > 0 && !quiet) {
       const shown = keyContext.slice(0, keyContextQuota);
       summaryLines.push('### Key Context');
       summaryLines.push(...shown.map((e) => e.line));
       summaryLines.push('');
-      if (collector) collector.keyContextIds.push(...shown.map((e) => e.id));
+      if (collector) {
+        collector.keyContextIds.push(...shown.map((e) => e.id));
+        collector.keyContextLines.push(...shown.map((e) => ({ id: e.id, text: e.line })));
+      }
     }
   } else if (!latestSummary && !effectiveQuiet()) {
     // Fallback: no summary AND no key observations — show recent activity.

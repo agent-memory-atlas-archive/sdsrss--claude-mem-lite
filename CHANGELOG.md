@@ -2,6 +2,39 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.18.0 — Last Session says how the previous session ended, without a report
+
+**Upgrade note.** No schema change and no migration. One default behaviour changes, and it
+has a switch. Pinning `claude-mem-lite@6.17.1` stops new lines; a line already written stays
+until that session's next observation titles replace it, and 6.17.1 keeps its unrecognised
+tag as text in the row's `notes`.
+
+| Change | Switch |
+|---|---|
+| When a session's final reply has no Done / Not done / Failed / Uncertain section, SessionStart's Last Session shows the first 120 characters of that reply as `Completed:` (and the /clear handoff shows it as `<session-summary source="last-reply">`), where it used to show observation titles, which are usually empty | `CLAUDE_MEM_SUMMARY_TAIL=0` (from a session's next turn) |
+
+**Who sees a difference:** anyone whose assistant does not end its turns with such a
+report — that is the default. A turn whose reply carries a report is handled as before.
+
+- **Last Session's Completed falls back to the head of the final reply.** Stop records a
+  summary row every turn. When the reply carried no report, the row's Completed came from
+  observation titles, which are usually empty (the model summary worker, which could fill it,
+  needs observations and exits without them), so the next session saw only the opening
+  prompt. In 30 headless sessions run without any reporting convention, Stop found a report
+  in none. The first 120 characters of the final reply were blind-labelled as correct in all
+  30 (informative in 22, vague in 8); the last 120 characters were uninformative in 29 of 30
+  (offers, questions, trailing detail) and are not used. A report still wins, then the model summary, then this line, then titles. A later
+  reply shorter than 400 characters as written (such as "You're welcome!") does not replace
+  an earlier one: closing replies ran 15–187 characters against 801 or more for task replies,
+  in 12 more sessions in English and Chinese. Only code blocks, line-leading markdown markers
+  and extra whitespace are removed; everything else, `__init__.py` and `*.mjs` included, is
+  kept as written. The line comes from the first 8000 characters left after that; if the secret
+  scrubber finds anything there — with lines kept or joined, as written or with backticks,
+  pipes and asterisks removed, which is how markup can hide a key — or a PEM header appears
+  there, no line is written that turn; the 120-character cut is checked the same way. What
+  is stored is scrubbed again and defanged when shown. Method and numbers:
+  `docs/audits/20260927-d114-default-user-corpus.md`.
+
 ## v6.17.1 — fixes from the v6.17.0 pre-tag review
 
 **Upgrade note.** Fixes only; no schema change, no migration, no new setting. Reverting is

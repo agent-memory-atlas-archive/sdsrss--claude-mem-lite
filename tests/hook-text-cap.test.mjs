@@ -70,6 +70,18 @@ describe('capHookText', () => {
     expect(footer).toBe('[claude-mem-lite] a line was cut short — hook output limit (ids: #4242)');
   });
 
+  it('a cut never lands inside an id: it backs off to the word boundary (delta review P3-A)', () => {
+    for (let pad = 0; pad < 12; pad++) {
+      const text = `${'w'.repeat(pad)} ${'word '.repeat(38)}E#34567 tail ${'z '.repeat(300)}`;
+      const [head, footer] = capHookText(text, 700).split('\n');
+      const shown = head.slice(0, -1); // drop the ellipsis
+      expect(text.startsWith(shown)).toBe(true);
+      // the cut sits at a token boundary: what follows it in the original is whitespace
+      expect(/^\s/.test(text.slice(shown.length)) || /\s$/.test(shown)).toBe(true);
+      if (!shown.includes('E#34567')) expect(footer).toContain('E#34567');
+    }
+  });
+
   it('never leaves half of a surrogate pair at the cut (review P3-1)', () => {
     for (let pad = 0; pad < 4; pad++) {
       const out = capHookText(`${'x'.repeat(pad)}${'🔴'.repeat(400)}`, 700);

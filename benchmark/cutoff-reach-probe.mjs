@@ -15,20 +15,22 @@
 //   • observations: file-edged (observation_files), importance >= 2, liveObsFilterSql, and
 //     created_at_epoch <= cutoff. Each (obs, file) EDGE is one row, because recall fires per
 //     file. Split by the edge's own record (lib/edge-attribution.mjs): `cited` (a hit stamps
-//     last_cited_session_id — the model cited it after a file injection: IN USE), `missed`
+//     last_cited_session_id, which is never cleared — so EVER cited; `citedThenMissed` counts
+//     those passed over since, miss_streak > 0), `missed`
 //     (injected and resolved, never cited), and `neverInjected` (inject_count = 0 — nothing is
-//     known about its use). Only `cited` is what the cut would evict while in use; a first
+//     known about its use). `cited` is the closest this data gets to "in use"; a first
 //     draft also counted `miss_streak = 0`, which without a cite means never resolved at all.
 //   • events: importance >= 2, not superseded, carrying file_paths, created_at_epoch <= cutoff.
 //     Events keep no per-file use record, so they are counted, not split.
 //
 // PREMISE the proposal got wrong, stated so nobody re-derives it: "expiry is miss_streak's
-// job" holds only with CLAUDE_MEM_EDGE_DECAY on. It is OFF by default, so on a stock install
-// the 60-day cut is the only AGE-based retirement a file lesson has. Rows also leave recall's
-// pool by being superseded or compressed, or by dropping below importance 2 (the `decay`
-// maintain op lowers never-injected, never-accessed old rows) — none of which retires a
-// lesson that is still being injected. Removing the cut is not
-// covered by decay unless decay ships on too.
+// job" holds only with CLAUDE_MEM_EDGE_DECAY on, which is OFF by default. What does retire
+// file lessons on a stock install, besides this cut: supersede, compress, and the daily
+// `decay` maintain op, which lowers importance by one on rows older than 30 days whose
+// injection_count AND access_count are both 0 (lib/maintain-core.mjs). PreToolUse recall
+// updates neither counter, so an importance-2 observation that only file recall shows — never
+// cited, searched or injected at prompt time — drops out of this pool at 30 days, before the
+// cut. The cut is what reaches the rest: importance-3 rows and rows another face touched.
 //
 // Read-only: the database is opened { readonly: true } and nothing else is written.
 //
@@ -51,7 +53,7 @@ export function probeCutoffReach(db, { now = Date.now(), project = null } = {}) 
   const projArgs = project ? [project] : [];
   const edges = db
     .prepare(
-      `SELECT o.id, o.project, of2.filename, of2.inject_count, of2.last_cited_session_id, o.created_at_epoch
+      `SELECT o.id, o.project, of2.filename, of2.inject_count, of2.miss_streak, of2.last_cited_session_id, o.created_at_epoch
        FROM observations o JOIN observation_files of2 ON of2.obs_id = o.id
        WHERE o.importance >= 2 AND ${liveObsFilterSql('o')} AND o.created_at_epoch <= ? ${projClause}
        ORDER BY o.created_at_epoch ASC, o.id ASC`,
@@ -107,9 +109,10 @@ export function probeCutoffReach(db, { now = Date.now(), project = null } = {}) 
     obsEdges: {
       total: edges.length,
       cited: cited.length,
+      citedThenMissed: cited.filter((e) => e.miss_streak > 0).length,
       missed,
       neverInjected: neverInjected.length,
-      // The NAME SET is the evidence (doctrine rule 4) — the edges the cut removes while in use.
+      // The NAME SET is the evidence (doctrine rule 4) — the ever-cited edges the cut removes.
       inUse: cited.map((e) => ({ id: e.id, project: e.project, file: e.filename })),
     },
     events: { total: events.length, ids: events.map((e) => e.id) },
@@ -145,7 +148,7 @@ function main() {
   console.log(`PreToolUse ${r.lookbackDays}-day cut at ${r.now} (removes rows created <= ${r.cutoff})`);
   console.log(`first bites: ${r.firstBites ?? 'never (no file-carrying live row)'}`);
   console.log(
-    `observation edges removed: ${o.total}  ·  in use (cited) ${o.cited}  ·  missed only ${o.missed}  ·  never injected ${o.neverInjected}`,
+    `observation edges removed: ${o.total}  ·  ever cited ${o.cited} (missed since ${o.citedThenMissed})  ·  missed only ${o.missed}  ·  never injected ${o.neverInjected}`,
   );
   console.log(`events removed: ${r.events.total}`);
   if (o.inUse.length) console.table(o.inUse);

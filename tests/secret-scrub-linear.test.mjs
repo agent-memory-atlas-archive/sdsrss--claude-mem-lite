@@ -35,6 +35,9 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     jwtDashRun: 'eyJ-'.repeat(N / 4),
     // Every BEGIN with no END scanned to the end of the text, on each of the 32 passes.
     pemHeadersNoEnd: CHAIN + ' ' + '-----BEGIN RSA PRIVATE KEY-----\n'.repeat(N / 32),
+    // Linear but slow: D#128's code-label branch ran a 40-char lookbehind at every position
+    // until a lookahead gated it (500k chars: 407 ms → 3,387 ms → 428 ms).
+    chainedWordRun: CHAIN + " '" + 'secret'.repeat(N / 6),
   };
   for (const [name, text] of Object.entries(shapes)) {
     it(`${name}: 200k chars in well under a second`, () => {

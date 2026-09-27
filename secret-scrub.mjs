@@ -28,9 +28,41 @@ export const SECRET_PATTERNS = [
   // keyword. Allowing a leading `_` catches those while the prose lookbehind still
   // excludes "Marker token: …". `secret` added so a bare SECRET=… with a mixed-alnum
   // value is covered (the hex-only assignment pattern below misses non-hex values).
+  //
+  // MARKDOWN AROUND A LABEL (D#128). `- **Password**: \`<v>\`` put `**` between the noun and
+  // its separator, so no label pattern matched and the value was stored. Models write labels
+  // that way all the time. So a label may carry up to three markup characters after the noun
+  // (`[*_~\`]`), and up to two of `*_~` between the separator and the value
+  // (`**Password:** <v>`). Three rules keep this from widening what counts as a value:
+  //   - no backtick after the separator: `` `password:` <next word> `` names the label and
+  //     then goes on in prose, and the next word (or a CJK run with no spaces) was scrubbed;
+  //   - at most two characters there, so the scrubber's own `***` is never taken for markup
+  //     (`password=*** token=abc` would scrub `token=abc` on the second pass);
+  //   - the prose check looks through emphasis (`the **password**: …` is prose) but not a
+  //     backtick, since `` word `token: <v>` `` is code, not prose. A label wrapped in code
+  //     (`` `GH_TOKEN`: <v> ``) has its own branch, whose prose check looks past the opening
+  //     backtick. That branch starts with a cheap lookahead: without it the 40-char lookbehind
+  //     ran at every position, and a 500k-char input went from 407 ms to 3,387 ms.
+  // Measured 2026-09-27 over 831,328 unique lines (this repo's tracked text plus local
+  // transcripts: prompts, replies, tool output), old and new run back to back: 28 lines
+  // differ. All the catches are fixtures quoted from the D#128 audit; the rest are
+  // `- **token**:assistant …` and `` `PGPASSWORD`=PG+password ``, which the same text with
+  // no markup scrubs too, plus a JSON-escaped `\n` taken as a value. Idempotence failures: 0
+  // and 0. A 13,770-case ground-truth fuzz (labels × 8 wrappings × separators × values ×
+  // positions): leaks 12,580 → 421, none newly opened. All 421 are `<word> token|secret|bearer:`
+  // in prose, left open by design (below).
+  //
+  // ACCEPTED GAPS (D#131). This scrubber stops ACCIDENTAL persistence; an author who wants a
+  // secret stored can always encode it. So shapes only an adversary writes stay open:
+  // zero-width characters inside a label, fullwidth letters. Shapes that occur naturally but
+  // cannot be told from prose stay open too: `password is <v>` and `<word> token: <v>` (the
+  // guard below). A pattern that caught them would also rewrite ordinary sentences, and
+  // v3.61.0 already had to undo exactly that. `| password | <v> |` table rows stay open for a
+  // different reason: those 831k lines held 1 such row and none with a credential-shaped
+  // value, so a table pattern's false-positive rate cannot be measured here.
   //   1a. `=` assignment → ALWAYS scrub (config syntax, never prose):
   [
-    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)\s*=\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
     '$1***',
   ],
   //   1b. `:` separator, PASSWORD nouns. Position decides how permissive the value
@@ -71,16 +103,16 @@ export const SECRET_PATTERNS = [
   //       Both arms emit `***` (3 chars, under the {6,} floor), so they cannot
   //       double-apply.
   [
-    /((?<![A-Za-z][ \t])(?:\b|_)(?:password|passwd|passphrase)\s*:\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:password|passwd|passphrase)(?:[*_~]{1,3})?|(?=_?(?:password|passwd|passphrase)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:password|passwd|passphrase)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
     '$1***',
   ],
   [
-    /((?:\b|_)(?:password|passwd|passphrase)\s*:\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?![A-Za-z]{1,15}(?=[\s,;'"}\]]|$))[^\s,;'"}\]]{6,}/gi,
+    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)(?![A-Za-z]{1,15}(?=[`*~]*(?:[\s,;'"}\]]|$)))[^\s,;'"}\]]{6,}/gi,
     '$1***',
   ],
   //   1c. `:` separator, prose-ambiguous nouns → keep the lookbehind ("the token: alicebob"):
   [
-    /((?<![A-Za-z][ \t])(?:\b|_)(?:token|bearer|secret)\s*:\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
     '$1***',
   ],
   // access_token / refresh_token are the canonical OAuth2 field names — they were
@@ -95,7 +127,7 @@ export const SECRET_PATTERNS = [
   // low-FP decision that `topsecret=` / `access_token_count:` are non-credentials
   // (#8283 + utils.test.mjs:1089-1100); bare `pwd` is omitted so `PWD=` (a path) survives.
   [
-    /((?:\b|_)(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)\s*[=:]\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
+    /((?:\b|_)(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|pgpassword|pgpass|mysql_pwd)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(?!process\.env\.)(?!new\s)(?!\w+\()(?!(?:null|undefined|true|false|None|nil|empty|""|''|0)\b)[^\s,;'"}\]]{6,}/gi,
     '$1***',
   ],
   // Space-separated credential CLI flag: `--password <value>` (long-form). The KV
@@ -118,19 +150,28 @@ export const SECRET_PATTERNS = [
   //   (a) bare credential nouns: `=` always scrubs; `:` keeps the prose lookbehind
   //       (mirrors the unquoted 1a/1b split — a quoted value doesn't turn `:` prose
   //       into config, but `<word> password="x"` is still a leak):
-  [/((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)\s*=\s*)(['"])[^'"]{6,}\2/gi, '$1$2***$2'],
-  [/((?:\b|_)(?:password|passwd|passphrase)\s*:\s*)(['"])[^'"]{6,}\2/gi, '$1$2***$2'],
-  [/((?<![A-Za-z][ \t])(?:\b|_)(?:token|bearer|secret)\s*:\s*)(['"])[^'"]{6,}\2/gi, '$1$2***$2'],
+  [
+    /((?:\b|_)(?:password|passwd|passphrase|token|bearer|secret)(?:[*_~`]{1,3})?\s*=(?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
+    '$1$2***$2',
+  ],
+  [
+    /((?:\b|_)(?:password|passwd|passphrase)(?:[*_~`]{1,3})?\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
+    '$1$2***$2',
+  ],
+  [
+    /((?:(?<![A-Za-z][ \t][*_~]{0,3})(?:\b|_)(?:token|bearer|secret)(?:[*_~]{1,3})?|(?=_?(?:token|bearer|secret)`)(?<![A-Za-z][ \t]`[\w-]{0,40})(?<=`[\w-]{0,40})(?:\b|_)(?:token|bearer|secret)`)\s*[:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
+    '$1$2***$2',
+  ],
   //   (b) structured keys + named env vars are unambiguous config even after a word
   //       (`see api_key: "x"` DOES scrub, mirroring the unquoted structured-key path):
   [
-    /((?:\b|_)(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)\s*[=:]\s*)(['"])[^'"]{6,}\2/gi,
+    /((?:\b|_)(?:pgpassword|pgpass|mysql_pwd|api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token)(?:[*_~`]{1,3})?\s*[=:：](?:[*_~]{1,2}(?=\s))?\s*)(['"])[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   // AWS access keys: AKIA (long-term) + ASIA (STS temp) + AROA (role) + AIDA
   // (user) + ANPA/ANVA/AGPA (other principal types). All share the 4-letter
   // prefix + exactly 16 base32 chars shape — specific enough for near-zero FP.
-  [/\b(?:AKIA|ASIA|AROA|AIDA|ANPA|ANVA|AGPA)[A-Z0-9]{16}\b/g, '***'],
+  [/\b(?:AKIA|ASIA|AROA|AIDA|ANPA|ANVA|AGPA)[A-Z0-9]{16}(?![A-Za-z0-9])/g, '***'],
   // OpenAI / Anthropic keys (sk-...) — specific prefixes have lower length threshold
   [/\bsk-(?:proj|ant|ant-api\d{2})-[a-zA-Z0-9_-]{8,}\b/g, '***'],
   [/\bsk-[a-zA-Z0-9_-]{20,}\b/g, '***'],
@@ -166,7 +207,10 @@ export const SECRET_PATTERNS = [
   [/\bAIza[A-Za-z0-9_-]{35}\b/g, '***'],
   // Authorization header credentials — Bearer (opaque), Basic (base64 user:pass),
   // and GitHub's `token` scheme all carry secrets after the scheme word.
-  [/(Authorization:\s*(?:Bearer|Basic|token)\s+)[^\s,;'"}\]]+/gi, '$1***'],
+  [
+    /(Authorization(?:[*_~`]{1,3})?[:：](?:[*_~]{1,2}(?=\s))?\s*(?:Bearer|Basic|token)\s+)[^\s,;'"}\]]+/gi,
+    '$1***',
+  ],
   // R10 P1-6: the same header as a QUOTED KEY — `{"Authorization":"Bearer …"}`. The
   // pattern above needs `Authorization:` literally, and in JSON a quote sits between the
   // name and the colon, so a `curl -v` / fetch header dump walked straight through. The
@@ -200,10 +244,10 @@ export const SECRET_PATTERNS = [
     '$1$2://***',
   ],
   // npm tokens (npm_...)
-  [/\bnpm_[a-zA-Z0-9]{36,}\b/g, '***'],
+  [/\bnpm_[a-zA-Z0-9]{36,}(?![A-Za-z0-9])/g, '***'],
   // Stripe keys (sk_live_, rk_live_, pk_live_, sk_test_, pk_test_) + webhook signing secret (whsec_)
-  [/\b[srp]k_(?:live|test)_[a-zA-Z0-9]{20,}\b/g, '***'],
-  [/\bwhsec_[a-zA-Z0-9]{20,}\b/g, '***'],
+  [/\b[srp]k_(?:live|test)_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
+  [/\bwhsec_[a-zA-Z0-9]{20,}(?![A-Za-z0-9])/g, '***'],
   // SendGrid API keys: SG.<22>.<43> — two dots at fixed offsets make this
   // structurally unmistakable; near-zero false-positive risk.
   [/\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/g, '***'],
@@ -250,7 +294,7 @@ export const SECRET_PATTERNS = [
   // `'token_count': 123456`); `passphrase` added here too (double-quoted JSON passphrase is
   // subsumed by this pattern since `['"]` matches `"`). Over-scrub is the safe direction.
   [
-    /(['"]\w{0,64}(?:password|passwd|passphrase|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}['"]\s*:\s*)(['"])[^'"]{6,}\2/gi,
+    /(['"](?:\w{0,64}(?:password|passwd|passphrase|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}|\w{1,64}_token)['"]\s*:\s*)(['"])[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   // Session cookies in headers / urlencoded bodies (sessionid=, session_id=, JSESSIONID=, PHPSESSID=).

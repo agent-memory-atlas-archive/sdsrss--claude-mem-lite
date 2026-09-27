@@ -651,8 +651,9 @@ describe('the final reply as a Done floor (D#121)', () => {
       'Use `' + key.slice(0, 20) + '`' + key.slice(20) + ' for the call.',
       'Use ' + key.slice(0, 20) + '**' + key.slice(20) + '** for the call.',
       `${'word '.repeat(22)}${'gh' + 'p_' + 'C'.repeat(36)} straddles the cut`,
-      // Invisible to the scrubber as written, caught once the markup is gone:
+      // A markup-wrapped label: invisible to the scrubber as written until D#128.
       'Set **password**=hunter2Zq9 and restart.',
+      // Invisible to the scrubber as written, caught once the markup is gone:
       'Use `' + key.slice(0, 8) + '`' + key.slice(8) + ' now.',
       'Use ' + key.slice(0, 8) + '*' + key.slice(8) + ' now.',
       'Use gh|' + ('gh' + 'p_' + 'C'.repeat(36)).slice(2) + ' now.',

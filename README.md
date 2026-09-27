@@ -237,6 +237,21 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.15.0
+
+**Two defaults change; one has an off switch.** No schema change and no migration, so
+reverting everything is pinning `claude-mem-lite@6.14.0`.
+
+- **An auto-captured lesson that repeats text a tool printed is kept out of automatic
+  injection.** Whoever controls a command's output (a repository's test, a fetched page, an
+  MCP server) could otherwise get a sentence of their choosing stored as a lesson that later
+  sessions are shown. Such an event stays searchable at importance 1; a `change` observation
+  loses the lesson. Four shared words are enough, filler included, so an occasional lesson
+  of your own is demoted too. Off: `CLAUDE_MEM_LESSON_OUTPUT_CAP=off`.
+- **Last Session reads your own Done / Not done report when it uses markdown headings**
+  (`## Done`, `**Not done**`) instead of falling back to the model's summary. No switch; pin
+  6.14.0 to revert.
+
 ## Upgrading to 6.14.0
 
 **Five defaults change; three have an off switch.** No schema change and no migration: an

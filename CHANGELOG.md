@@ -2,6 +2,52 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.15.0 — a lesson copied from tool output no longer reaches your context, and your own reports win Last Session
+
+**Upgrade note.** No schema change and no migration. Two default behaviours change; one has an
+off switch, and reverting everything is pinning `claude-mem-lite@6.14.0`:
+
+| Change | Off switch |
+|---|---|
+| An auto-captured lesson that repeats text a command PRINTED is kept out of automatic injection (an event stays searchable at importance 1; a `change` observation loses the lesson) | `CLAUDE_MEM_LESSON_OUTPUT_CAP=off` |
+| Last Session and the `/clear` handoff read the assistant's own Done / Not done report when its headings are markdown (`## Done`, `**Not done**`), instead of falling back to the model's summary | — (pin 6.14.0) |
+
+- **Security: text a command prints can no longer ride an auto-lesson into later sessions.**
+  6.14.0 started showing the episode summarizer up to 12 verbatim failing-output lines and
+  asking its lesson to quote one. Whoever controls what a command prints — a repository's
+  test, a fetched page, a third-party tool — could therefore get a sentence of their choosing
+  stored as a lesson at the importance every injection face reads. Reproduced with the real
+  model on a sandbox database: 3 of 6 hostile windows stored the directive verbatim at
+  importance 2. Lessons are now checked by where their words came from: sharing any four
+  consecutive words with tool output (a failing line, or the response snippet of a Bash,
+  Grep, MCP or other tool call shown in an action line) keeps an event at importance 1 and
+  drops a `change` observation's lesson (the lesson-less row is then dropped as low-yield),
+  because an observation's importance can be raised later by reads. After the change, 12
+  hostile windows: 0 stored at importance 2 or above. Trade-off: four shared words of filler
+  count too, so a lesson resting on your own comment or commit message can be demoted when
+  it happens to share such a run with output in the same window. Not covered: the title and
+  narrative of the same row, and a lesson that paraphrases the hostile line.
+- **Last Session shows what you reported, not what the model guessed.** The Stop-time parser
+  that reads the turn's final Done / Not done / Failed / Uncertain report only knew `Done:`
+  with a colon; most reports use markdown headings, so the model's summary filled Last Session
+  instead, and it can be wrong (one told the next session the work left was the opposite of
+  what the session's own report listed). Over 1,848 turn-final messages on the maintainer's
+  machine, reports read went from 109 to 465; sessions in the last 7 days with a readable
+  report, 39 to 86 of 106. Headers with a parenthetical (`**Not done**（未开始）：…`), a
+  combined header, `**Failed.** none`, `* Done:` bullets and a short closing question are
+  handled; header parsing is linear in line length (a 1M-character line: under 30 ms).
+- **Bash file capture: a loop is a write only when its body writes.** A read-only loop that
+  reused a written loop variable's name was recorded as writing its list; the body is now
+  checked, including writes through a helper, comprehensions and suites with comments.
+  Replayed over 10,514 real commands against 6.14.0: one command changed, and its dropped
+  "writes" were quoted test-fixture text.
+
+Also measured and decided (details in `docs/measurement/findings.md`): a tree-sitter shell
+parser for the hook path was rejected (≈ 26 ms per node process against a 3.2–8.6 ms cold
+current parser, 2.23 MB of grammars, and the bash prefilter cannot use it); moving the model
+session summary to SessionEnd or a debounce was not done — its coverage (9 of 157 sessions)
+is limited by its input, not its timing.
+
 ## v6.14.0 — memory now sees work done through Bash, and stops injecting what the model cannot use
 
 **Upgrade note.** No schema change and no migration. Five default behaviours change; three

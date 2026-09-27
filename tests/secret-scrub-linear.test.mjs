@@ -7,7 +7,7 @@
 //   - the JWT pattern: every `-eyJ` inside one dotless run is a new start that scans to the
 //     run's end.
 // The v6.18.0 security re-check drove the first two through a report Done to 27,970 ms.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import { scrubSecrets } from '../secret-scrub.mjs';
@@ -39,10 +39,20 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // until a lookahead gated it (500k chars: 407 ms → 3,387 ms → 428 ms).
     chainedWordRun: CHAIN + " '" + 'secret'.repeat(N / 6),
   };
+  // Timed against benign prose of the same length and pass count, not a wall-clock bound: a
+  // 500 ms bound held locally (335 ms) and failed on CI under coverage (555 ms). Measured
+  // 2026-09-27, crafted / benign: fixed patterns <= 3.4x; the pre-D#130 patterns >= 31.7x
+  // (chainedWordRun 1689x). The pre-lookahead code-label branch was ~8x slower than now.
+  const benign =
+    CHAIN + ' ' + 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 43)).slice(0, N);
+  let benignMs;
+  beforeAll(() => {
+    scrubSecrets(benign);
+    benignMs = Math.max(5, Math.min(...[0, 1, 2].map(() => ms(() => scrubSecrets(benign)))));
+  });
   for (const [name, text] of Object.entries(shapes)) {
-    it(`${name}: 200k chars in well under a second`, () => {
-      // Broken patterns took 2-10 s here; the fixed ones take a few ms.
-      expect(ms(() => scrubSecrets(text))).toBeLessThan(500);
+    it(`${name}: 200k chars within 10x of benign text of the same length`, () => {
+      expect(ms(() => scrubSecrets(text)) / benignMs).toBeLessThan(10);
     });
   }
 

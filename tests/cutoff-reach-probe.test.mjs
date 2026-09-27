@@ -37,6 +37,10 @@ describe('probeCutoffReach', () => {
       epochOffset: NOW - Date.now() - ageDays * DAY_MS,
     });
     const id = Number(lastInsertRowid);
+    // Pin the timestamp exactly: insertObs adds its OWN Date.now() to epochOffset, so the row
+    // lands a millisecond or two after NOW - ageDays whenever the clock ticks between the two
+    // calls (CI, Node 26: '…00.001Z' vs '…00.000Z' on the firstBites assertion).
+    db.prepare('UPDATE observations SET created_at_epoch = ? WHERE id = ?').run(NOW - ageDays * DAY_MS, id);
     for (const f of files) {
       db.prepare(
         'INSERT INTO observation_files (obs_id, filename, inject_count, miss_streak, last_cited_session_id) VALUES (?, ?, ?, ?, ?)',

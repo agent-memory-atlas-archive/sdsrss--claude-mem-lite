@@ -1,11 +1,12 @@
 // D#130 — scrubSecrets must stay linear on crafted input. Every stored field goes through it
-// on a synchronous hook path, and Stop's timeout is 5 s. Three patterns were super-linear
-// (growth per doubling of the input, 2026-09-27: JSON vendor key 3.8x, quoted key 4.0x, JWT
-// 3.4x; every other pattern ~2x):
+// on a synchronous hook path, and Stop's timeout is 5 s. Four patterns were super-linear
+// (growth per doubling of the input, 40k -> 80k chars on the pre-fix code, 2026-09-27: 3.9-4.0x
+// each; every other pattern ~2x):
 //   - `"\w*(?:password|…)\w*"` and `['"]\w*(?:…)\w*['"]`: from ONE quote, `\w*` runs to the end
 //     of a word run, then backtracks through every keyword position, each rescanning the run;
 //   - the JWT pattern: every `-eyJ` inside one dotless run is a new start that scans to the
-//     run's end.
+//     run's end;
+//   - the PEM pattern: every BEGIN with no END scanned to the end of the text.
 // The v6.18.0 security re-check drove the first two through a report Done to 27,970 ms.
 import { describe, it, expect, beforeAll } from 'vitest';
 import Database from 'better-sqlite3';
@@ -41,12 +42,15 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // until a lookahead gated it (500k chars: 407 ms → 3,387 ms → 428 ms).
     chainedWordRun: CHAIN + " '" + 'secret'.repeat(N / 6),
   };
-  // Timed against benign prose of the same length and pass count, not a wall-clock bound: a
-  // 500 ms bound held locally (335 ms) and failed on CI under coverage (555 ms). Measured
-  // 2026-09-27, crafted / benign: fixed patterns <= 3.4x; the pre-D#130 patterns >= 31.7x
-  // (chainedWordRun 1689x). The pre-lookahead code-label branch was ~8x slower than now.
+  // Timed against benign prose of the same length, not a wall-clock bound: a 500 ms bound
+  // passed locally (335 ms) and failed on CI under coverage (555 ms). The benign text runs
+  // scrubSecrets' 32 passes (the CHAIN prefix), as do pemHeadersNoEnd and chainedWordRun; the
+  // other shapes run one, so their budget is ~32x looser than a same-pass comparison, which
+  // still separates them (pre-D#130: 55-227x). Measured 2026-09-27 on two machines, crafted /
+  // benign: fixed patterns 2.2-3.4x; pre-D#130 pemHeadersNoEnd 20.7-31.7x, chainedWordRun
+  // 1,100-1,700x; with the code-label lookaheads removed, chainedWordRun 15.7-16.2x.
   const benign =
-    CHAIN + ' ' + 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 43)).slice(0, N);
+    CHAIN + ' ' + 'the quick brown fox jumps over a lazy dog '.repeat(Math.ceil(N / 42)).slice(0, N);
   let benignMs;
   beforeAll(() => {
     scrubSecrets(benign);

@@ -335,8 +335,8 @@ describe('search-core', () => {
     });
 
     // #36: FTS5 replaces an idf <= 0 with 1e-6, so a lone row whose term is in at least half
-    // of its table scores ~1e-6 whatever the match. Two such rows were already pinned to -1 by
-    // within-source normalization; a single one was banded -0.25 and sank below every event.
+    // of its table scores ~1e-6 whatever the match. Of two such rows the better was already
+    // normalized to -1 within its source; a single one was banded -0.25 and sank below every event.
     it('scores a lone row at the clamped-IDF scale like a multi-row best, not as grazing (#36)', () => {
       const lone = [
         { source: 'event', score: -0.8 },

@@ -23,6 +23,7 @@ import {
   TAIL_MIN_REPLACE,
 } from '../lib/fast-summary.mjs';
 import { insertSession } from './test-helpers.mjs';
+import { scrubRecord } from '../lib/scrub-record.mjs';
 
 let db;
 const NOW = new Date('2026-08-22T04:00:00.000Z');
@@ -695,6 +696,37 @@ describe('the final reply as a Done floor (D#121)', () => {
       stop(`s-q${i}`, { tail: text }, '');
       expect(performance.now() - t0, `shape ${i} took too long`).toBeLessThan(1000);
     });
+  });
+
+  // Narrow re-check after the security fix (v6.18.0): three hardening cases.
+  it('the lines-kept view is needed: a value the joined view hides still writes no floor', () => {
+    stop('s1', { tail: 'Staging creds\npassword: hunterxyz\nDone' }, '');
+    expect(one('s1').completed).not.toContain('hunterxyz');
+  });
+
+  it('a PEM header in the examined head writes no floor, even when its END is out of reach', () => {
+    const body = ('MIIEowIBAAKCAQEA' + 'q'.repeat(48) + '\n').repeat(200);
+    stop(
+      's1',
+      { tail: `Key:\n-----BEGIN RSA ${'PRIVATE'} KEY-----\n${body}-----END RSA ${'PRIVATE'} KEY-----` },
+      '',
+    );
+    expect(one('s1').completed).not.toContain('MIIE');
+  });
+
+  it('the cut text is checked too: a shape the 120-char cut completes writes no floor', () => {
+    // The scrubber leaves `password=<value>(x)` alone (a call, not an assignment) but flags
+    // `password=<value>…` once the cut removes the parentheses.
+    let flagged = 0;
+    for (let pad = 60; pad <= 118; pad++) {
+      const sid = `s${(pad % 4) + 1}`;
+      db.prepare('DELETE FROM session_summaries WHERE memory_session_id = ?').run(sid);
+      const tail = `${'a'.repeat(pad)} password=${'Kq7'.repeat(9)}(x) and more words after the call here`;
+      stop(sid, { tail }, '');
+      const c = one(sid).completed;
+      if (c && scrubRecord('session_summaries', { completed: c }).completed !== c) flagged++;
+    }
+    expect(flagged, 'stored floors that a re-scrub would change').toBe(0);
   });
 
   it('a secret-bearing reply leaves an earlier floor in place', () => {

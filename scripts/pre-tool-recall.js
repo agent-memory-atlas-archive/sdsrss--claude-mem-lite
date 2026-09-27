@@ -67,7 +67,7 @@ import { readHookStdin, TOOL_INPUT_FILE_MAX_BYTES, salvageTruncatedHookEvent } f
 // only — cheaper than several imports this script already carries.
 import { inferProject, inferProjectDir } from '../project-utils.mjs';
 
-import { DAY_MS } from '../lib/time-constants.mjs';
+import { PRETOOL_LOOKBACK_MS } from '../lib/time-constants.mjs';
 // CLAUDE_MEM_DIR matches schema.mjs / main CLI — one env var sandboxes the
 // whole system. CLAUDE_MEM_DB_PATH / CLAUDE_MEM_RUNTIME_DIR remain as
 // per-component overrides for tests that mix isolated + real paths.
@@ -614,8 +614,9 @@ try {
     // Stop-side edge attribution so trigger and resolver can never drift.
     const fileMatch = fileMatchClause('of2');
     const fileParams = fileMatchParams(filePath);
-    // 60-day lookback to avoid surfacing ancient observations
-    const cutoff = Date.now() - 60 * DAY_MS;
+    // 60-day lookback to avoid surfacing ancient observations (PRETOOL_LOOKBACK_MS;
+    // benchmark/cutoff-reach-probe.mjs counts what it removes)
+    const cutoff = Date.now() - PRETOOL_LOOKBACK_MS;
 
     // Surface actionable lessons first, then high-importance bugfix/decision observations.
     // Priority: 1) observations with lesson_learned (most actionable for preventing repeat bugs)

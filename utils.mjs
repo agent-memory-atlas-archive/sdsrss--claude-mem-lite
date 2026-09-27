@@ -282,9 +282,37 @@ export function isRelatedToEpisode(episode, newFiles) {
 // magnitude above the longest cut here, so a secret that begins before the cut is still
 // seen whole by the patterns, at bounded cost.
 const DESC_SCRUB_WINDOW = 4096;
+
+// A private span (`<private>`, or a PEM private key) that crosses a scrub window's edge shows
+// the window an opener with no closer, or a closer with no opener, and the scrubber redacts
+// neither half on its own: stripPrivate and the PEM pattern both need the pair. So a window is
+// cut before an opener it cannot close, and a tail window holding a stray closer is not shown
+// (v6.19.0 pre-tag review P3-1). Returns the unpaired opener's index (-1 if none) and whether
+// a closer appears with no opener.
+const PRIVATE_MARK_RE = /<(\/?)private>|-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/gi;
+function unpairedPrivateMarks(s) {
+  let tagAt = -1;
+  let pemAt = -1;
+  let strayClose = false;
+  for (const m of s.matchAll(PRIVATE_MARK_RE)) {
+    if (m[2] === undefined) {
+      if (m[1] !== '/') tagAt = tagAt < 0 ? m.index : tagAt;
+      else if (tagAt >= 0) tagAt = -1;
+      else strayClose = true;
+    } else if (m[2].toUpperCase() === 'BEGIN') pemAt = pemAt < 0 ? m.index : pemAt;
+    else if (pemAt >= 0) pemAt = -1;
+    else strayClose = true;
+  }
+  const opens = [tagAt, pemAt].filter((i) => i >= 0);
+  return { openAt: opens.length ? Math.min(...opens) : -1, strayClose };
+}
+
 function scrubTruncate(str, max) {
   if (typeof str !== 'string' || str === '') return truncate(str, max);
-  return truncate(_scrubSecrets(str.slice(0, DESC_SCRUB_WINDOW)), max);
+  let win = str.slice(0, DESC_SCRUB_WINDOW);
+  const { openAt } = unpairedPrivateMarks(win);
+  if (openAt >= 0) win = win.slice(0, openAt);
+  return truncate(_scrubSecrets(win), max);
 }
 
 // Head+tail cut for command output. A check usually prints its verdict last ("...parsed: 0",
@@ -296,8 +324,10 @@ function scrubTruncateEnds(str, max) {
   const flat = scrubTruncate(str, DESC_SCRUB_WINDOW);
   if (flat.length <= max) return flat;
   const tailLen = Math.floor(max / 2) - 1;
-  const tailSrc =
-    str.length > DESC_SCRUB_WINDOW ? normalizeInline(_scrubSecrets(str.slice(-DESC_SCRUB_WINDOW))) : flat;
+  const tailWin = str.length > DESC_SCRUB_WINDOW ? str.slice(-DESC_SCRUB_WINDOW) : str;
+  const marks = unpairedPrivateMarks(tailWin);
+  if (marks.strayClose || marks.openAt >= 0) return truncate(flat, max);
+  const tailSrc = str.length > DESC_SCRUB_WINDOW ? normalizeInline(_scrubSecrets(tailWin)) : flat;
   // Drop a lone low surrogate the cut may start on; truncate guards the head side.
   const tail = tailSrc.slice(-tailLen).replace(/^[\uDC00-\uDFFF]/, '');
   return truncate(flat, max - tailLen) + tail;

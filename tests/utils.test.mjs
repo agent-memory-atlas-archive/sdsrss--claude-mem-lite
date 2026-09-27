@@ -1221,6 +1221,36 @@ describe('makeEntryDesc', () => {
       expect(desc).toContain(VERDICT);
     });
 
+    // v6.19.0 pre-tag review P3-1: a private block longer than the tail's scrub window shows
+    // that window only its closer, which neither stripPrivate nor the PEM pattern redacts.
+    it('shows no tail when a <private> block ends the output from outside the tail window', () => {
+      const resp = `${HEAD}\n<private>${'p'.repeat(5000)} MY-PRIVATE-TOTP 481-992 </private>`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/TOTP|481-992|pppp/);
+      expect(desc).toContain(HEAD.slice(0, 30));
+    });
+
+    it('shows no tail when a <private> block opened between the two windows ends the output', () => {
+      const resp = `${HEAD}\n${'log line ok\n'.repeat(400)}<private>${'p'.repeat(5000)} MY-PRIVATE-TOTP 481-992 </private>`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/TOTP|481-992|pppp/);
+      expect(desc).toContain(HEAD.slice(0, 30));
+    });
+
+    it('shows no tail when a PEM key ends the output from outside the tail window', () => {
+      const body = 'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\n'.repeat(120);
+      const resp = `$ cat key.pem ${'x'.repeat(200)}\n-----BEGIN RSA PRIVATE KEY-----\n${body}elsz6BIPWdkry5AHOVc\n-----END RSA PRIVATE KEY-----`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/elsz6BIPWdkry5AHOVc|MIIEow/);
+    });
+
+    it('does not start the tail on a lone low surrogate', () => {
+      // 49 tail characters: the cut lands between the halves of the first 😀.
+      const resp = `${HEAD}\n${'y'.repeat(200)}${'😀'.repeat(25)}`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    });
+
     it('scrubs a secret at the end of an output longer than the scrub window', () => {
       const resp = `${HEAD}\n${'x'.repeat(6000)}\ntoken: ghp_${'a'.repeat(36)}`;
       const desc = makeEntryDesc('Bash', { command: 'env' }, resp, { isError: false });

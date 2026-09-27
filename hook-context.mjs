@@ -710,6 +710,11 @@ export function buildSessionContextLines(
     // asserted in tests/hook-context.test.mjs rather than left as a claim, because "it
     // only adds" is exactly the kind of sentence this repo keeps finding to be false.
     const { fileLessonQuota, keyContextQuota } = sectionQuotas(fileLessons.length, keyContext.length);
+    // The collector records the line as the caller will SEE it: this function's return runs
+    // neutralizeContextDelimiters over the whole body, and idsShownWhole matches exact lines,
+    // so a row carrying a delimiter tag was shown yet never booked (D#115 P3-1). Idempotent
+    // with the block-level pass.
+    const bookedLine = (e) => ({ id: e.id, text: neutralizeContextDelimiters(e.line) });
 
     if (fileLessons.length > 0 && !quiet) {
       const shown = fileLessons.slice(0, fileLessonQuota);
@@ -718,7 +723,7 @@ export function buildSessionContextLines(
       summaryLines.push('');
       if (collector) {
         collector.keyContextIds.push(...shown.map((e) => e.id));
-        collector.keyContextLines.push(...shown.map((e) => ({ id: e.id, text: e.line })));
+        collector.keyContextLines.push(...shown.map(bookedLine));
       }
     }
     if (keyContext.length > 0 && !quiet) {
@@ -728,7 +733,7 @@ export function buildSessionContextLines(
       summaryLines.push('');
       if (collector) {
         collector.keyContextIds.push(...shown.map((e) => e.id));
-        collector.keyContextLines.push(...shown.map((e) => ({ id: e.id, text: e.line })));
+        collector.keyContextLines.push(...shown.map(bookedLine));
       }
     }
   } else if (!latestSummary && !effectiveQuiet()) {

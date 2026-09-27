@@ -169,7 +169,9 @@ const BIND_DIRECTIVE =
 // Under `verdict` the adopted CLAUDE.md row ("skip ones that did not apply") and the detail
 // doc ("`#NN n/a` … 所以不必写") still carry the v6.17 wording, so the agent would hold two
 // contradicting instructions; this says which wins (tasks/specs/verdict-precedence.md). Not
-// on `bridge`, whose text must stay the one its efficacy readings were taken with.
+// on `bind` or `bridge`, whose per-lesson asks carry the same contradiction: both are arms
+// benchmark/efficacy-harness.mjs measures, and their text must stay the one their readings
+// were taken with.
 const VERDICT_OPT_OUT_DIRECTIVE = `${VERDICT_DIRECTIVE} CLAUDE_MEM_SALIENCE=verdict is set: this overrides the memory guidance in CLAUDE.md and .claude/plugin_claude_mem_lite.md that a lesson which did not apply needs no mention.`;
 const ACTIVE_DIRECTIVE = SALIENCE_BIND
   ? BIND_DIRECTIVE

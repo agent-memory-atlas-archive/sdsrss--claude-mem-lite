@@ -33,6 +33,8 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     quotedKey: "'" + 'passwd'.repeat(N / 6),
     quotedKeyDouble: '"' + 'password'.repeat(N / 8),
     jwtDashRun: 'eyJ-'.repeat(N / 4),
+    // A word-hyphen start is allowed once per word, never inside a hyphen run.
+    jwtWordDashRun: ('sess-eyJ' + 'A'.repeat(20) + ' ').repeat(N / 29),
     // Every BEGIN with no END scanned to the end of the text, on each of the 32 passes.
     pemHeadersNoEnd: CHAIN + ' ' + '-----BEGIN RSA PRIVATE KEY-----\n'.repeat(N / 32),
     // Linear but slow: D#128's code-label branch ran a 40-char lookbehind at every position
@@ -91,6 +93,9 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
     ['JWT after a space', `auth ${jwt} ok`, 'auth *** ok'],
     ['JWT after =', `jwt=${jwt}`, 'jwt=***'],
     ['JWT after a quote', `"${jwt}"`, '"***"'],
+    // v6.19.0 pre-tag review P3-2: `(?<![\w-])` alone stopped these; `\b` had caught them.
+    ['JWT glued to a word by a hyphen', `cookie: sess-${jwt}`, 'cookie: sess-***'],
+    ['the same at the start of the text', `auth-${jwt} ok`, 'auth-*** ok'],
     [
       'PEM block',
       'k: -----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY----- ok',
@@ -99,7 +104,19 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
     [
       'a later complete PEM block after a stray header',
       '-----BEGIN EC PRIVATE KEY-----\n-----BEGIN EC PRIVATE KEY-----\nMIIEabc\n-----END EC PRIVATE KEY-----',
-      '-----BEGIN EC PRIVATE KEY-----\n***PEM_KEY***',
+      '***PEM_KEY******PEM_KEY***',
+    ],
+    // v6.19.0 pre-tag review P2-1: a body that stopped at the next BEGIN failed to match at
+    // all when its own END was missing, so the cut-off key's body was stored.
+    [
+      'a cut-off key body before a later complete block',
+      '$ head -c 80 id_rsa\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\n$ cat id_rsa\n-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----',
+      '$ head -c 80 id_rsa\n***PEM_KEY******PEM_KEY***',
+    ],
+    [
+      'a key body, then a certificate, then another key',
+      '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----\n-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEabc\n-----END OPENSSH PRIVATE KEY-----',
+      '***PEM_KEY***-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----\n***PEM_KEY***',
     ],
   ])('%s', (_name, input, want) => {
     expect(scrubSecrets(input)).toBe(want);

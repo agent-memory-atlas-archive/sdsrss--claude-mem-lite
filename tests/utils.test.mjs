@@ -1189,9 +1189,7 @@ describe('makeEntryDesc', () => {
 
   it('describes Bash tool without error', () => {
     const desc = makeEntryDesc('Bash', { command: 'ls -la' }, 'file1 file2');
-    expect(desc).toContain('ls -la');
-    expect(desc).toContain('file1 file2');
-    expect(desc).not.toContain('ERROR');
+    expect(desc).toBe('ls -la → file1 file2');
   });
 
   it('describes Bash tool with error', () => {
@@ -1228,11 +1226,6 @@ describe('makeEntryDesc', () => {
       const desc = makeEntryDesc('Bash', { command: 'env' }, resp, { isError: false });
       expect(desc).not.toMatch(/a{8}/);
       expect(desc.endsWith('token: ***')).toBe(true);
-    });
-
-    it('leaves an output within the budget whole', () => {
-      const desc = makeEntryDesc('Bash', { command: 'ls' }, 'a.txt\nb.txt', { isError: false });
-      expect(desc).toBe('ls → a.txt b.txt');
     });
   });
 

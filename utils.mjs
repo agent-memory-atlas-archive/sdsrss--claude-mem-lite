@@ -292,20 +292,15 @@ function scrubTruncate(str, max) {
 // and it has written a bugfix narrative for a check that passed. The tail comes from its own
 // scrub window at the END of the original string: taking it from the head window would drop
 // the verdict of any output longer than DESC_SCRUB_WINDOW.
-const DESC_HEAD_SHARE = 0.5;
 function scrubTruncateEnds(str, max) {
-  if (typeof str !== 'string' || str === '') return truncate(str, max);
-  const head = normalizeInline(_scrubSecrets(str.slice(0, DESC_SCRUB_WINDOW)));
-  const whole = str.length <= DESC_SCRUB_WINDOW;
-  if (whole && head.length <= max) return head;
-  const tailSrc = whole ? head : normalizeInline(_scrubSecrets(str.slice(-DESC_SCRUB_WINDOW)));
-  const headLen = Math.ceil(max * DESC_HEAD_SHARE);
-  const tailLen = max - headLen - 1;
-  let tail = tailSrc.slice(-tailLen);
-  const first = tail.charCodeAt(0);
-  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
-  const cut = truncate(head, headLen);
-  return `${cut}${cut.endsWith('…') ? '' : ' …'}${tail}`;
+  const flat = scrubTruncate(str, DESC_SCRUB_WINDOW);
+  if (flat.length <= max) return flat;
+  const tailLen = Math.floor(max / 2) - 1;
+  const tailSrc =
+    str.length > DESC_SCRUB_WINDOW ? normalizeInline(_scrubSecrets(str.slice(-DESC_SCRUB_WINDOW))) : flat;
+  // Drop a lone low surrogate the cut may start on; truncate guards the head side.
+  const tail = tailSrc.slice(-tailLen).replace(/^[\uDC00-\uDFFF]/, '');
+  return truncate(flat, max - tailLen) + tail;
 }
 
 export function makeEntryDesc(toolName, input, resp, opts) {

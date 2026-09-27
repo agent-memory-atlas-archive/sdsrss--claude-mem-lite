@@ -72,3 +72,22 @@ Examples (score in brackets):
   from it must be scrubbed on write and defanged on render like any stored text.
 
 Cost: $21.71 of model usage for the 30 sessions, $0.30 for the isolation probes.
+
+## Supplement (2026-09-27 ~17:00Z): closing turns and Chinese tasks — for D#121's design
+
+Same isolation and runner; 12 more sessions. k01–k06: an English task, then a closing turn
+("thanks!", "thx", "great, thank you", …). z01–z06: tasks asked in Chinese, two of them
+closed with "好的，谢谢".
+
+| Final-reply length (chars) | n | range |
+|---|---|---|
+| Closing replies ("You're welcome…", "不客气！…") | 8 (6 EN, 2 中文) | 15–187 |
+| Task replies (the turn before, or the only turn) | 12 (6 EN, 6 中文) | 801–2289 |
+
+Closing replies often carry a useful clause ("the change is still uncommitted") but no
+outcome; a floor that took them would lose the task's line. D#121 therefore lets a reply
+under 400 chars create the first floor but not replace an existing one (400 ≈ the geometric
+middle of 187 and 801, about 2× clear of both). Replaying Stop's per-turn write (shipped
+extractor + the D#121 writer, in-memory DB) over all 12 transcripts left every session's
+Completed on the task reply's head, including all six Chinese sessions; none took the closing
+reply. Cost: 6.73 USD (12 sessions, 8 of them two-turn).

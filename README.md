@@ -246,11 +246,12 @@ row's `notes`.
 
 - **Last Session shows how the previous session ended even without a report.** When the
   final reply has no Done / Not done / Failed / Uncertain section, `Completed:` is its first
-  120 characters (markdown flattened) where it used to be observation titles, which are
-  usually empty; the /clear handoff labels it `<session-summary source="last-reply">`. A
-  report or a model summary still takes precedence. A later reply under 400 characters
-  ("You're welcome!") does not replace an earlier one. `CLAUDE_MEM_SUMMARY_TAIL=0` restores
-  the titles, including in a session already under way.
+  120 characters (code blocks and line-leading markers removed) where it used to be
+  observation titles, which are usually empty; the /clear handoff labels it
+  `<session-summary source="last-reply">`. A report or a model summary still takes
+  precedence. A later reply under 400 characters ("You're welcome!") does not replace an
+  earlier one, and a reply in which the secret scrubber finds anything writes no line at all.
+  `CLAUDE_MEM_SUMMARY_TAIL=0` restores the titles from the session's next turn on.
 
 ## Upgrading to 6.17.0
 
@@ -1000,7 +1001,7 @@ claude-mem-lite.
 | `CLAUDE_MEM_DEBUG` | Enable debug logging (`1` to enable). | _(disabled)_ |
 | `MEM_QUIET_HOOKS` | Low-noise hooks. `1` drops the `File Lessons` / `Key Context` sections from SessionStart injection, the lesson suffix from `[mem] Related memories`, and the `WHEN TO USE` / `Decision rules` blocks from MCP server instructions. IDs and the `Recent` table still surface so `mem_get(ids=[…])` remains reachable. Intended for users running the invited-memory adopt path or who otherwise want minimal auto-injection. **Since v2.82.0 this env no longer gates auto-adopt — use `MEM_NO_AUTO_ADOPT=1` for that.** | _(disabled)_ |
 | `CLAUDE_MEM_SESSION_EVENTS` | `1`/`on` restores the SessionStart `### Key Events` section (recent high-importance rows from the `events` table). **Off by default since v6.13.0**: an audit of 30 events read 2 accurate and 16 wrong. The UserPromptSubmit events block and PreToolUse recall are query-matched and stay on; `mem_search` still reaches every event. | _(off)_ |
-| `CLAUDE_MEM_SUMMARY_TAIL` | `0`/`off` stops Stop from using the head of the final reply (first 120 characters, markdown flattened) as a session's Completed line when that reply has no Done / Not done / Failed / Uncertain section; Completed then falls back to observation titles, as before v6.18.0 (a line already written is replaced by the next titles). A later reply under 400 characters does not replace an earlier one. | _(on)_ |
+| `CLAUDE_MEM_SUMMARY_TAIL` | `0`/`off` stops Stop from using the head of the final reply (first 120 characters, code blocks and line-leading markers removed) as a session's Completed line when that reply has no Done / Not done / Failed / Uncertain section; Completed then falls back to observation titles, as before v6.18.0; a line already written gives way to the titles at the session's next turn. A later reply under 400 characters does not replace an earlier one. | _(on)_ |
 | `CLAUDE_MEM_EPISODE_INPUT_FILTER` | What the episode summarizer may learn from. A subagent's tool calls stay out of the episode buffer unless they edit a file inside the project, and mutation probes (mutate → RED run → restore) and the agent's own failing inline scripts (a patch's `anchor not found`) are dropped before a window is saved or summarized — replayed over the 30 audited events, this removes 3 of the 16 that were wrong outright; with `CLAUDE_MEM_LESSON_GROUNDING` none of the 16 lessons is injected. `off` restores the unfiltered input. | _(on)_ |
 | `CLAUDE_MEM_BASH_RECALL` | File recall before a Bash command that views (`cat`, `sed -n`, `head`…) or writes (`sed -i`, `cat > f`, a python patch…) a file, like the Read / Edit recall. A bash prefilter keeps Node from starting for other commands. `off` disables this leg only. | _(on)_ |
 | `CLAUDE_MEM_LESSON_GROUNDING` | An auto-captured event keeps its lesson only when the lesson quotes the window's own diagnosis (a failing output line, a comment the edit added, or the commit message); otherwise the row is kept without it at importance 1, below every injection face. `off` keeps unquoted lessons. | _(on)_ |

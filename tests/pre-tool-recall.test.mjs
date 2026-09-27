@@ -1385,6 +1385,8 @@ describe('pre-tool-recall', () => {
   // The default directive's own words (D#98). Presence AND absence cases key on it, so an
   // absence assertion cannot pass on a string the directive no longer contains.
   const ACK_MARK = 'a lesson that did not apply needs no mention';
+  const VERDICT_OVERRIDE_MARK =
+    'overrides the memory guidance in CLAUDE.md and .claude/plugin_claude_mem_lite.md';
   describe('salience forcing-function (v2.98)', () => {
     let tmpRoot;
     let projectDir;
@@ -1440,6 +1442,7 @@ describe('pre-tool-recall', () => {
       // decay and lands in the user's reply as jargon.
       expect(ctx).not.toMatch(/n\/a/);
       expect(ctx).not.toContain("'#NN applied'");
+      expect(ctx).not.toContain(VERDICT_OVERRIDE_MARK);
     });
 
     it('Edit: CLAUDE_MEM_SALIENCE=verdict restores the per-lesson verdict directive (D#98 opt-out)', async () => {
@@ -1456,6 +1459,10 @@ describe('pre-tool-recall', () => {
         "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.",
       );
       expect(ctx).not.toContain(ACK_MARK);
+      // The CLAUDE.md managed row and the detail doc say a lesson that did not apply needs no
+      // mention; under verdict the directive must say it wins, or the agent holds two
+      // contradicting instructions (tasks/specs/verdict-precedence.md).
+      expect(ctx).toContain(VERDICT_OVERRIDE_MARK);
     });
 
     it('Edit: CLAUDE_MEM_SALIENCE=legacy restores the passive block (no directive)', async () => {
@@ -1534,6 +1541,8 @@ describe('pre-tool-recall', () => {
       expect(ctx).toMatch(/were shown when you Read/); // premise: the ack line fired
       expect(ctx).toContain("'#NN n/a — <reason>'");
       expect(ctx).not.toContain(ACK_MARK);
+      // The arm's text is what its efficacy readings were taken with: no override clause.
+      expect(ctx).not.toContain(VERDICT_OVERRIDE_MARK);
     });
 
     // The ack line re-renders ids from the cooldown entry, which holds obs AND event ids

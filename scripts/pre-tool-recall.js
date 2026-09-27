@@ -166,11 +166,18 @@ const ACK_DIRECTIVE =
 // CLAUDE_MEM_SALIENCE=bind; default stays ACK_DIRECTIVE.
 const BIND_DIRECTIVE =
   "For each lesson: state the one concrete check it forces on the line(s) you're editing, quote the edit line that satisfies it, then report '#NN: <check> — pass' or '#NN: n/a — <why this edit can't reach it>'.";
+// Under `verdict` the adopted CLAUDE.md row ("skip ones that did not apply") and the detail
+// doc ("`#NN n/a` … 所以不必写") still carry the v6.17 wording, so the agent would hold two
+// contradicting instructions; this says which wins (tasks/specs/verdict-precedence.md). Not
+// on `bridge`, whose text must stay the one its efficacy readings were taken with.
+const VERDICT_OPT_OUT_DIRECTIVE = `${VERDICT_DIRECTIVE} CLAUDE_MEM_SALIENCE=verdict is set: this overrides the memory guidance in CLAUDE.md and .claude/plugin_claude_mem_lite.md that a lesson which did not apply needs no mention.`;
 const ACTIVE_DIRECTIVE = SALIENCE_BIND
   ? BIND_DIRECTIVE
-  : process.env.CLAUDE_MEM_SALIENCE === 'verdict' || SALIENCE_BRIDGE
-    ? VERDICT_DIRECTIVE
-    : ACK_DIRECTIVE;
+  : process.env.CLAUDE_MEM_SALIENCE === 'verdict'
+    ? VERDICT_OPT_OUT_DIRECTIVE
+    : SALIENCE_BRIDGE
+      ? VERDICT_DIRECTIVE
+      : ACK_DIRECTIVE;
 const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file
 // Feature ① (file intelligence): on the first Read of a file each session, inject
 // its approximate token size + a one-line summary so the agent can decide to read

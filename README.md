@@ -244,7 +244,8 @@ everything is pinning `claude-mem-lite@6.16.0`.
 
 - **The pre-edit lesson line asks for a lesson's `#NN` only where it changed the edit.** It no
   longer asks for an applied / not-applicable verdict on every lesson in your next reply, which
-  put lesson-id lists into replies. Old directive: `CLAUDE_MEM_SALIENCE=verdict`. Adopted
+  put lesson-id lists into replies. Old directive: `CLAUDE_MEM_SALIENCE=verdict` (since 6.17.1
+  it also says it overrides the managed row and detail doc, which keep the new wording). Adopted
   projects get the matching CLAUDE.md managed row and detail doc on the next SessionStart;
   `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` keeps the old text.
 - **SessionStart's "Deferred Work" list ends with "+N more open"** when more than its 5 rows
@@ -1086,7 +1087,7 @@ and names can change between releases.
 | `CLAUDE_MEM_TASK_IMPERATIVE` | `on`/`1` injects the single most relevant lesson at prompt position under an imperative template. | _(off)_ |
 | `CLAUDE_MEM_SUBAGENT_INJECT` | Dispatch-time memory injection for subagents. | _(off)_ |
 | `CLAUDE_MEM_RECALL_FRAMING` | First line of a PreToolUse / PostToolUse recall block. `ab` gives each session one of two wordings, the older "system-injected context, continue your planned action" or a plain statement of source, so their cite-rates can be compared in one run (`benchmark/citation-live-replay.mjs --by-framing`); `legacy` / `factual` pin one. | `ab` |
-| `CLAUDE_MEM_SALIENCE` | Selects how the pre-edit lesson line asks for a response: unset = name a lesson's `#NN` only where it changed the edit; `verdict` = the pre-6.17 per-lesson `applied` / `n/a` verdict (the directive only: the adoption row in CLAUDE.md and the detail doc keep the new wording); `bind` / `bridge` = comprehension-bridge arms (`bridge` keeps the pre-6.17 verdict wording as its fallback); `legacy` = no directive. | _(unset)_ |
+| `CLAUDE_MEM_SALIENCE` | Selects how the pre-edit lesson line asks for a response: unset = name a lesson's `#NN` only where it changed the edit; `verdict` = the pre-6.17 per-lesson `applied` / `n/a` verdict (the adoption row in CLAUDE.md and the detail doc keep the new wording, and since 6.17.1 the directive says it overrides them); `bind` / `bridge` = comprehension-bridge arms (`bridge` keeps the pre-6.17 verdict wording as its fallback); `legacy` = no directive. | _(unset)_ |
 | `CLAUDE_MEM_EDGE_DECAY` | Enables decay of file↔observation edges. | _(off)_ |
 | `CLAUDE_MEM_EDGE_DECAY_K` | Edge-decay threshold when the flag above is on (clamped to ≥1). | `3` |
 

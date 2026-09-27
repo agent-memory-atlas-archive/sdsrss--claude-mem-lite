@@ -320,17 +320,25 @@ function scrubTruncate(str, max) {
 // and it has written a bugfix narrative for a check that passed. The tail comes from its own
 // scrub window at the END of the original string: taking it from the head window would drop
 // the verdict of any output longer than DESC_SCRUB_WINDOW.
+// The early return needs the WHOLE output inside the head window: a long output whose first
+// 4096 characters collapse to a few (whitespace) still has a tail to show (v6.19.0 pre-tag
+// claims review F2).
 function scrubTruncateEnds(str, max) {
   const flat = scrubTruncate(str, DESC_SCRUB_WINDOW);
-  if (flat.length <= max) return flat;
+  const whole = typeof str !== 'string' || str.length <= DESC_SCRUB_WINDOW;
+  if (whole && flat.length <= max) return flat;
   const tailLen = Math.floor(max / 2) - 1;
-  const tailWin = str.length > DESC_SCRUB_WINDOW ? str.slice(-DESC_SCRUB_WINDOW) : str;
+  const tailWin = whole ? str : str.slice(-DESC_SCRUB_WINDOW);
   const marks = unpairedPrivateMarks(tailWin);
   if (marks.strayClose || marks.openAt >= 0) return truncate(flat, max);
-  const tailSrc = str.length > DESC_SCRUB_WINDOW ? normalizeInline(_scrubSecrets(tailWin)) : flat;
+  const tailSrc = whole ? flat : normalizeInline(_scrubSecrets(tailWin));
   // Drop a lone low surrogate the cut may start on; truncate guards the head side.
   const tail = tailSrc.slice(-tailLen).replace(/^[\uDC00-\uDFFF]/, '');
-  return truncate(flat, max - tailLen) + tail;
+  // A head short enough to escape truncate's own "…" still gets one before the tail.
+  const budget = max - tailLen;
+  let head = truncate(flat, budget);
+  if (!head.endsWith('…')) head = head.length < budget ? `${head}…` : truncate(flat, budget - 1);
+  return head + tail;
 }
 
 export function makeEntryDesc(toolName, input, resp, opts) {

@@ -1223,6 +1223,16 @@ describe('makeEntryDesc', () => {
 
     // v6.19.0 pre-tag review P3-1: a private block longer than the tail's scrub window shows
     // that window only its closer, which neither stripPrivate nor the PEM pattern redacts.
+    // v6.19.0 pre-tag claims review F2: the early return tested only the collapsed head, so
+    // output whose first 4096 characters are mostly whitespace lost the verdict at its end.
+    it('keeps the verdict when the head window collapses to a few characters', () => {
+      const resp = `Compiling...${'\n'.repeat(4200)}FAILED: 3 tests`;
+      const desc = makeEntryDesc('Bash', { command: 'make test' }, resp, { isError: true });
+      expect(desc).toContain('Compiling...');
+      expect(desc).toContain('FAILED: 3 tests');
+      expect(desc.length).toBeLessThanOrEqual('make test → ERROR: '.length + 100);
+    });
+
     it('shows no tail when a <private> block ends the output from outside the tail window', () => {
       const resp = `${HEAD}\n<private>${'p'.repeat(5000)} MY-PRIVATE-TOTP 481-992 </private>`;
       const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });

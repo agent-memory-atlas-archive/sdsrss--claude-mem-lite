@@ -34,6 +34,7 @@ import { shouldWarnReread, buildRereadWarning, readFileMeta } from '../lib/rerea
 import { recordMetric } from '../lib/metrics.mjs';
 import { presentIdents } from '../lib/lesson-idents.mjs';
 import { neutralizeContextDelimiters } from '../format-utils.mjs';
+import { recallFramingLine } from '../lib/recall-framing.mjs';
 // D#154: the one stdout writer. This script has THREE emit sites (Read→Edit ack,
 // repeated-read guard, lesson block) and they stay one document because each branch
 // process.exit()s before reaching the next.
@@ -525,7 +526,7 @@ try {
         queueHookContext(
           'PreToolUse',
           [
-            '[mem] PreToolUse recall — system-injected context, continue your planned action:',
+            recallFramingLine('PreToolUse', { sessionId, fname: basename(filePath) }),
             `[mem] ⚠ Lessons ${idList} were shown when you Read ${basename(filePath)} — ${ACTIVE_DIRECTIVE}`,
           ].join('\n'),
         );
@@ -540,7 +541,7 @@ try {
           queueHookContext(
             'PreToolUse',
             [
-              '[mem] PreToolUse recall — system-injected context, continue your planned action:',
+              recallFramingLine('PreToolUse', { sessionId, fname: basename(filePath) }),
               buildRereadWarning(basename(filePath), entry.reread.tokens),
             ].join('\n'),
           );
@@ -829,9 +830,10 @@ try {
       hasLessons || Boolean(fileIntelLine) || (!isRead && process.env.CLAUDE_MEM_PRETOOL_NUDGE === '1');
     if (showFraming) {
       // Framing line mirrors #7758 handoff-injection fix: without an explicit
-      // "system-injected, continue" disclaimer, observed turn-end after Edit+reminder
-      // when the model misreads passive lesson context as a closing note.
-      lines.push(`[mem] PreToolUse recall — system-injected context, continue your planned action:`);
+      // "this is context, the call continues" line, observed turn-end after Edit+reminder
+      // when the model misreads passive lesson context as a closing note. Two wordings
+      // run side by side per session — lib/recall-framing.mjs.
+      lines.push(recallFramingLine('PreToolUse', { sessionId, fname }));
     }
     // MED-1 (full audit 2026-07-16): defang the injection-block delimiters in
     // all DB/file-derived text before it enters additionalContext (which CC wraps

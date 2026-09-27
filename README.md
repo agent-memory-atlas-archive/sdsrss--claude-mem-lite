@@ -1055,6 +1055,7 @@ and names can change between releases.
 |----------|-------------|---------|
 | `CLAUDE_MEM_TASK_IMPERATIVE` | `on`/`1` injects the single most relevant lesson at prompt position under an imperative template. | _(off)_ |
 | `CLAUDE_MEM_SUBAGENT_INJECT` | Dispatch-time memory injection for subagents. | _(off)_ |
+| `CLAUDE_MEM_RECALL_FRAMING` | First line of a PreToolUse / PostToolUse recall block. `ab` gives each session one of two wordings, the older "system-injected context, continue your planned action" or a plain statement of source, so their cite-rates can be compared in one run (`benchmark/citation-live-replay.mjs --by-framing`); `legacy` / `factual` pin one. | `ab` |
 | `CLAUDE_MEM_SALIENCE` | Selects a comprehension-bridge arm (`bridge`, `bind`); unset = current default behavior. | _(unset)_ |
 | `CLAUDE_MEM_EDGE_DECAY` | Enables decay of file↔observation edges. | _(off)_ |
 | `CLAUDE_MEM_EDGE_DECAY_K` | Edge-decay threshold when the flag above is on (clamped to ≥1). | `3` |

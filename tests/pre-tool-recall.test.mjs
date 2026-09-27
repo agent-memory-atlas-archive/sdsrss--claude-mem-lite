@@ -383,8 +383,8 @@ describe('pre-tool-recall', () => {
         tool_input: { file_path: join(projectDir, 'frame.mjs') },
       });
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-      expect(ctx).toMatch(/system-injected/);
-      expect(ctx).toMatch(/continue/i);
+      expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
+      expect(ctx).toMatch(/continue|proceeds as planned/i);
     });
 
     it('prepends the same framing line when emitting the no-prior-lessons backfill reminder', async () => {
@@ -393,8 +393,8 @@ describe('pre-tool-recall', () => {
         tool_input: { file_path: join(projectDir, 'pristine.py') },
       });
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-      expect(ctx).toMatch(/system-injected/);
-      expect(ctx).toMatch(/continue/i);
+      expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
+      expect(ctx).toMatch(/continue|proceeds as planned/i);
       expect(ctx).toContain('[mem] No prior lessons');
     });
 
@@ -1490,7 +1490,7 @@ describe('pre-tool-recall', () => {
       // Compact nudge — must NOT re-emit the lesson body (token cost stays one line).
       expect(ctx).not.toContain('recover orphaned children');
       // #7758 framing guard: still announces itself as system-injected continuation.
-      expect(ctx).toMatch(/system-injected/);
+      expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
     });
 
     // The ack line re-renders ids from the cooldown entry, which holds obs AND event ids

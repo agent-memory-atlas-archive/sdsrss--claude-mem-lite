@@ -10,7 +10,7 @@
 //   4. STRUCTURAL: no registered hook entry point writes stdout except through the two
 //      capped writers, so a new plain write cannot bypass the cap unnoticed.
 
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { spawnSync } from 'child_process';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
@@ -174,7 +174,12 @@ describe('flushHookStdout caps each field separately', () => {
 });
 
 describe('a real overflow through a shipped surface (subprocess)', () => {
-  const ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-'));
+  // Created in beforeAll, not at collection: a `-t` filter skips this suite's afterAll, and
+  // a collection-time mkdtemp would then be left behind in the system temp dir.
+  let ROOT;
+  beforeAll(() => {
+    ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-'));
+  });
   afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
   it('UserPromptSubmit deferred-work block with a 30K detail stays under the cap', () => {
@@ -259,7 +264,10 @@ describe('only what the cap kept is booked as delivered (D#108)', () => {
   });
 
   describe('subprocess: UserPromptSubmit rows the cap dropped are not booked', () => {
-    const ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-book-'));
+    let ROOT; // beforeAll, not collection time — see 'a real overflow' above
+    beforeAll(() => {
+      ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-book-'));
+    });
     afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
     /** A fresh store per case: rows and markers from one case must not feed the next. */
@@ -395,7 +403,10 @@ describe('only what the cap kept is booked as delivered (D#108)', () => {
   });
 
   describe('PreCompact: Key Context rows cut by the cap are not booked', () => {
-    const ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-keyctx-'));
+    let ROOT; // beforeAll, not collection time — see 'a real overflow' above
+    beforeAll(() => {
+      ROOT = mkdtempSync(join(tmpdir(), 'mem-textcap-keyctx-'));
+    });
     afterAll(() => {
       vi.unstubAllEnvs();
       vi.restoreAllMocks();

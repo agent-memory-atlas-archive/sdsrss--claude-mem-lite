@@ -48,6 +48,7 @@ import { isSchemaSkewError, schemaSkewFromError, shouldRecordSkew } from '../lib
 
 import { DAY_MS } from '../lib/time-constants.mjs';
 import { envNumber } from '../lib/env-number.mjs';
+import { writePlainHookText, resetPlainHookText } from '../lib/hook-text-cap.mjs';
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 // Telemetry sink (lib/hook-telemetry.mjs contract): env override for tests, else
@@ -697,6 +698,7 @@ function formatPromptResults(rows) {
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  resetPlainHookText();
   // Prevent recursion from background claude -p calls
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;
 
@@ -786,7 +788,7 @@ async function main() {
             for (const dl of neutralizeContextDelimiters(r.detail).split('\n')) lines.push(`  ${dl}`);
           }
         }
-        process.stdout.write(lines.join('\n') + '\n');
+        writePlainHookText(lines.join('\n'));
         // Merge into the dedup file so a re-referencing prompt within the stale
         // window skips re-injection. A later FTS-path write replaces ids wholesale
         // (accepted: worst case is one cheap re-injection after an obs-emitting
@@ -1078,7 +1080,7 @@ async function main() {
         : formatPromptResults(promptRows)
       : null;
     if (output) {
-      process.stdout.write(output + '\n');
+      writePlainHookText(output);
       // Write injected IDs for dedup with hook.mjs handleUserPrompt + self-dedup
       // replace, NOT union: this leg writes the prompt's own result set wholesale, and it
       // is the ONE writer that puts raw observation numbers (mixed with `P<id>` strings)

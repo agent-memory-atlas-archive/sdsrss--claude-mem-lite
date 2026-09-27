@@ -9,6 +9,7 @@ import { buildSessionContextLines } from './hook-context.mjs';
 import { inferProject, debugCatch, debugLog } from './utils.mjs';
 import { RUNTIME_DIR } from './hook-shared.mjs';
 import { recordKeyContextInjection } from './lib/keyctx-marker.mjs';
+import { writeCappedHookText } from './lib/hook-text-cap.mjs';
 
 /**
  * Build + emit the memory context block on stdout. Writes the Key Context ids
@@ -27,7 +28,7 @@ export function handlePreCompact({ db, project, sessionId, runtimeDir = RUNTIME_
     const body = buildSessionContextLines(db, project, new Date(), sessionId || null, collector);
     const rendered = body && String(body).trim() !== '';
     if (rendered) {
-      process.stdout.write(`<claude-mem-context>\n${body}\n</claude-mem-context>\n`);
+      writeCappedHookText(`<claude-mem-context>\n${body}\n</claude-mem-context>`);
     }
     // Recorded even when NOTHING was re-rendered, matching handleSessionStart — the two
     // callers must describe the same set (keyctx-marker.mjs header), and the marker is an

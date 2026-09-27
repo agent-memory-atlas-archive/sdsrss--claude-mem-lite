@@ -99,6 +99,7 @@ import {
 import { formatHookError } from './lib/native-binding-hint.mjs';
 import { recordHookError } from './lib/hook-telemetry.mjs';
 import { queueHookContext, queueHookSystemMessage, flushHookStdout } from './lib/hook-stdout.mjs';
+import { writePlainHookText, resetPlainHookText } from './lib/hook-text-cap.mjs';
 import { shouldRecallOnFailure } from './lib/tool-refusal.mjs';
 import {
   entryInputTags,
@@ -3040,7 +3041,7 @@ function injectHandoffIfEarly(db, { project, promptText, promptNumber, ccSession
         const picked = pickHandoffToInject(db, project, ccSessionId);
         if (picked) {
           const injection = renderHandoffInjection(db, project, ccSessionId);
-          if (injection) process.stdout.write(injection + '\n');
+          if (injection) writePlainHookText(injection);
           // Consume ONLY the row we just injected — leave other projects' exit
           // handoffs intact so future sessions can still resume from them.
           // Pre-v2.46 wiped every exit handoff for the project on any continuation
@@ -3251,7 +3252,7 @@ async function injectSemanticMemory(db, { project, promptText, ccSessionId }) {
         const lines = ['<memory-context relevance="high">'];
         for (const m of memories) lines.push(formatMemoryLine(m));
         lines.push('</memory-context>');
-        process.stdout.write(lines.join('\n') + '\n');
+        writePlainHookText(lines.join('\n'));
       }
       // HIGH-1 (full audit 2026-07-16): surface FTS-matched events — the canonical
       // store for promoted bugfix/decision/lesson memories that persistHaikuSummary
@@ -3272,7 +3273,7 @@ async function injectSemanticMemory(db, { project, promptText, ccSessionId }) {
           const elines = ['<memory-context relevance="events">'];
           for (const e of events) elines.push(`- ${renderInjectableEvent(e)}`);
           elines.push('</memory-context>');
-          process.stdout.write(elines.join('\n') + '\n');
+          writePlainHookText(elines.join('\n'));
         }
       } catch (e) {
         debugCatch(e, 'handleUserPrompt-events');
@@ -3281,7 +3282,7 @@ async function injectSemanticMemory(db, { project, promptText, ccSessionId }) {
         // Guard the write on a non-empty return — formatTaskImperative yields '' for a
         // lesson that strips to empty (e.g. "."), which would otherwise emit a bare line.
         const imperativeLine = formatTaskImperative(imperativePick.lesson_learned, imperativePick.id);
-        if (imperativeLine) process.stdout.write(imperativeLine + '\n');
+        if (imperativeLine) writePlainHookText(imperativeLine);
       }
 
       // D#214's ruler, second half: arm B was computed above, before anything was
@@ -3312,6 +3313,7 @@ async function injectSemanticMemory(db, { project, promptText, ccSessionId }) {
 }
 
 async function handleUserPrompt() {
+  resetPlainHookText();
   const input = await readUserPromptInput();
   if (!input) return;
   const { promptText, hookData } = input;

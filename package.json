@@ -116,6 +116,7 @@
     "lib/hook-stdin.mjs",
     "lib/plugin-key.mjs",
     "lib/hook-stdout.mjs",
+    "lib/hook-text-cap.mjs",
     "lib/proc-lock.mjs",
     "lib/atomic-write.mjs",
     "lib/platform-gate.mjs",

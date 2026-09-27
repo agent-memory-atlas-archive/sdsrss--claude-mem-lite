@@ -2369,7 +2369,19 @@ async function doctor() {
       if (state.lastCheck) parts.push(`last check: ${state.lastCheck}`);
       if (state.latestVersion) parts.push(`latest: v${state.latestVersion}`);
       if (state.lastUpdate) parts.push(`last update: ${state.lastUpdate}`);
-      if (state.updateAvailable) parts.push('update pending');
+      // Judged against the version running now, like the banner (#35): in plugin mode
+      // nothing clears the cached flag once Claude Code has applied the update. Dynamic, as
+      // elsewhere in doctor, so a hook-update that cannot load costs only this judgement.
+      if (state.updateAvailable) {
+        let pending = true;
+        try {
+          const { pendingCachedUpdate } = await import('./hook-update.mjs');
+          pending = pendingCachedUpdate(state) !== null;
+        } catch {
+          /* cannot judge — report the cached flag as it stands */
+        }
+        if (pending) parts.push('update pending');
+      }
       if (state.rateLimited) parts.push('rate-limited');
       if (state.lastError) parts.push(`last error: ${state.lastError}`);
       ok(`Update state: ${parts.join(', ') || 'empty'}`);

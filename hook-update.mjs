@@ -180,9 +180,9 @@ export function getCachedUpdateBanner() {
 // running when the check ran, and in plugin mode the update itself is applied by
 // Claude Code — downloadAndInstall never runs, so nothing clears the flag. Judge
 // the cache against the version running NOW: returns that version when the cached
-// latest is still ahead of it, else null. Both cached faces (the SessionStart
-// banner and the throttled checkForUpdate) ask this, so neither can nag alone.
-function pendingCachedUpdate(state) {
+// latest is still ahead of it, else null. Every cached face (the SessionStart
+// banner, the throttled checkForUpdate and install.mjs `doctor`) asks this, so none can nag alone.
+export function pendingCachedUpdate(state) {
   if (!state.updateAvailable || !state.latestVersion) return null;
   const running = getCurrentVersion();
   return compareVersions(state.latestVersion, running) > 0 ? running : null;

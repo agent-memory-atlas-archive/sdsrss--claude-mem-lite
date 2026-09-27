@@ -65,6 +65,11 @@ export const SUITES = [
   { name: 'precision_hard_negatives', file: 'test-queries.json' },
   { name: 'vocab_mismatch_paraphrase', file: 'test-queries-vocab-mismatch.json' },
   { name: 'cjk_mixed', file: 'test-queries-cjk.json' },
+  // B1 (2026-09-27): queries naming a PART of a camelCase / PascalCase identifier the
+  // corpus carries. Every query scored R@10 = 0 before identifier subwords were indexed —
+  // see the fixture's _doc for the admission rule — so this suite is the recall arm a
+  // subword lever is judged on, while precision_hard_negatives is its cost arm.
+  { name: 'identifier_parts', file: 'test-queries-identifier-parts.json' },
 ];
 
 /**

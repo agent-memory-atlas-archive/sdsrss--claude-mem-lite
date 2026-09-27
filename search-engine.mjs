@@ -21,6 +21,7 @@ import {
 import { citeFactorClause } from './scoring-sql.mjs';
 import { extractPRFTerms, expandQueryByConcepts } from './search-scoring.mjs';
 import { liveObsFilterSql, recencyDecaySql } from './lib/inject-search-core.mjs';
+import { isAutoWritten } from './lib/save-observation.mjs';
 
 // Scoring expressions — full adds project boost + access bonus; simple is for
 // expansion paths where boost would over-amplify already-loose matches.
@@ -67,7 +68,7 @@ export function buildObsFtsQuery(scoring, { multiplier, withSnippet, withOffset,
   const lowSignalClause = includeNoise ? '' : `AND ${notLowSignalTitleClause('o')}`;
   return `
     SELECT o.id, o.type, o.title, o.subtitle, o.project, o.created_at, o.created_at_epoch, o.importance,
-           o.files_modified, o.lesson_learned,
+           o.files_modified, o.lesson_learned, o.memory_session_id,
            ${withSnippet ? "snippet(observations_fts, 2, '»', '«', '…', 10) as match_snippet," : ''}
            ${scoreExpr}${mult} as score
     FROM observations_fts
@@ -330,6 +331,18 @@ export function countSearchTotal(
   return total;
 }
 
+/**
+ * True when an FTS excerpt says more than `title`. snippet() wraps each matched term in »«,
+ * so comparing the raw excerpt to the title is nearly always unequal, even when the excerpt
+ * is the title itself; strip the markers first.
+ * @param {string|null|undefined} snippet
+ * @param {string|null|undefined} title
+ */
+export function snippetAddsInfo(snippet, title) {
+  if (typeof snippet !== 'string' || snippet.length <= 10) return false;
+  return snippet.replace(/[»«]/g, '') !== title;
+}
+
 export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
   return {
     source: 'obs',
@@ -350,6 +363,7 @@ export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
     importance: r.importance,
     lesson_learned: r.lesson_learned,
     snippet: snippet ? r.match_snippet || '' : '',
+    auto: isAutoWritten(r.memory_session_id),
   };
 }
 
@@ -577,7 +591,8 @@ export function searchObservationsHybrid(db, ctx) {
     const rows = db
       .prepare(
         `
-      SELECT id, type, title, subtitle, project, created_at, created_at_epoch, files_modified, importance, lesson_learned
+      SELECT id, type, title, subtitle, project, created_at, created_at_epoch, files_modified, importance, lesson_learned,
+             memory_session_id
       FROM observations ${where}
       ORDER BY created_at_epoch DESC, id DESC
       LIMIT ? OFFSET ?
@@ -597,6 +612,7 @@ export function searchObservationsHybrid(db, ctx) {
         files_modified: r.files_modified,
         importance: r.importance,
         lesson_learned: r.lesson_learned,
+        auto: isAutoWritten(r.memory_session_id),
       });
     }
     return results;

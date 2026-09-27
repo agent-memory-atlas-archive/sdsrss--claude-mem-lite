@@ -47,6 +47,13 @@ export function normalizeInline(str) {
  * @param {number} [max=80] Maximum character length
  * @returns {string} Truncated string with ellipsis if needed
  */
+// Search and get mark an observation that was machine-written rather than saved explicitly
+// (isAutoWritten). The mark goes on that side because explicit saves are the large majority
+// of a typical store, and a mark on nearly every line carries no information.
+export const AUTO_MARK = '🤖';
+export const AUTO_LEGEND = ` · ${AUTO_MARK} = auto-written, not an explicit save`;
+export const AUTO_HEADER = `${AUTO_MARK} auto-written, not an explicit save`;
+
 export function truncate(str, max = 80) {
   str = normalizeInline(str);
   if (!str) return '';

@@ -17,7 +17,7 @@ import {
   formatSchemaSkewNotice,
 } from './lib/schema-skew.mjs';
 import { reRankWithContext, runIdleCleanup, buildServerInstructions } from './search-scoring.mjs';
-import { searchObservationsHybrid } from './search-engine.mjs';
+import { searchObservationsHybrid, snippetAddsInfo } from './search-engine.mjs';
 import {
   deepSearch,
   resolveDeepMode,
@@ -76,7 +76,14 @@ import { formatObsFieldValue, obsFieldLabel, formatPendingPurgeLine } from './cl
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
 import { CLI_INVOKE, shellWord } from './cli-path.mjs';
-import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
+import {
+  AUTO_HEADER,
+  AUTO_LEGEND,
+  AUTO_MARK,
+  neutralizeContextDelimiters,
+  neutralizeSkillDelimiters,
+  queryLabel,
+} from './format-utils.mjs';
 import {
   memSearchSchema,
   memRecentSchema,
@@ -114,7 +121,12 @@ import {
   bucketIdTokens,
   splitDeferredTokens,
 } from './lib/id-routing.mjs';
-import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
+import {
+  saveWithClosures,
+  formatSupersedeSkipped,
+  formatSupersededNote,
+  isAutoWritten,
+} from './lib/save-observation.mjs';
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
@@ -460,8 +472,9 @@ function formatSearchOutput(
   // query actually matched only a subset of the terms. Suppressed when the caller
   // explicitly requested OR semantics — there's no "fallback" in that path.
   const fallbackHint = orFallbackFired && !args.or ? ' (relaxed AND→OR)' : '';
+  const autoLegend = paginatedResults.some((r) => r.source === 'obs' && r.auto) ? AUTO_LEGEND : '';
   lines.push(
-    `Found ${countLabel} result(s)${qLabel}${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}\n`,
+    `Found ${countLabel} result(s)${qLabel}${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend}\n`,
   );
 
   // `~Nt` = estimated tokens to fetch this row's full body via mem_get (attachBodyTokens).
@@ -470,9 +483,9 @@ function formatSearchOutput(
   for (const r of paginatedResults) {
     if (r.source === 'obs') {
       lines.push(
-        `#${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
+        `#${r.id} ${typeIcon(r.type)} [${r.type}]${r.auto ? ` ${AUTO_MARK}` : ''} ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.date)}${tok(r)}`,
       );
-      if (r.snippet && r.snippet.length > 10 && r.snippet !== r.title) {
+      if (snippetAddsInfo(r.snippet, r.title)) {
         lines.push(`     ${truncate(r.snippet, 100)}`);
       }
     } else if (r.source === 'session') {
@@ -900,7 +913,7 @@ server.registerTool(
       const renderFields = obsFieldFilter || OBS_FIELDS;
       for (const row of rows) {
         foundBySource.obs.add(row.id);
-        const lines = [`── #${row.id} ──`];
+        const lines = [`── #${row.id}${isAutoWritten(row.memory_session_id) ? ` · ${AUTO_HEADER}` : ''} ──`];
         // Retraction first (shared with the CLI `get` via get-core) — see supersededNotice.
         const retracted = supersededNotice(row);
         if (retracted) lines.push(retracted);

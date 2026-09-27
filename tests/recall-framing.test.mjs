@@ -75,6 +75,12 @@ describe('recallFramingLine — the two wordings', () => {
     }
     expect(classifyRecallFraming('[mem] Lessons for a.js:\n  #12 [bugfix] x')).toBeNull();
   });
+
+  it('a lesson body quoting the other wording does not relabel the block (review P3-8)', () => {
+    const line = recallFramingLine('PreToolUse', { sessionId: 's', fname: 'a.js', env: factual });
+    const block = `${line}\n[mem] Lessons for a.js:\n  #7 [bugfix] the old line read "system-injected context, continue your planned action:"`;
+    expect(classifyRecallFraming(block)).toBe('factual');
+  });
 });
 
 describe('pretoolFramingOf — the A/B ruler reads the arm from the transcript', () => {

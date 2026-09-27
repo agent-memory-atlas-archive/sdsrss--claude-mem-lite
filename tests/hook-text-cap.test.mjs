@@ -61,6 +61,30 @@ describe('capHookText', () => {
     expect(out.match(/<\/memory-context>/g)).toHaveLength(1);
   });
 
+  it('a line cut short is marked, and its footer names the ids in the cut part (review P3-1)', () => {
+    const line = `Memory — a past lesson applies. You must: ${'do the thing. '.repeat(80)}(#4242)`;
+    const out = capHookText(line, 700);
+    expect(out.length).toBeLessThanOrEqual(700);
+    const [head, footer] = out.split('\n');
+    expect(head.endsWith('…')).toBe(true);
+    expect(footer).toBe('[claude-mem-lite] a line was cut short — hook output limit (ids: #4242)');
+  });
+
+  it('never leaves half of a surrogate pair at the cut (review P3-1)', () => {
+    for (let pad = 0; pad < 4; pad++) {
+      const out = capHookText(`${'x'.repeat(pad)}${'🔴'.repeat(400)}`, 700);
+      expect(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(out)).toBe(false);
+    }
+  });
+
+  it('the footer does not count a closing line it re-appends (review P3-3)', () => {
+    const rows = Array.from({ length: 200 }, (_, i) => `- row ${i} ${'y'.repeat(90)}`);
+    const out = capHookText(['<memory-context>', ...rows, '</memory-context>'].join('\n'));
+    const shown = out.split('\n').filter((l) => l.startsWith('- row ')).length;
+    const n = Number(out.match(/(\d+) more line\(s\) not shown/)[1]);
+    expect(shown + n).toBe(200);
+  });
+
   it('hard-cuts a single line longer than the budget', () => {
     const out = capHookText('y'.repeat(50_000));
     expect(out.length).toBeLessThanOrEqual(HOOK_TEXT_CAP);

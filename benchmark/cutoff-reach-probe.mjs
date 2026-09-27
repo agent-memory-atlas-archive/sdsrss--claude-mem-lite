@@ -8,19 +8,26 @@
 // anything that is still in use — and it has to be ready before the cut first bites
 // (2026-11-04 on the maintainer DB, whose oldest live row is 2026-09-05).
 //
-// POPULATION (doctrine rule 3), per source, restricted exactly as the recall SELECTs are
-// except for the age predicate, which is inverted:
+// POPULATION (doctrine rule 3), per source: recall's importance and liveness predicates with
+// the age predicate inverted. NOT recall's full WHERE — the lesson/type fallback, the scope
+// and edge-decay flags and the per-file match are left out, because the question is about
+// every lesson the cut can ever hide, not one file's query:
 //   • observations: file-edged (observation_files), importance >= 2, liveObsFilterSql, and
 //     created_at_epoch <= cutoff. Each (obs, file) EDGE is one row, because recall fires per
-//     file. Split by the edge's own record of use: `cited` (last_cited_session_id set — the
-//     model cited it after a file injection), `miss_streak = 0` (never passed over), and the
-//     rest. The first two are what the cut would evict while still in use.
+//     file. Split by the edge's own record (lib/edge-attribution.mjs): `cited` (a hit stamps
+//     last_cited_session_id — the model cited it after a file injection: IN USE), `missed`
+//     (injected and resolved, never cited), and `neverInjected` (inject_count = 0 — nothing is
+//     known about its use). Only `cited` is what the cut would evict while in use; a first
+//     draft also counted `miss_streak = 0`, which without a cite means never resolved at all.
 //   • events: importance >= 2, not superseded, carrying file_paths, created_at_epoch <= cutoff.
 //     Events keep no per-file use record, so they are counted, not split.
 //
 // PREMISE the proposal got wrong, stated so nobody re-derives it: "expiry is miss_streak's
 // job" holds only with CLAUDE_MEM_EDGE_DECAY on. It is OFF by default, so on a stock install
-// the 60-day cut is the ONLY thing that ever retires a file lesson. Removing it is not
+// the 60-day cut is the only AGE-based retirement a file lesson has. Rows also leave recall's
+// pool by being superseded or compressed, or by dropping below importance 2 (the `decay`
+// maintain op lowers never-injected, never-accessed old rows) — none of which retires a
+// lesson that is still being injected. Removing the cut is not
 // covered by decay unless decay ships on too.
 //
 // Read-only: the database is opened { readonly: true } and nothing else is written.
@@ -44,15 +51,15 @@ export function probeCutoffReach(db, { now = Date.now(), project = null } = {}) 
   const projArgs = project ? [project] : [];
   const edges = db
     .prepare(
-      `SELECT o.id, o.project, of2.filename, of2.miss_streak, of2.last_cited_session_id, o.created_at_epoch
+      `SELECT o.id, o.project, of2.filename, of2.inject_count, of2.last_cited_session_id, o.created_at_epoch
        FROM observations o JOIN observation_files of2 ON of2.obs_id = o.id
        WHERE o.importance >= 2 AND ${liveObsFilterSql('o')} AND o.created_at_epoch <= ? ${projClause}
        ORDER BY o.created_at_epoch ASC, o.id ASC`,
     )
     .all(cutoff, ...projArgs);
   const cited = edges.filter((e) => e.last_cited_session_id);
-  const neverMissed = edges.filter((e) => !e.last_cited_session_id && e.miss_streak === 0);
-  const rest = edges.length - cited.length - neverMissed.length;
+  const neverInjected = edges.filter((e) => !e.last_cited_session_id && !(e.inject_count > 0));
+  const missed = edges.length - cited.length - neverInjected.length;
 
   const evProj = project ? 'AND project = ?' : '';
   let events = [];
@@ -77,19 +84,33 @@ export function probeCutoffReach(db, { now = Date.now(), project = null } = {}) 
        WHERE o.importance >= 2 AND ${liveObsFilterSql('o')} ${projClause}`,
     )
     .get(...projArgs)?.e;
+  // Events too: an event carrying file_paths is recalled by file and cut by the same window.
+  let oldestEvent = null;
+  try {
+    oldestEvent = db
+      .prepare(
+        `SELECT MIN(created_at_epoch) AS e FROM events
+         WHERE importance >= 2 AND superseded_at_epoch IS NULL
+           AND file_paths IS NOT NULL AND file_paths != '' AND file_paths != '[]' ${evProj}`,
+      )
+      .get(...projArgs)?.e;
+  } catch {
+    /* no events table */
+  }
+  const firstRow = [oldest, oldestEvent].filter(Number.isFinite);
 
   return {
     now: new Date(now).toISOString(),
     cutoff: new Date(cutoff).toISOString(),
     lookbackDays: PRETOOL_LOOKBACK_MS / DAY_MS,
-    firstBites: Number.isFinite(oldest) ? new Date(oldest + PRETOOL_LOOKBACK_MS).toISOString() : null,
+    firstBites: firstRow.length ? new Date(Math.min(...firstRow) + PRETOOL_LOOKBACK_MS).toISOString() : null,
     obsEdges: {
       total: edges.length,
       cited: cited.length,
-      neverMissed: neverMissed.length,
-      rest,
-      // The NAME SET is the evidence (doctrine rule 4) — ids of the rows the cut removes while in use.
-      inUse: [...cited, ...neverMissed].map((e) => ({ id: e.id, project: e.project, file: e.filename })),
+      missed,
+      neverInjected: neverInjected.length,
+      // The NAME SET is the evidence (doctrine rule 4) — the edges the cut removes while in use.
+      inUse: cited.map((e) => ({ id: e.id, project: e.project, file: e.filename })),
     },
     events: { total: events.length, ids: events.map((e) => e.id) },
   };
@@ -107,7 +128,9 @@ function main() {
     process.stderr.write(`cutoff-reach-probe: --now ${nowArg} is not a date\n`);
     process.exit(2);
   }
-  const db = new Database(join(resolveDataDir(), 'claude-mem-lite.db'), { readonly: true });
+  const db = new Database(join(resolveDataDir(process.env.CLAUDE_MEM_DIR), 'claude-mem-lite.db'), {
+    readonly: true,
+  });
   let r;
   try {
     r = probeCutoffReach(db, { now, project: arg('--project') });
@@ -120,9 +143,9 @@ function main() {
   }
   const o = r.obsEdges;
   console.log(`PreToolUse ${r.lookbackDays}-day cut at ${r.now} (removes rows created <= ${r.cutoff})`);
-  console.log(`first bites: ${r.firstBites ?? 'never (no file-edged live row)'}`);
+  console.log(`first bites: ${r.firstBites ?? 'never (no file-carrying live row)'}`);
   console.log(
-    `observation edges removed: ${o.total}  ·  in use: cited ${o.cited}, never missed ${o.neverMissed}  ·  other ${o.rest}`,
+    `observation edges removed: ${o.total}  ·  in use (cited) ${o.cited}  ·  missed only ${o.missed}  ·  never injected ${o.neverInjected}`,
   );
   console.log(`events removed: ${r.events.total}`);
   if (o.inUse.length) console.table(o.inUse);

@@ -281,7 +281,7 @@ describe('extractInjectedFromErrorRecall', () => {
     // A failure the host flags goes to PostToolUseFailure, not PostToolUse (CLAUDE.md), and
     // that hook runs `hook.mjs post-tool-failure`, never post-tool-use.sh. The matcher keyed
     // on `post-tool-use` alone, so every recall delivered this way stayed out of citation
-    // decay and every cite-rate ruler (C1 denominator count, 2026-09-27: 389 attachments).
+    // decay and every cite-rate ruler (C1 denominator count, 2026-09-27: 158 attachments carrying 389 ids).
     // Command and envelope copied from a real transcript attachment.
     const path = writeTranscript([
       {

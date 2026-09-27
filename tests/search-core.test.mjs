@@ -334,6 +334,37 @@ describe('search-core', () => {
       expect(results.find((r) => r.source === 'session').score).toBe(-0.75);
     });
 
+    // #36: FTS5 replaces an idf <= 0 with 1e-6, so a lone row whose term is in at least half
+    // of its table scores ~1e-6 whatever the match. Two such rows were already pinned to -1 by
+    // within-source normalization; a single one was banded -0.25 and sank below every event.
+    it('scores a lone row at the clamped-IDF scale like a multi-row best, not as grazing (#36)', () => {
+      const lone = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -2.2e-6 },
+      ];
+      normalizeCrossSourceScores(lone, 'source');
+      const pair = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -2.2e-6 },
+        { source: 'obs', score: -1.1e-6 },
+      ];
+      normalizeCrossSourceScores(pair, 'source');
+      expect(lone[2].score).toBe(-1);
+      expect(lone[2].score).toBe(pair[2].score);
+    });
+
+    it('still bands a weak lone row just above the clamped-IDF scale (#36 boundary)', () => {
+      const results = [
+        { source: 'obs', score: -10 },
+        { source: 'obs', score: -5 },
+        { source: 'event', score: -0.001 },
+      ];
+      normalizeCrossSourceScores(results, 'source');
+      expect(results[2].score).toBe(-0.25);
+    });
+
     // Audit 2026-07-17 L3: the CJK LIKE-fallback prompt rows carry score 0 — the
     // LOWEST confidence signal in the pipeline. The single-row clamp promoted a lone
     // 0-score row to the neutral mid, floating it above weakly-matched real FTS hits.

@@ -237,6 +237,18 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.18.0
+
+**One default changes, with a switch.** No schema change and no migration, so reverting
+everything is pinning `claude-mem-lite@6.17.1`.
+
+- **Last Session shows how the previous session ended even without a Done / Not done
+  report.** When the final reply has no such report, `Completed:` is its first 120
+  characters (markdown flattened) instead of empty; the /clear handoff labels it
+  `<session-summary source="last-reply">`. A report still takes precedence. A later reply
+  under 400 characters ("You're welcome!") does not replace an earlier one.
+  `CLAUDE_MEM_SUMMARY_TAIL=0` restores the previous behaviour.
+
 ## Upgrading to 6.17.0
 
 **Two defaults change; one has a switch.** No schema change and no migration, so reverting

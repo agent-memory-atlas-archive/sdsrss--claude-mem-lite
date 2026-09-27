@@ -199,6 +199,16 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.18.0
+
+**一处默认行为改变，有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定
+`claude-mem-lite@6.17.1`。
+
+- **没有 Done / Not done 报告时，Last Session 也能说明上次会话是怎么结束的。** 最终回复不带这类
+  报告时，`Completed:` 取该回复的前 120 个字符（去掉 markdown 标记），不再是空的；/clear 交接里
+  标为 `<session-summary source="last-reply">`。有报告时仍以报告为准。之后不足 400 字符的回复
+  （如“不客气！”）不会替换之前那一条。设 `CLAUDE_MEM_SUMMARY_TAIL=0` 恢复旧行为。
+
 ## 升级到 6.17.0
 
 **两处默认行为改变，其中一处有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定

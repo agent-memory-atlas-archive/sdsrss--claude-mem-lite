@@ -801,14 +801,16 @@ async function main() {
             ...items.map((e) => e.text),
           ].join('\n'),
         );
-        // Book the items whose HEAD line reached the model (D#108). Not "shown whole": this is
-        // the first block in the handler's budget, so an item the cap cut is cut the same way on
-        // every re-injection — booking only whole items re-sent a too-long item (~9.6K chars)
-        // on every prompt naming it, uncharged (pre-tag review P2-1). An item whose head was
-        // dropped too was never shown, and stays unbooked so a later prompt can deliver it.
+        // Which items to book (D#108). The FIRST item is booked once its head line reached the
+        // model: this is the first block in the handler's budget, so a first item the cap cut is
+        // cut the same way on every re-injection, and booking only whole items re-sent a
+        // too-long one (~9.6K chars) on every prompt naming it, uncharged (pre-tag review P2-1).
+        // Every LATER item must be shown whole: its cut depends on the siblings ahead of it, so
+        // named alone it may fit, and booking it on its head suppressed its unseen tail
+        // (pre-tag delta review P3-1).
         const shownIds = idsShownWhole(
           shown,
-          items.map((e) => ({ id: e.id, text: e.text.split('\n')[0] })),
+          items.map((e, i) => (i === 0 ? { id: e.id, text: e.text.split('\n')[0] } : e)),
         );
         // Merge into the dedup file so a re-referencing prompt within the stale
         // window skips re-injection. A later FTS-path write replaces ids wholesale

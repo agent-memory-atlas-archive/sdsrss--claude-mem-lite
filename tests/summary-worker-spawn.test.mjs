@@ -26,7 +26,7 @@ function sleep(ms) {
 
 /**
  * Wait until no process still names this sandbox. The worker's argv carries the project
- * name, which is derived from the sandbox dir's basename (`mem-d95-XXXX--proj`), while the
+ * name, which is derived from the sandbox dir's basename (`mem-sumworker-XXXX--proj`), while the
  * full root appears only in its ENV, which `pgrep -f` does not read (pre-ship review P3-4).
  */
 async function quiesce(root) {
@@ -91,7 +91,7 @@ async function stopInSandbox(extraEnv) {
     input: JSON.stringify({ session_id: 'cc-d95', transcript_path: join(root, 'none.jsonl') }),
   });
   expect(r.status, r.stderr).toBe(0);
-  // The worker is detached; give it the time the opted-in arm needs to write its row.
+  // The worker is detached; give it the time the default arm needs to write its row.
   for (let i = 0; i < 60 && summaryWorkerRows(data).length === 0; i++) await sleep(100);
   await quiesce(root);
   return summaryWorkerRows(data);

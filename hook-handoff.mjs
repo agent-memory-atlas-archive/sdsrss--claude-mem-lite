@@ -1059,8 +1059,8 @@ function renderHandoffFromRow(handoff, db, project) {
     }
     if (summary && (summary.completed || summary.next_steps || summary.remaining_items)) {
       lines.push('');
-      // Provenance from the row's own tag, not a constant: it read "haiku" on every row, and
-      // since D#95 the model summary is opt-in, so most rows are the Stop report extract.
+      // Provenance of the Done text from the row's own tag, not a constant: it read "haiku" on
+      // every row, including rows whose Done came from the Stop report or observation titles.
       lines.push(`<session-summary source="${summarySourceLabel(summary.notes)}">`);
       // Defang: these come from session_summaries, populated by Haiku OR by
       // extractStructuredSummary over the assistant transcript tail — replayed text that can

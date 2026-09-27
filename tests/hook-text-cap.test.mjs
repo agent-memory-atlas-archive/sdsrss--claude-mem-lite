@@ -398,6 +398,26 @@ describe('only what the cap kept is booked as delivered (D#108)', () => {
       expect(booked).not.toContain(`D${small}`);
     });
 
+    // Pre-tag delta review P3-1: "cut the same way every time" holds for the FIRST item only.
+    // A later item cut by the sibling ahead of it fits whole on its own, so booking it on its
+    // head suppressed its unseen tail when it was named alone.
+    it('a later D# item cut by a sibling stays unbooked, and is delivered when named alone', () => {
+      const sb = sandbox('dsib');
+      const lines = (n, tag) =>
+        Array.from({ length: n }, (_, i) => `${tag} line ${i} ${'q'.repeat(85)}`).join('\n');
+      const a = sb.deferWithDetail('First sibling item', lines(55, 'a'));
+      const b = sb.deferWithDetail('Second sibling item', lines(65, 'b'));
+      const r = sb.ups('cc-dsib', `D#${a} and D#${b} please`);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain('Second sibling item'); // premise: B's head was shown…
+      expect(r.stdout).not.toContain('b line 64 '); // …and its tail was cut
+      const booked = sb.markerIds('cc-dsib');
+      expect(booked).toContain(`D${a}`);
+      expect(booked).not.toContain(`D${b}`);
+      const alone = sb.ups('cc-dsib', `ok continue with D#${b} now`);
+      expect(alone.stdout).toContain('b line 64 '); // delivered whole on its own
+    });
+
     // The case the all-dropped one above cannot see: with nothing shown the booking block is
     // skipped whole, so booking every candidate instead of the shown ones stays green there.
     //

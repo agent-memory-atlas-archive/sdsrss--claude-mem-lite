@@ -916,9 +916,9 @@ describe('renderHandoffInjection', () => {
     expect(result).toContain('</session-summary>');
   });
 
-  // Pre-ship review P3-7: the tag said source="haiku" on every row, and since D#95 the model
-  // summary is opt-in, so most rows are the Stop report extract. The label comes from the
-  // row's own notes tag now.
+  // Pre-ship review P3-7: the tag said source="haiku" on every row, including rows whose Done
+  // came from the Stop report or observation titles. The label comes from the row's own notes
+  // tag now, and names who wrote the Done text.
   it('labels the session summary with the provenance its notes record', () => {
     db.prepare(
       `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)

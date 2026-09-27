@@ -60,7 +60,7 @@
 - **Episode 批处理** -- 将相关文件操作分组为连贯的 episode，再进行 LLM 编码
 - **错误触发回忆** -- Bash 出错时自动搜索记忆，浮现相关的历史修复方案
 - **主动文件历史** -- 编辑文件时，自动显示该文件相关的历史观察记录
-- **会话摘要** -- 每次 Stop 时写入（助手最终回复带 Done / Not done 段落时取其内容，否则取最终回复的前 120 个字符，再否则取首条提示和最近的 observation 标题），会话有 observation 时再由后台模型摘要升级
+- **会话摘要** -- 每次 Stop 时写入（助手最终回复带 Done / Not done 段落时取其内容，否则——最终回复里没有任何报告段落时——取其前 120 个字符，再否则取首条提示和最近的 observation 标题），会话有 observation 时再由后台模型摘要升级
 - **项目作用域上下文** -- 将最近的记忆注入 `CLAUDE.md` 和会话启动上下文
 - **观察类型** -- 分类为 `decision`、`bugfix`、`feature`、`refactor`、`discovery` 或 `change`
 - **重要度分级** -- LLM 为每条观察分配 1-3 级重要度（日常/关注/关键）
@@ -201,13 +201,15 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
 
 ## 升级到 6.18.0
 
-**一处默认行为改变，有开关。** 没有 schema 变更、不需要迁移，全部回退只需固定
-`claude-mem-lite@6.17.1`。
+**一处默认行为改变，有开关。** 没有 schema 变更、不需要迁移。固定 `claude-mem-lite@6.17.1`
+后不再写新的这一行；已经写入的那一行会保留到该会话下一次有 observation 标题时被替换，6.17.1
+会把它不认识的标签当作普通文本留在该行的 `notes` 里。
 
-- **没有 Done / Not done 报告时，Last Session 也能说明上次会话是怎么结束的。** 最终回复不带这类
-  报告时，`Completed:` 取该回复的前 120 个字符（去掉 markdown 标记），不再是空的；/clear 交接里
-  标为 `<session-summary source="last-reply">`。有报告时仍以报告为准。之后不足 400 字符的回复
-  （如“不客气！”）不会替换之前那一条。设 `CLAUDE_MEM_SUMMARY_TAIL=0` 恢复旧行为。
+- **没有报告时，Last Session 也能说明上次会话是怎么结束的。** 最终回复里没有 Done / Not done /
+  Failed / Uncertain 段落时，`Completed:` 取该回复的前 120 个字符（去掉 markdown 标记），原先这里
+  是 observation 标题，而它通常是空的；/clear 交接里标为 `<session-summary source="last-reply">`。
+  有报告或模型摘要时仍以它们为准。之后不足 400 字符的回复（如“不客气！”）不会替换之前那一条。
+  设 `CLAUDE_MEM_SUMMARY_TAIL=0` 恢复为 observation 标题，进行中的会话也会生效。
 
 ## 升级到 6.17.0
 

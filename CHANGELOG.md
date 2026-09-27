@@ -2,6 +2,41 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.17.1 — fixes from the v6.17.0 pre-tag review
+
+**Upgrade note.** Fixes only; no schema change, no migration, no new setting. Reverting is
+pinning `claude-mem-lite@6.17.0`.
+
+- **`CLAUDE_MEM_SALIENCE=verdict` now says it overrides the adopted memory guidance.** Under
+  `verdict` the pre-edit line asks for `'#NN applied'` / `'#NN n/a — <reason>'` on every
+  lesson, while the CLAUDE.md managed row and the detail doc that 6.17.0 wrote into adopted
+  projects say a lesson that did not apply needs no mention. The agent got both with nothing
+  saying which wins; the verdict line now says it does. The default line, the `bind` and
+  `bridge` arms' lines (efficacy-harness arms, whose wording stays fixed) and the adopted text
+  are unchanged.
+- **Fix: Key Context rows whose title or lesson carries a block-delimiter tag were shown but
+  not recorded as injected.** The SessionStart / PreCompact output defangs such a tag (for
+  example `</memory-context>` becomes `/memory-context`), but the record of which rows were
+  shown kept the original line, so the row failed the "shown whole" match. It was then
+  re-injected at prompt time and missed by Stop's citation credit. Two rarer shapes still
+  leave a shown row unrecorded, as before: an unclosed tag whose attribute text runs on to a
+  later row's `>` (the rows at both ends), and 32 or more nested forged tags, where the
+  defang strips every `<` / `>` (any shown row containing one). On the maintainer's database
+  0 of 178 live importance ≥2 rows carry a tag (2026-09-27).
+- **Fix: `doctor` said "update pending" for the version you already run.** In plugin mode
+  nothing clears the cached update flag once Claude Code has applied the update; the
+  SessionStart banner already checked it against the running version (#35), and `doctor` now
+  asks the same check.
+- **Fix: `defer list` / `mem_defer_list` told you to raise the limit on a page already at the
+  maximum** (100 on the CLI, 50 over MCP). At the maximum the line now says the page is the
+  largest and that the rows left out are the ones that sort last (lowest priority, then
+  newest). SessionStart's "+N more open" line had the same flaw past 50 open items (the MCP
+  maximum): it now names `defer list --limit 100`, and past 100 says that lists the first
+  100. Up to 50 open items the line is unchanged.
+- **Tests:** two suites stopped leaving a directory in the temp dir on every run
+  (`mem-scenario-*`, `stop-fallback-*`): a background worker started by the hook under test
+  recreated the fixture after cleanup. Tests do not ship.
+
 ## v6.17.0 — the pre-edit lesson line stops asking for a verdict on every lesson
 
 **Upgrade note.** No schema change and no migration. Two default behaviours change; one has a

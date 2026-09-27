@@ -1252,7 +1252,7 @@ server.registerTool(
     for (const r of list) {
       lines.push(formatDeferListRow(r));
     }
-    const moreHint = formatDeferMoreHint(list, 'pass a larger limit (max 50)');
+    const moreHint = formatDeferMoreHint(list, 'pass a larger limit (max 50)', 50);
     if (moreHint) lines.push(moreHint);
     const staleHint = formatDeferStaleHint(countStaleOpen(db, project));
     if (staleHint) lines.push(staleHint);

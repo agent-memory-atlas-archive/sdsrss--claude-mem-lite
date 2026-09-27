@@ -41,6 +41,7 @@
 //      tests/global-setup.mjs reaps it even if the run is SIGKILL'd.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { insertDeferred } from '../lib/deferred-work.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { mkdtempSync, mkdirSync, rmSync } from 'fs';
@@ -420,6 +421,17 @@ describe('MCP feature sweep: public tools', () => {
     expect(paged).toContain('Split the retry helper out of transport');
     expect(paged).not.toContain('Document the backoff ceiling');
     expect(paged).toContain('1 more open item not shown — pass a larger limit (max 50)');
+
+    // At the largest page the reader cannot raise the limit, so the line must not tell them
+    // to (D#115 P3-7). Seeded straight into the DB: 51 tool calls would be the slow part.
+    const PMAX = 'mcpsweep-deferlist-max';
+    withDb((db) => {
+      for (let i = 1; i <= 51; i++) insertDeferred(db, { project: PMAX, title: `max page item ${i}` });
+    });
+    const full = await call('mem_defer_list', { project: PMAX, limit: 50 });
+    expect(full.match(/max page item \d+/g), 'premise: the page holds 50 rows').toHaveLength(50);
+    expect(full).toContain('1 more open item not shown — this is already the largest page (50)');
+    expect(full).not.toContain('pass a larger limit');
   });
 
   itTool('mem_defer_drop', async () => {

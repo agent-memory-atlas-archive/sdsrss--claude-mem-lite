@@ -1464,7 +1464,7 @@ function cmdDeferList(db, args) {
   for (const r of list) {
     out(`  ${formatDeferListRow(r)}`);
   }
-  const moreHint = formatDeferMoreHint(list, 'raise --limit (max 100)');
+  const moreHint = formatDeferMoreHint(list, 'raise --limit (max 100)', 100);
   if (moreHint) out(`  ${moreHint}`);
   const staleHint = formatDeferStaleHint(countStaleOpen(db, project));
   if (staleHint) out(`  ${staleHint}`);

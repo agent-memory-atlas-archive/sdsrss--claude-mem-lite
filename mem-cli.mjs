@@ -1825,7 +1825,14 @@ function cmdContext(db, args) {
     // produce (the CLI twin of why <skill-loaded> is excluded from CONTEXT_DELIMITER_RE).
     // The untrusted half is already neutralized one layer up: buildSessionContextLines
     // defangs every row it renders, so only the trusted wrapper is written raw here.
-    outVerbatim(`<claude-mem-context>\n${block}\n</claude-mem-context>`);
+    const wrapped = `<claude-mem-context>\n${block}\n</claude-mem-context>`;
+    outVerbatim(wrapped);
+    if (flags.chars) {
+      // stderr, so stdout stays byte-for-byte the block. This is the <claude-mem-context>
+      // part only: SessionStart also prepends the startup dashboard to the same field, and
+      // lib/hook-text-cap.mjs trims the whole field at the cap.
+      process.stderr.write(`[mem] context: ${wrapped.length} characters (hook cap ${HOOK_TEXT_CAP})\n`);
+    }
   }
 }
 
@@ -3273,7 +3280,7 @@ Commands:
                           daily_activity,data_health,tier_distribution})
                         or quality shape when --quality --json combined
 
-  context               Show current CLAUDE.md context block
+  context               Show the SessionStart context block (--chars: its size vs the hook cap, on stderr)
     --json              Output as structured JSON
 
   browse                Tier-grouped memory dashboard
@@ -3623,6 +3630,7 @@ import { cmdActivity } from './cli/activity.mjs';
 import { cmdVerifyApply } from './cli/verify-apply.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
+import { HOOK_TEXT_CAP } from './lib/hook-text-cap.mjs';
 // ─── Main Entry Point ────────────────────────────────────────────────────────
 
 /**

@@ -326,6 +326,7 @@ export const KNOWN_CLI_FLAGS = new Set([
   'benchmark',
   'body',
   'branch',
+  'chars',
   'closes-deferred',
   'concepts',
   'confirm',
@@ -427,6 +428,7 @@ export const KNOWN_CLI_FLAGS = new Set([
  */
 export const COMMAND_SCOPED_FLAGS = new Map([
   ['apply', 'verify-apply'],
+  ['chars', 'context'],
   ['digest', 'verify-apply'],
   ['print-project', 'verify-apply'],
   ['undo', 'verify-apply'],

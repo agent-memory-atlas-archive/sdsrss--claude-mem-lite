@@ -81,6 +81,8 @@ export const SOURCE_FILES = [
   'lib/stats-quality.mjs',
   'lib/low-signal-patterns.mjs',
   'lib/private-strip.mjs',
+  // Which writer produced an observation (explicit save vs machine-written); search + get marks.
+  'lib/provenance.mjs',
   'lib/citation-tracker.mjs',
   // v3.47 (D#78 P1): per-(obs,file) edge attribution. Imported by hook.mjs
   // (handleStop edge resolution). Missing from manifest → tarball hook.mjs

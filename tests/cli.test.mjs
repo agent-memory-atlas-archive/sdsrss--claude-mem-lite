@@ -733,6 +733,19 @@ describe('CLI get command', () => {
     expect(output).toContain('Second observation');
   });
 
+  it('names a machine-written row in its header and leaves an explicit save unmarked', async () => {
+    insertSession(testDb, { id: 'manual-test--project', project: 'test--project' });
+    insertObs(testDb, {
+      sessionId: 'manual-test--project',
+      project: 'test--project',
+      title: 'Saved on purpose',
+    });
+    insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', title: 'Captured by the hook' });
+    const lines = (await captureStdout(() => run(['get', '1,2']))).split('\n');
+    expect(lines.find((l) => l.startsWith('#1 ['))).toMatch(/^#1 \[discovery\] \S+$/);
+    expect(lines.find((l) => l.startsWith('#2 ['))).toMatch(/ · 🤖 auto-written, not an explicit save$/);
+  });
+
   it('shows "No records found" for non-existent ID', async () => {
     const output = await captureStdout(() => run(['get', '9999']));
     expect(output).toMatch(/No records found.*\[obs\]/);

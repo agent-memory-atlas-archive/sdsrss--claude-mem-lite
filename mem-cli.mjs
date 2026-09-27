@@ -25,7 +25,7 @@ import { resolveProject } from './project-utils.mjs';
 import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
-import { AUTO_HEADER, AUTO_LEGEND, AUTO_MARK } from './format-utils.mjs';
+import { autoHeaderNote, autoLegend, autoTag } from './lib/provenance.mjs';
 import {
   fetchObsDetail,
   fetchPromptDetail,
@@ -120,7 +120,6 @@ import {
   saveWithClosures,
   formatSupersedeSkipped,
   formatSupersededNote,
-  isAutoWritten,
 } from './lib/save-observation.mjs';
 import { normalizeScope, applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
@@ -590,7 +589,7 @@ async function cmdSearch(db, args, { llm } = {}) {
   // Pluralize on total — "Found 1 of 44 result" reads wrong; the population (44) drives
   // grammatical number, not the page slice (1).
   out(
-    `[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${queryLabel(query)}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${paged.some((r) => r.source === 'obs' && r.auto) ? AUTO_LEGEND : ''}`,
+    `[mem] Found ${countLabel} result${total !== 1 ? 's' : ''} for "${queryLabel(query)}"${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paged)}`,
   );
   // `~Nt` = est. tokens to fetch this row's full body via mem_get (attachBodyTokens, paired with
   // MCP). Conditional so a row that skipped enrichment renders cleanly, not "~undefinedt".
@@ -616,7 +615,7 @@ async function cmdSearch(db, args, { llm } = {}) {
     } else {
       const date = fmtDateShort(r.created_at);
       const title = truncate(r.title || r.subtitle || '(untitled)', 80);
-      out(`#${r.id} ${typeIcon(r.type)}${r.auto ? ` ${AUTO_MARK}` : ''} ${date}${timeStr} ${title}${tok(r)}`);
+      out(`#${r.id} ${typeIcon(r.type)}${autoTag(r)} ${date}${timeStr} ${title}${tok(r)}`);
       if (r.lesson_learned) {
         out(`  -> ${truncate(r.lesson_learned, 80)}`);
       }
@@ -795,9 +794,7 @@ function renderObsRows(db, ids, requestedFields) {
   const fields = requestedFields || OBS_FIELDS;
   const parts = [];
   for (const r of rows) {
-    const lines = [
-      `#${r.id} [${r.type}] ${fmtDateShort(r.created_at)}${isAutoWritten(r.memory_session_id) ? ` · ${AUTO_HEADER}` : ''}`,
-    ];
+    const lines = [`#${r.id} [${r.type}] ${fmtDateShort(r.created_at)}${autoHeaderNote(r)}`];
     // Retraction first (shared with mem_get via get-core) — see supersededNotice.
     const retracted = supersededNotice(r);
     if (retracted) lines.push(retracted);

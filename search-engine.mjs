@@ -70,7 +70,8 @@ export function buildObsFtsQuery(scoring, { multiplier, withSnippet, withOffset,
     SELECT o.id, o.type, o.title, o.subtitle, o.project, o.created_at, o.created_at_epoch, o.importance,
            o.files_modified, o.lesson_learned,
            ${withSnippet ? "snippet(observations_fts, 2, '»', '«', '…', 10) as match_snippet," : ''}
-           ${scoreExpr}${mult} as score
+           ${scoreExpr}${mult} as score,
+           ${OBS_BM25} as raw_bm25
     FROM observations_fts
     JOIN observations o ON observations_fts.rowid = o.id
     WHERE observations_fts MATCH ?
@@ -360,6 +361,9 @@ export function ftsRowToResult(r, { scoreMultiplier, snippet } = {}) {
     created_at: r.created_at,
     created_at_epoch: r.created_at_epoch,
     score: scoreMultiplier ? r.score * scoreMultiplier : r.score,
+    // bm25 before FULL_SCORE's multipliers, which can shrink it 50x: only this can say whether
+    // FTS5 clamped the IDF (normalizeCrossSourceScores, CLAMPED_IDF_SCALE).
+    rawScore: r.raw_bm25,
     files_modified: r.files_modified,
     importance: r.importance,
     lesson_learned: r.lesson_learned,

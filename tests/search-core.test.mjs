@@ -341,14 +341,14 @@ describe('search-core', () => {
       const lone = [
         { source: 'event', score: -0.8 },
         { source: 'event', score: -0.6 },
-        { source: 'obs', score: -2.2e-6 },
+        { source: 'obs', score: -4.4e-6, rawScore: -2.2e-6 },
       ];
       normalizeCrossSourceScores(lone, 'source');
       const pair = [
         { source: 'event', score: -0.8 },
         { source: 'event', score: -0.6 },
-        { source: 'obs', score: -2.2e-6 },
-        { source: 'obs', score: -1.1e-6 },
+        { source: 'obs', score: -4.4e-6, rawScore: -2.2e-6 },
+        { source: 'obs', score: -2.2e-6, rawScore: -1.1e-6 },
       ];
       normalizeCrossSourceScores(pair, 'source');
       expect(lone[2].score).toBe(-1);
@@ -359,7 +359,30 @@ describe('search-core', () => {
       const results = [
         { source: 'obs', score: -10 },
         { source: 'obs', score: -5 },
-        { source: 'event', score: -0.001 },
+        { source: 'event', score: -2e-4 },
+      ];
+      normalizeCrossSourceScores(results, 'source');
+      expect(results[2].score).toBe(-0.25);
+    });
+
+    // v6.19.0 pre-tag review P3-3: FULL_SCORE's multipliers shrink an obs row down to 0.02x,
+    // so a demoted row whose IDF is informative (0.18) scored 1.35e-4 and, tested on its
+    // final score, went from last to first. Its raw bm25 is far above the clamp.
+    it('bands a demoted lone obs by its final score when its raw bm25 is not clamped', () => {
+      const results = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -1.35e-5, rawScore: -6.8e-4 },
+      ];
+      normalizeCrossSourceScores(results, 'source');
+      expect(results[2].score).toBe(-0.25);
+    });
+
+    it('keeps the bands for a lone obs row that carries no raw bm25', () => {
+      const results = [
+        { source: 'event', score: -0.8 },
+        { source: 'event', score: -0.6 },
+        { source: 'obs', score: -2e-6 },
       ];
       normalizeCrossSourceScores(results, 'source');
       expect(results[2].score).toBe(-0.25);

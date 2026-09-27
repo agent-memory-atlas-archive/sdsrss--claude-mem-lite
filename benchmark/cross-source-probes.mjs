@@ -127,13 +127,15 @@ export function runCrossSourceProbes({ normalize = normalizeCrossSourceScores } 
 
   // ⑫ #36: a lone hit at FTS5's clamped-IDF scale carries no magnitude, so it is scored like
   // a multi-hit source's best (−1), not banded as a grazing match (−0.25).
-  probe('lone-clamped-idf-scored-like-multi-hit-best', { event: [-0.8, -0.6], obs: [-2e-6] }, (r) => {
-    const o = r.find((x) => x.source === 'obs');
-    return { pass: o.score === -1, detail: `obs=${o.score}` };
+  // (An obs row is tested on its raw bm25, rawScore, which these rows do not carry; the event
+  // leg is tested on its score.)
+  probe('lone-clamped-idf-scored-like-multi-hit-best', { obs: [-0.8, -0.6], event: [-2e-6] }, (r) => {
+    const e = r.find((x) => x.source === 'event');
+    return { pass: e.score === -1, detail: `event=${e.score}` };
   });
 
   // ⑬ Just above the clamp scale the ratio bands apply as before.
-  probe('lone-above-clamp-scale-still-banded', { obs: [-10, -5], event: [-0.002] }, (r) => {
+  probe('lone-above-clamp-scale-still-banded', { obs: [-10, -5], event: [-2e-4] }, (r) => {
     const e = r.find((x) => x.source === 'event');
     return { pass: e.score === -0.25, detail: `event=${e.score}` };
   });

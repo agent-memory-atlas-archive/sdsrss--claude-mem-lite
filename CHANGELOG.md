@@ -2,6 +2,50 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.16.0 — injected memory stays within the host's 10,000-character limit, and two recall wordings run side by side
+
+**Upgrade note.** No schema change and no migration. Three default behaviours change; one has
+an off switch, and reverting everything is pinning `claude-mem-lite@6.15.0`:
+
+| Change | Off switch |
+|---|---|
+| Each session gets one of two first lines on a PreToolUse / PostToolUse recall block: the old "system-injected context, continue your planned action" or a plain statement of where the notes come from | `CLAUDE_MEM_RECALL_FRAMING=legacy` |
+| Memory text over the host's 10,000-character hook limit is trimmed by whole lines, with a footer naming the dropped ids, instead of being replaced by the host with a 2,000-character preview | — (pin 6.15.0) |
+| Lessons shown after a failed Bash command now count in citation decay like every other face: ids surfaced there and never cited are demoted over time | — (pin 6.15.0) |
+
+- **Injected memory no longer collapses to a preview when it runs long.** Claude Code caps a
+  hook's injected text at 10,000 characters; over that it saves the text to a file and gives
+  the model the first 2,000 characters, and does not ask it to read the rest. Nothing bounded
+  our output: naming a deferred item with a long detail in a prompt injected 32,958
+  characters. Every surface that injects text now trims by whole lines to fit (a single line
+  longer than the limit is cut at a word boundary and ends in `…`), re-closes a tagged block
+  it cut, and ends with a line naming the ids it dropped. Known gap: rows trimmed this way are
+  still recorded as injected for de-duplication (D#108).
+- **The recall framing line is now an experiment, not a fixed string.** Claude Code's hooks
+  reference asks for injected context written as factual statements, because text framed as
+  out-of-band system commands can trigger the model's prompt-injection defenses. The old line
+  was added to stop the model ending its turn after a reminder, and PreToolUse is the
+  best-cited surface, so the wording is compared rather than swapped: each session is assigned
+  one of the two lines by a hash of its id. `node benchmark/citation-live-replay.mjs --since
+  <date> --by-framing` compares their cite-rates from your own transcripts.
+- **Fix: error recall delivered on a failed command was invisible to citation decay.** Hints
+  shown through PostToolUseFailure (where the host sends a failed Bash call) were never matched
+  by the citation extractor, so those ids could neither be promoted nor demoted, and every
+  cite-rate report missed them. On the maintainer's transcripts: error_recall pairs 703 -> 823.
+  **Caliber break:** every earlier error_recall cite-rate figure (citation-stats, the live
+  replay) counted only PostToolUse delivery; do not compare it with one taken after upgrading.
+- **`claude-mem-lite context --chars`** prints the context block's size against the 10,000
+  limit on stderr.
+- The plugin description no longer advertises the TF-IDF search arm removed in 6.0.0.
+
+Also measured and not shipped (details in `docs/measurement/rulers.md`): indexing the parts of
+camelCase identifiers took an identifier-part query suite from 0 to full recall but cost
+0.0385 precision@10 on the benchmark gate, above its 1/n tolerance, and was reverted; two
+non-citation adoption signals were counted and not built (one surface below 200 decidable
+pairs; on the other, 8 pairs where only the new signal fired, all test re-runs crediting
+every id in the block). `benchmark/cutoff-reach-probe.mjs` counts what file recall's 60-day
+cut removes; it first applies on 2026-11-04.
+
 ## v6.15.0 — a lesson copied from tool output no longer reaches your context, and your own reports win Last Session
 
 **Upgrade note.** No schema change and no migration. Two default behaviours change; one has an

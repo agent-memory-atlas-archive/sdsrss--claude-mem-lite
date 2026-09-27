@@ -237,6 +237,22 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.16.0
+
+**Three defaults change; one has an off switch.** No schema change and no migration, so
+reverting everything is pinning `claude-mem-lite@6.15.0`.
+
+- **Each session gets one of two first lines on a file-recall block.** Half of sessions keep
+  "system-injected context, continue your planned action"; the other half get a plain
+  statement of where the notes come from, as Claude Code's hooks guide recommends. The two
+  are compared by cite-rate before one becomes the default. Off (old line everywhere):
+  `CLAUDE_MEM_RECALL_FRAMING=legacy`.
+- **Memory text longer than the host's 10,000-character hook limit is trimmed by whole
+  lines**, with a closing line naming the ids left out, instead of the host replacing it with
+  a 2,000-character preview. No switch; pin 6.15.0 to revert.
+- **Lessons shown after a failed Bash command now count in citation decay**, like every other
+  surface: ones never cited are ranked down over time. No switch; pin 6.15.0 to revert.
+
 ## Upgrading to 6.15.0
 
 **Two defaults change; one has an off switch.** No schema change and no migration, so

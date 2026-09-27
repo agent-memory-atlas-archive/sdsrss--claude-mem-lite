@@ -346,7 +346,9 @@ describe('only what the cap kept is booked as delivered (D#108)', () => {
       const booked = sb.markerIds('cc-book-a');
       for (const id of obsIds)
         expect(booked, `#${id} was dropped by the cap but booked`).not.toContain(String(id));
-      expect(booked, 'the D# item was cut short, so it is not booked either').not.toContain(`D${did}`);
+      // The D# item's head was shown and its detail cut: booked, because a re-injection is cut
+      // the same way — it is the first block in the budget (pre-tag review P2-1).
+      expect(booked, 'a D# item shown up to the cap is booked').toContain(`D${did}`);
       expect(sb.injectionCounts(obsIds)).toEqual([0, 0, 0]);
 
       // Premise for the NO above: without the D# block the same rows are shown and booked,
@@ -357,6 +359,43 @@ describe('only what the cap kept is booked as delivered (D#108)', () => {
       expect(shownIds.length).toBeGreaterThan(0);
       expect(sb.markerIds('cc-book-b')).toEqual(expect.arrayContaining(shownIds.map(String)));
       expect(sb.injectionCounts(shownIds).every((c) => c === 1)).toBe(true);
+    });
+
+    // Pre-tag review P2-1: an item whose detail alone exceeds the budget can never be shown
+    // whole. Booking only whole items left it unbooked, so every prompt naming it re-sent the
+    // same ~9.6K cut block, uncharged against the per-session cap.
+    it('a D# item too long to ever fit is injected once per dedup window, not on every prompt', () => {
+      const sb = sandbox('dloop');
+      const detail = rows(320)
+        .map((l) => `item ${l.slice(2)}`)
+        .join('\n');
+      const did = sb.deferWithDetail('Overflowing deferred item', detail);
+      const first = sb.ups('cc-dloop', `please pick up D#${did} now`);
+      expect(first.status, first.stderr).toBe(0);
+      expect(first.stdout).toContain(`D#${did}`); // premise: injected, and cut
+      expect(first.stdout).toContain('not shown — hook output limit');
+      expect(sb.markerIds('cc-dloop')).toContain(`D${did}`);
+      const again = sb.ups('cc-dloop', `and D#${did} again please`);
+      expect(again.status, again.stderr).toBe(0);
+      expect(again.stdout).not.toContain(`D#${did}`);
+    });
+
+    it('a D# item whose head the cap dropped stays unbooked; the one shown is booked', () => {
+      const sb = sandbox('dpair');
+      const big = sb.deferWithDetail(
+        'Overflowing deferred item',
+        rows(320)
+          .map((l) => `item ${l.slice(2)}`)
+          .join('\n'),
+      );
+      const small = sb.deferWithDetail('Second referenced item', 'short detail');
+      const r = sb.ups('cc-dpair', `pick up D#${big} and D#${small}`);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`D#${big} `); // premise: the first item's head was shown
+      expect(r.stdout).not.toContain('Second referenced item'); // premise: the second was cut whole
+      const booked = sb.markerIds('cc-dpair');
+      expect(booked).toContain(`D${big}`);
+      expect(booked).not.toContain(`D${small}`);
     });
 
     // The case the all-dropped one above cannot see: with nothing shown the booking block is

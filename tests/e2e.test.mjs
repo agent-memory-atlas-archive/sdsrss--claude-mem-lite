@@ -486,15 +486,7 @@ describe('Suite 1: Full Session Lifecycle', () => {
     // its metric row reports what it received.
     runHook('session-start', { env: { HOME: tmpHome } });
     const sessionId = getSessionIdFromFile(tmpHome);
-    // The worker is opt-in since D#95; this case is about the epoch it is handed WHEN it runs.
-    runHook('stop', {
-      env: {
-        HOME: tmpHome,
-        CLAUDE_MEM_METRICS: '1',
-        CLAUDE_MEM_FLUSH_TIMEOUT: '0',
-        CLAUDE_MEM_LLM_SUMMARY: '1',
-      },
-    });
+    runHook('stop', { env: { HOME: tmpHome, CLAUDE_MEM_METRICS: '1', CLAUDE_MEM_FLUSH_TIMEOUT: '0' } });
 
     const metricsDir = join(tmpHome, '.claude-mem-lite', 'metrics');
     const workerRow = () => {

@@ -1,16 +1,14 @@
-// D#95: the background model session summary is opt-in.
+// The background model session summary runs by default; CLAUDE_MEM_SKIP_SUMMARY turns it off.
 //
-// The `llm-summary` worker ran after EVERY Stop (one per assistant turn) and on the
-// SessionStart /clear path, polled up to CLAUDE_MEM_FLUSH_TIMEOUT for flush files, then
-// summarised the session's OBSERVATIONS — a table the episode upgrade-delete empties. Measured
-// 2026-09-27: 24 worker runs / 5 sessions, outcome `no-obs` 24/24, zero model calls; D#95's
-// 7-day read found 4 of 157 hook sessions holding an observation. Last Session already comes
-// from the report extract written synchronously at Stop. CLAUDE_MEM_LLM_SUMMARY=1 restores
-// the worker; CLAUDE_MEM_SKIP_SUMMARY still wins (tests/bg-spawn-skip-flag-invariant).
+// D#95 made the worker opt-in (34a65cd) and that was reverted before release: the premise
+// "Last Session already comes from the Stop report" holds only when the assistant's final
+// reply carries Done / Not done sections (lib/summary-extractor.mjs). Without them the Stop
+// row is the first prompt + recent observation titles, and the worker's model summary is the
+// only prose summary that user gets. This pins the default so a future opt-in is a decision,
+// not an accident.
 //
 // Behavioural, two arms: the worker records one `summary_worker` metric row per exit
-// (CLAUDE_MEM_METRICS=1), so its absence under the default is a NO the opted-in arm shows
-// the ruler can turn into a YES.
+// (CLAUDE_MEM_METRICS=1), so the SKIP arm's NO is backed by the default arm's YES.
 
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync, execFileSync } from 'child_process';
@@ -18,10 +16,8 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, existsSync }
 import { tmpdir } from 'os';
 import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
-import { modelSummaryOptedIn } from '../lib/fast-summary.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-const HOOK_SRC = readFileSync(join(REPO, 'hook.mjs'), 'utf8');
 const roots = [];
 
 function sleep(ms) {
@@ -63,7 +59,7 @@ function summaryWorkerRows(data) {
 }
 
 async function stopInSandbox(extraEnv) {
-  const root = mkdtempSync(join(tmpdir(), 'mem-d95-'));
+  const root = mkdtempSync(join(tmpdir(), 'mem-sumworker-'));
   roots.push(root);
   const data = join(root, 'data');
   const cwd = join(root, 'proj');
@@ -101,40 +97,14 @@ async function stopInSandbox(extraEnv) {
   return summaryWorkerRows(data);
 }
 
-describe('D#95 — the model session summary is opt-in', () => {
-  it('modelSummaryOptedIn reads CLAUDE_MEM_LLM_SUMMARY, default off', () => {
-    expect(modelSummaryOptedIn({})).toBe(false);
-    expect(modelSummaryOptedIn({ CLAUDE_MEM_LLM_SUMMARY: '0' })).toBe(false);
-    for (const v of ['1', 'on', 'true', 'yes'])
-      expect(modelSummaryOptedIn({ CLAUDE_MEM_LLM_SUMMARY: v })).toBe(true);
-  });
-
-  it('premise: with CLAUDE_MEM_LLM_SUMMARY=1, Stop starts the worker (it records its outcome)', async () => {
-    const rows = await stopInSandbox({ CLAUDE_MEM_LLM_SUMMARY: '1' });
+describe('summary worker: on by default, off under CLAUDE_MEM_SKIP_SUMMARY', () => {
+  it('by default, Stop starts the worker (it records its outcome)', async () => {
+    const rows = await stopInSandbox({});
     expect(rows.length).toBe(1);
     expect(rows[0]).toContain('"outcome":"no-obs"');
   });
 
-  it('by default, Stop starts no summary worker', async () => {
-    expect(await stopInSandbox({})).toEqual([]);
-  });
-
-  it('both llm-summary spawn sites go through the one predicate', () => {
-    const lines = HOOK_SRC.split('\n');
-    const sites = lines
-      .map((l, i) => ({ l, i }))
-      .filter(({ l }) => /spawnBackground\(\s*'llm-summary'/.test(l) && !l.trim().startsWith('//'));
-    expect(sites.length).toBe(2);
-    for (const { i } of sites) {
-      const window = lines
-        .slice(Math.max(0, i - 4), i + 1)
-        .filter((l) => !/^\s*(\/\/|\*)/.test(l))
-        .join('\n');
-      // The exact conjunction: `!SKIP || modelSummaryOptedIn()` would carry both names and
-      // spawn by default (pre-ship review P3-5 — the /clear site has no behavioural arm).
-      expect(window, `hook.mjs:${i + 1}`).toContain(
-        '!process.env.CLAUDE_MEM_SKIP_SUMMARY && modelSummaryOptedIn()',
-      );
-    }
+  it('CLAUDE_MEM_SKIP_SUMMARY=1: Stop starts no summary worker', async () => {
+    expect(await stopInSandbox({ CLAUDE_MEM_SKIP_SUMMARY: '1' })).toEqual([]);
   });
 });

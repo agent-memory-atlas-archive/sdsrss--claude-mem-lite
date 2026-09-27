@@ -95,7 +95,6 @@ import {
   writeStopSummary,
   writeClearSummary,
   FAST_SUMMARY_LIMITS,
-  modelSummaryOptedIn,
 } from './lib/fast-summary.mjs';
 import { formatHookError } from './lib/native-binding-hint.mjs';
 import { recordHookError } from './lib/hook-telemetry.mjs';
@@ -1754,8 +1753,13 @@ async function handleStop() {
   // waits on, then recreates the sandbox tree behind the test's cleanup. Any
   // grace period for that is a race, not a barrier — the post-tag review timed a
   // recreate at 432ms and watched a 300ms grace lose.
-  // D#95: opt-in (CLAUDE_MEM_LLM_SUMMARY=1) — see modelSummaryOptedIn for the measurement.
-  if (!process.env.CLAUDE_MEM_SKIP_SUMMARY && modelSummaryOptedIn())
+  //
+  // D#95 made this opt-in in 34a65cd and was reverted before release: its premise ("Last
+  // Session already comes from the Stop report") holds only when the assistant's final reply
+  // carries Done / Not done sections (lib/summary-extractor.mjs). Without them the Stop row is
+  // the first prompt + recent observation titles, and this worker's model summary is the only
+  // prose summary such a user gets.
+  if (!process.env.CLAUDE_MEM_SKIP_SUMMARY)
     spawnBackground('llm-summary', sessionId, project, String(stopEpoch));
 
   // The session file deliberately SURVIVES Stop (R10-P1-1). It used to be unlinked here,
@@ -2293,14 +2297,13 @@ function saveHandoffAndFastSummary(
     // that llm-summary recreates a test's sandbox tree behind its cleanup — timed at
     // 432ms there. Gating one of two call sites left the flag unable to do the one job
     // it exists for whenever this branch is reached.
-    // Opt-in since D#95, through the same predicate as the Stop site.
-    if (!process.env.CLAUDE_MEM_SKIP_SUMMARY && modelSummaryOptedIn()) {
+    if (!process.env.CLAUDE_MEM_SKIP_SUMMARY) {
       spawnBackground('llm-summary', prevSessionId, prevProject || project);
     }
 
-    // Build fast synchronous summary for immediate context availability. When the model
-    // summary is opted in, the worker spawned above upgrades this same row in place later,
-    // without moving its timestamp; by default this row is the summary.
+    // Build fast synchronous summary for immediate context availability.
+    // The background llm-summary spawned above upgrades this same row in place later,
+    // without moving its timestamp.
     try {
       const { request: fastRequestRaw, completed: fastCompletedRaw } = readFastSummarySource(
         db,

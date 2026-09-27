@@ -71,8 +71,7 @@
 //      — the `hook.mjs session-start` case asserts that write landed in ITS sandbox dir, and
 //      afterAll asserts this repo's own CLAUDE.md is byte-identical.
 //   5. afterAll removes the sandbox in a `finally` (so a failing assertion cannot leak it),
-//      after a short grace period for any detached worker a hook spawned (Stop's llm-summary
-//      worker only when CLAUDE_MEM_LLM_SUMMARY=1, off here since D#95). The dir
+//      after a short grace period for the detached llm-summary worker Stop spawns. The dir
 //      prefix is `mem-` so tests/global-setup.mjs reaps it even after a SIGKILL.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -410,8 +409,8 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
-  // A detached worker (Stop's llm-summary one is opt-in since D#95) could recreate the data dir
-  // after rmSync (it would resolve CLAUDE_MEM_DIR and mkdir it); give any a moment to finish.
+  // The Stop handler spawns a detached llm-summary worker; give it a moment to finish so it
+  // cannot recreate the data dir after rmSync (it would resolve CLAUDE_MEM_DIR and mkdir it).
   await new Promise((r) => setTimeout(r, 500));
   try {
     // Isolation contract #4: no hook fire may have touched this repo's own CLAUDE.md.

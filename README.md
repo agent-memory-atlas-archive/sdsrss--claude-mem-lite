@@ -81,7 +81,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Episode batching** -- Groups related file operations into coherent episodes before LLM encoding
 - **Error-triggered recall** -- Automatically searches memory when Bash errors occur, surfacing relevant past fixes
 - **Proactive file history** -- When editing a file, automatically shows relevant past observations for that file
-- **Session summaries** -- written at every Stop from the assistant's own final report (no model call); the older background model summary is opt-in via `CLAUDE_MEM_LLM_SUMMARY=1`
+- **Session summaries** -- written at every Stop (the assistant's final report when it has Done / Not done sections, else the first prompt and recent observation titles), then upgraded by a background model summary when the session has observations
 - **Project-scoped context** -- Injects recent memory into `CLAUDE.md` and session startup for immediate context
 - **Observation types** -- Categorized as `decision`, `bugfix`, `feature`, `refactor`, `discovery`, or `change`
 - **Importance grading** -- LLM assigns 1-3 importance levels (routine / notable / critical) to each observation
@@ -575,7 +575,7 @@ lesson_learned, minhash_sig, access_count, compressed_into, search_aliases,
 branch, superseded_at, superseded_by, last_accessed_at
 ```
 
-**session_summaries** -- per-session summaries (report extract at Stop; model-written only when `CLAUDE_MEM_LLM_SUMMARY=1`)
+**session_summaries** -- per-session summaries (written at Stop, upgraded by the background model summary)
 ```
 id, memory_session_id, project, request, investigated,
 learned, completed, next_steps, files_read, files_edited, notes,
@@ -644,8 +644,8 @@ Stop
   -> Flush final episode buffer
   -> Save handoff snapshot (type 'exit')
   -> Mark session completed
-  -> Write the session summary from the assistant's final report (sync, no model call)
-  -> Spawn LLM summary worker (poll-based wait) -- only when CLAUDE_MEM_LLM_SUMMARY=1
+  -> Write the session summary row (sync, no model call)
+  -> Spawn LLM summary worker (poll-based wait)
   -> Keep the session file  <- Stop fires per TURN; deleting it here re-minted a mem
      session every turn and left the SessionStart /clear branch unreachable (v5.4.0)
 ```
@@ -1048,8 +1048,7 @@ what is already stored — only whether new work runs.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLAUDE_MEM_LLM_SUMMARY` | Opt in to the background model session summary (`1`). Off by default since 6.17.0: it summarised the session's observations, which episode extraction had usually already moved to events, so it ran every turn and almost never called the model. | _(off)_ |
-| `CLAUDE_MEM_SKIP_SUMMARY` | Skip the background LLM session summary at **both** of its spawn sites — `Stop`, and the SessionStart `/clear`-handoff path — even when `CLAUDE_MEM_LLM_SUMMARY=1`. Until v5.3.0 only the `Stop` one honoured it. | _(unset)_ |
+| `CLAUDE_MEM_SKIP_SUMMARY` | Skip the background LLM session summary at **both** of its spawn sites — `Stop`, and the SessionStart `/clear`-handoff path. Until v5.3.0 only the `Stop` one honoured it. | _(runs)_ |
 | `CLAUDE_MEM_LEGACY_STOP_UNLINK` | Restore the pre-v5.4.0 behaviour where `Stop` deletes the session file. Documented revert path for the session-lifecycle change, not a supported configuration: it re-mints a mem session per turn and makes the `/clear` handoff unreachable again. Only reach for it on a host that fires `Stop` once per session rather than once per turn. | _(file kept)_ |
 | `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush — observations are still batched, just not summarized. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SAVE_ENRICH` | Skip the background Haiku call that backfills `lesson_learned` / search aliases after a save. | _(runs)_ |

@@ -801,9 +801,15 @@ async function main() {
             ...items.map((e) => e.text),
           ].join('\n'),
         );
-        // Book only the items that reached the model whole (D#108). One the cap cut short is
-        // not booked, so naming it again re-injects it instead of being deduped as "seen".
-        const shownIds = idsShownWhole(shown, items);
+        // Book the items whose HEAD line reached the model (D#108). Not "shown whole": this is
+        // the first block in the handler's budget, so an item the cap cut is cut the same way on
+        // every re-injection — booking only whole items re-sent a too-long item (~9.6K chars)
+        // on every prompt naming it, uncharged (pre-tag review P2-1). An item whose head was
+        // dropped too was never shown, and stays unbooked so a later prompt can deliver it.
+        const shownIds = idsShownWhole(
+          shown,
+          items.map((e) => ({ id: e.id, text: e.text.split('\n')[0] })),
+        );
         // Merge into the dedup file so a re-referencing prompt within the stale
         // window skips re-injection. A later FTS-path write replaces ids wholesale
         // (accepted: worst case is one cheap re-injection after an obs-emitting

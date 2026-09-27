@@ -33,6 +33,8 @@ beforeEach(() => {
   // session_summaries.memory_session_id is an FK onto sdk_sessions: seed the parent or
   // every insert here fails on the constraint rather than on its subject.
   for (const id of ['s1', 's2', 's3', 's4']) insertSession(db, { id, project: 'p' });
+  for (const id of ['starWords', 'starRun', 'boldRun', 'openBold', 'openFence', 'pipes', 'starsOnly'])
+    insertSession(db, { id: `s-${id}`, project: 'p' });
 });
 afterEach(() => {
   try {
@@ -500,15 +502,10 @@ describe('one summary row per session', () => {
   });
 });
 
-// P3-6 (v6.13.5 third review): Stop spawns one model worker per turn, and two workers of
-// consecutive turns can finish out of order, so the older reply landed last and overwrote the
-// newer one's model fields. A worker now carries its Stop's epoch; sdk_sessions.completed_at_epoch
-// holds the session's LATEST Stop, and a worker whose Stop is older than that writes nothing —
-// the newer Stop's worker summarizes the newer window.
-// D#121: a session whose final reply carries no report (every session of a user without
-// that convention — 0/30 in docs/audits/20260927-d114-default-user-corpus.md) used to get
-// only its opening prompt as Last Session. Stop now keeps the head of the final reply as a
-// Done floor: report > model > tail > titles (tasks/specs/d121-tail-floor.md).
+// D#121: a session whose final reply carries no report (0/30 in the headless default-user
+// corpus, docs/audits/20260927-d114-default-user-corpus.md) had only its opening prompt and
+// observation titles, usually empty, as Last Session. Stop now keeps the head of the final
+// reply as a Done floor: report > model > tail > titles (tasks/specs/d121-tail-floor.md).
 describe('the final reply as a Done floor (D#121)', () => {
   const limits = FAST_SUMMARY_LIMITS.stop;
   const T = NOW.getTime();
@@ -638,6 +635,101 @@ describe('the final reply as a Done floor (D#121)', () => {
     expect(parseSummaryNotes(one('s1').notes).done).toBe('titles');
   });
 
+  // v6.18.0 pre-tag review: scrub the RAW reply before flattening or cutting it. Flattening
+  // rewrote characters inside a secret (`|` → space) and let its tail through; cutting first
+  // left a prefix too short for the pattern.
+  it('scrubs the raw reply first: a secret the flattening would split is still caught', () => {
+    stop('s1', { tail: 'Set the config: password=hunter2|Zq9xw7Lk and restart.' });
+    expect(one('s1').completed).not.toContain('Zq9xw7Lk');
+    expect(one('s1').completed).not.toContain('hunter2');
+  });
+
+  it('scrubs before the cut: a secret straddling the 120-char cut leaves no prefix', () => {
+    const secret = 'gh' + 'p_' + 'C'.repeat(36);
+    stop('s1', { tail: `${'word '.repeat(22)}${secret} and more text after it` });
+    const r = one('s1');
+    expect(r.completed.length).toBeLessThanOrEqual(TAIL_FLOOR_CHARS);
+    expect(r.completed).not.toContain('ghp_');
+  });
+
+  it('a reply that opens with a code block stores the prose after it', () => {
+    stop('s1', { tail: '```js\nconst secretPlan = 1;\n```\nI replaced the constant with a config read.' });
+    expect(one('s1').completed).toBe('I replaced the constant with a config read.');
+  });
+
+  it('keeps identifiers: dunder names, globs and emphasis-free asterisks', () => {
+    stop('s1', {
+      tail: 'Touched pkg/__init__.py, __tests__/a.test.mjs and __dirname; matched *.mjs and src/**/*.ts. **Done** now.',
+    });
+    expect(one('s1').completed).toBe(
+      'Touched pkg/__init__.py, __tests__/a.test.mjs and __dirname; matched *.mjs and src/**/*.ts. Done now.',
+    );
+  });
+
+  it('a Not-done-only or Failed-only reply is a report: no floor from it', () => {
+    stop(
+      's1',
+      { notDone: 'the schema migration', tail: 'Not done: the schema migration — blocked on AUTH.' },
+      '',
+    );
+    expect(one('s1').completed).toBe('');
+    stop('s2', { lines: 'Failed: build', tail: 'Failed: the build broke on the new flag.' }, 'some titles');
+    expect(one('s2').completed).toBe('some titles');
+    expect(parseSummaryNotes(one('s2').notes).done).toBe('titles');
+  });
+
+  it('the replace threshold is on the raw reply length, inclusive', () => {
+    stop('s1', { tail: REPLY });
+    stop('s1', { tail: 'B'.repeat(TAIL_MIN_REPLACE - 1) });
+    expect(one('s1').completed.startsWith('I fixed the parser')).toBe(true);
+    stop('s1', { tail: 'C'.repeat(TAIL_MIN_REPLACE) });
+    expect(one('s1').completed.startsWith('CCC')).toBe(true);
+    // A code-heavy reply flattens short but was long as written: it still replaces.
+    stop('s2', { tail: REPLY });
+    stop('s2', { tail: '```\n' + 'x'.repeat(TAIL_MIN_REPLACE) + '\n```\nApplied the patch above.' });
+    expect(one('s2').completed).toBe('Applied the patch above.');
+  });
+
+  // A model-created row with an empty Done is tagged titles already; the case the
+  // empty-Done clause exists for is a legacy row whose '' / 'llm' notes parse as model.
+  it('an empty Done takes the floor whatever its tag (legacy model-tagged row)', () => {
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, completed, notes, created_at, created_at_epoch)
+       VALUES ('s1', 'p', 'opening', '', 'llm', 'x', ?)`,
+    ).run(T);
+    expect(parseSummaryNotes(one('s1').notes).done, 'premise: parsed as model').toBe('model');
+    stop('s1', { tail: REPLY }, '');
+    expect(one('s1').completed.startsWith('I fixed the parser')).toBe(true);
+  });
+
+  it('turning CLAUDE_MEM_SUMMARY_TAIL=0 on mid-session lets titles replace an existing floor', () => {
+    stop('s1', { tail: REPLY }, 'old titles');
+    process.env.CLAUDE_MEM_SUMMARY_TAIL = '0';
+    stop('s1', { tail: SECOND }, 'new titles');
+    expect(one('s1').completed).toBe('new titles');
+    expect(parseSummaryNotes(one('s1').notes).done).toBe('titles');
+  });
+
+  // Stop runs this on every turn over text the model wrote, which can quote anything: each
+  // adversarial shape must stay linear. 200k chars ran in <= 13 ms locally (2026-09-27).
+  it('flattening stays fast on 200k-char adversarial shapes', () => {
+    const N = 200_000;
+    const shapes = {
+      starWords: '*a '.repeat(N / 3),
+      starRun: '*a'.repeat(N / 2),
+      boldRun: '**a'.repeat(N / 3),
+      openBold: '**' + 'a'.repeat(N),
+      openFence: '```' + 'x'.repeat(N),
+      pipes: '|a'.repeat(N / 2),
+      starsOnly: '*'.repeat(N),
+    };
+    for (const [name, text] of Object.entries(shapes)) {
+      const t0 = performance.now();
+      stop(`s-${name}`, { tail: text });
+      expect(performance.now() - t0, `${name} took too long`).toBeLessThan(1000);
+    }
+  });
+
   it('round-trips the tag and labels it last-reply for the handoff', () => {
     const p = { done: 'tail', left: 'other', lines: '' };
     expect(parseSummaryNotes(formatSummaryNotes(p))).toEqual(p);
@@ -645,6 +737,11 @@ describe('the final reply as a Done floor (D#121)', () => {
   });
 });
 
+// P3-6 (v6.13.5 third review): Stop spawns one model worker per turn, and two workers of
+// consecutive turns can finish out of order, so the older reply landed last and overwrote the
+// newer one's model fields. A worker now carries its Stop's epoch; sdk_sessions.completed_at_epoch
+// holds the session's LATEST Stop, and a worker whose Stop is older than that writes nothing —
+// the newer Stop's worker summarizes the newer window.
 describe('a model reply from a superseded Stop does not land (P3-6)', () => {
   const T = NOW.getTime();
   const setLatestStop = (sid, epoch) =>

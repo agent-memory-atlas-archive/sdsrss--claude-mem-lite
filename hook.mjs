@@ -1246,8 +1246,9 @@ function writeFastSummaryBaseline(db, { sessionId, project, transcriptPath }) {
   // Stop fires once per assistant TURN and the mem session survives it (R10-P1-1), so this
   // runs on every turn of a session. The first turn with anything to say INSERTs the row
   // (T4-P2-B's guard: never a second row); every later turn REFRESHES that row from its tail's
-  // report, or, without one, from the current observation titles where the row's Done is
-  // still titles (lib/fast-summary.mjs writeStopSummary). The guard alone used to stop there, so the
+  // report, or, without one, from the head of the final reply (D#121) or the current
+  // observation titles where the row's Done is still that grade (lib/fast-summary.mjs
+  // writeStopSummary). The guard alone used to stop there, so the
   // row kept the FIRST turn's report: over 7 days of this machine's transcripts (09:40Z), 20
   // of the 31 sessions that wrote §10 markers had a first-turn extract different from their
   // last report. Uses the mem-internal sessionId as the WHERE key per the top-of-file
@@ -1760,8 +1761,9 @@ async function handleStop() {
   // D#95 made this opt-in in 34a65cd and was reverted before release: its premise ("Last
   // Session already comes from the Stop report") holds only when the assistant's final reply
   // carries Done / Not done sections (lib/summary-extractor.mjs). Without them the Stop row is
-  // the first prompt + recent observation titles, and this worker's model summary is the only
-  // prose summary such a user gets.
+  // the first prompt + the head of the final reply (D#121, since v6.18.0; observation titles
+  // before), and this worker's model summary is the only multi-field summary (Next / Lessons /
+  // Decisions) such a user gets — when observations exist for it to read.
   if (!process.env.CLAUDE_MEM_SKIP_SUMMARY)
     spawnBackground('llm-summary', sessionId, project, String(stopEpoch));
 

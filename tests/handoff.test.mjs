@@ -931,9 +931,10 @@ describe('renderHandoffInjection', () => {
         `INSERT INTO session_summaries (memory_session_id, project, request, completed, notes, created_at, created_at_epoch)
         VALUES ('s1', 'p', 'req', 'finished stuff', ?, datetime('now'), ?)`,
       ).run(notes, Date.now());
-      return renderHandoffInjection(db, 'p').match(/<session-summary source="([a-z]+)">/)?.[1];
+      return renderHandoffInjection(db, 'p').match(/<session-summary source="([a-z-]+)">/)?.[1];
     };
     expect(put('donereport leftreport')).toBe('report');
+    expect(put('donetail leftother')).toBe('last-reply'); // D#121: the head of the final reply
     expect(put('fast')).toBe('titles');
     expect(put('llm')).toBe('haiku');
     expect(put(null)).toBe('haiku'); // legacy rows: written by the model before tags existed

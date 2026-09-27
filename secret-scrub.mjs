@@ -143,13 +143,19 @@ export const SECRET_PATTERNS = [
   [/\b(?:xox[bpasr]|xapp|xoxe)-[a-zA-Z0-9-]{10,}\b/g, '***'],
   // Slack incoming-webhook URL — the path after /services/ is the shared secret.
   [/(https:\/\/hooks\.slack\.com\/services\/)[A-Za-z0-9/]+/g, '$1***'],
-  // JWT tokens (eyJ...eyJ...)
-  [/\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\b/g, '***'],
+  // JWT tokens (eyJ...eyJ...). A JWT begins its own token, so the start is `(?<![\w-])`, not
+  // `\b`: `-` is a base64url character, and `\b` let every `-eyJ` inside one dotless run be a
+  // fresh start that rescans the run to its end — quadratic, 9.6 s on 200k chars of `eyJ-`
+  // (D#130). A `-eyJ` start is the middle of a run, never a JWT's first character.
+  [/(?<![\w-])eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\b/g, '***'],
   // PEM private key blocks. `[A-Z0-9 ]*` covers every armor label — RSA/EC/DSA/
   // OPENSSH plus ENCRYPTED and PGP (… PRIVATE KEY BLOCK) — that the fixed
   // alternation missed; the block delimiters make FP impossible.
+  // The body stops at the next `-----BEGIN ` (D#130): with `[\s\S]*?` every header with no END
+  // scanned to the end of the text, on each of scrubSecrets' passes — quadratic, 8.3 s on 500k
+  // chars. A stray header before a complete block now stays, and the block is still scrubbed.
   [
-    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN )[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
     '***PEM_KEY***',
   ],
   // Long hex strings in credential assignments (e.g. SECRET_KEY=abc123def456...).
@@ -224,8 +230,11 @@ export const SECRET_PATTERNS = [
   // (password|secret|api_key|auth_token|access_token|private_key) so a benign
   // `"token_count"` value (numeric, <6 non-quote chars after scrub) and prose
   // keys stay low-FP; over-scrub is the safe direction for at-rest memory.
+  // `\w{0,64}`, not `\w*`, on both sides of the noun here and in the next pattern (D#130): from
+  // one quote, `\w*` ran to the end of a word run and backtracked through every keyword in it,
+  // each rescanning the run — `"` + `secret` x 33k took 4.6 s. 64 is far past any key name.
   [
-    /("\w*(?:password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w*"\s*:\s*")[^"]{6,}(")/gi,
+    /("\w{0,64}(?:password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}"\s*:\s*")[^"]{6,}(")/gi,
     '$1***$2',
   ],
   // Quoted-KEY credential values — Python dict reprs `{'api_key': '...'}`, single-quoted
@@ -241,7 +250,7 @@ export const SECRET_PATTERNS = [
   // `'token_count': 123456`); `passphrase` added here too (double-quoted JSON passphrase is
   // subsumed by this pattern since `['"]` matches `"`). Over-scrub is the safe direction.
   [
-    /(['"]\w*(?:password|passwd|passphrase|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w*['"]\s*:\s*)(['"])[^'"]{6,}\2/gi,
+    /(['"]\w{0,64}(?:password|passwd|passphrase|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\w{0,64}['"]\s*:\s*)(['"])[^'"]{6,}\2/gi,
     '$1$2***$2',
   ],
   // Session cookies in headers / urlencoded bodies (sessionid=, session_id=, JSESSIONID=, PHPSESSID=).

@@ -1382,6 +1382,9 @@ describe('pre-tool-recall', () => {
   // longer goes fully silent — the Edit emits a compact ack nudge naming the IDs
   // shown at Read time (the old behavior injected only at Read, the most passive
   // point, and NOTHING at the actual edit). CLAUDE_MEM_SALIENCE=legacy opts out.
+  // The default directive's own words (D#98). Presence AND absence cases key on it, so an
+  // absence assertion cannot pass on a string the directive no longer contains.
+  const ACK_MARK = 'a lesson that did not apply needs no mention';
   describe('salience forcing-function (v2.98)', () => {
     let tmpRoot;
     let projectDir;
@@ -1432,8 +1435,27 @@ describe('pre-tool-recall', () => {
       );
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
-      expect(ctx).toContain("'#NN applied'");
-      expect(ctx).toContain("'#NN n/a — <reason>'");
+      expect(ctx).toContain(ACK_MARK);
+      // D#98: a lesson that did not apply is not reported — a dismissal earns nothing in
+      // decay and lands in the user's reply as jargon.
+      expect(ctx).not.toMatch(/n\/a/);
+      expect(ctx).not.toContain("'#NN applied'");
+    });
+
+    it('Edit: CLAUDE_MEM_SALIENCE=verdict restores the per-lesson verdict directive (D#98 opt-out)', async () => {
+      const { stdout } = await runScript(
+        {
+          tool_name: 'Edit',
+          tool_input: { file_path: join(projectDir, 'maintain.mjs') },
+          session_id: 'sess-sal-verdict',
+        },
+        envFor({ CLAUDE_MEM_SALIENCE: 'verdict' }),
+      );
+      const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+      expect(ctx).toContain(
+        "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.",
+      );
+      expect(ctx).not.toContain(ACK_MARK);
     });
 
     it('Edit: CLAUDE_MEM_SALIENCE=legacy restores the passive block (no directive)', async () => {
@@ -1447,7 +1469,7 @@ describe('pre-tool-recall', () => {
       );
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
-      expect(ctx).not.toContain("'#NN applied'");
+      expect(ctx).not.toContain(ACK_MARK);
     });
 
     it('Read: stays passive — no ack directive on the quiet 1-lesson injection', async () => {
@@ -1461,7 +1483,7 @@ describe('pre-tool-recall', () => {
       );
       const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
       expect(ctx).toContain('[mem] Lessons for maintain.mjs:');
-      expect(ctx).not.toContain("'#NN applied'");
+      expect(ctx).not.toContain(ACK_MARK);
     });
 
     it('Read→Edit same session: Edit emits a compact ack nudge naming the Read-time IDs', async () => {
@@ -1486,7 +1508,7 @@ describe('pre-tool-recall', () => {
       const parsed = JSON.parse(stdout);
       const ctx = parsed.hookSpecificOutput.additionalContext;
       expect(ctx).toContain(`#${lessonObsId}`);
-      expect(ctx).toContain("'#NN applied'");
+      expect(ctx).toContain(ACK_MARK);
       // Compact nudge — must NOT re-emit the lesson body (token cost stays one line).
       expect(ctx).not.toContain('recover orphaned children');
       // #7758 framing guard: still announces itself as system-injected continuation.

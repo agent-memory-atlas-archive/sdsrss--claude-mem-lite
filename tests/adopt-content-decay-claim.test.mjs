@@ -15,8 +15,9 @@ describe('adopt detail doc — citation feedback claim matches the decay loop', 
     expect(doc).toContain('系统按会话追踪引用');
     expect(doc).not.toMatch(/importance\s*[−-]1/);
     expect(doc).not.toMatch(/封顶\s*3/);
-    // The dismissal marker is described as an answer, not an adoption (B2, 00effdc).
-    expect(doc).toMatch(/'#NN n\/a'`?\s*算作已回应，但不算采纳：排序上与未引用相同/);
+    // The dismissal marker is described as not an adoption (B2, 00effdc) — and, since D#98,
+    // as not worth writing, because it ranks exactly like silence.
+    expect(doc).toMatch(/#NN n\/a`?\s*的驳回不算采纳：排序上与未引用相同，同样下沉——所以不必写/);
   });
 
   it('the loop it describes leaves importance alone on both branches', () => {

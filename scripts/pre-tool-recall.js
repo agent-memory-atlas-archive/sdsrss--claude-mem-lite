@@ -145,15 +145,30 @@ const SALIENCE_LEGACY =
   process.env.CLAUDE_MEM_SALIENCE === 'legacy' || process.env.CLAUDE_MEM_SALIENCE === '0';
 const SALIENCE_BIND = process.env.CLAUDE_MEM_SALIENCE === 'bind';
 const SALIENCE_BRIDGE = process.env.CLAUDE_MEM_SALIENCE === 'bridge';
-const ACK_DIRECTIVE =
+// D#98: the default asks for `#NN` only where a lesson changed the edit, once. It used to
+// demand a verdict for EVERY lesson ('#NN applied' or '#NN n/a — <reason>'), and the
+// dismissal half earns nothing — citation decay already drops dismissal-only ids
+// (lib/citation-tracker.mjs isDismissalAt) — while it put lesson-id lists into the user's
+// reply: 335 of 2007 `#NN` mentions in assistant text were dismissals, 98 of 1890
+// text-only replies carried one (216 transcripts, 2026-09-27; tasks/specs/d98-*).
+// A behavioural signal instead of the citation was measured and rejected (C1,
+// docs/audits/20260927-c1-adoption-signal-denominators.md), so the applied half stays.
+// CLAUDE_MEM_SALIENCE=verdict restores the old wording.
+const VERDICT_DIRECTIVE =
   "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.";
+const ACK_DIRECTIVE =
+  'apply each lesson to this edit or rule it out. If one changes the edit, name its #NN once where you describe that change; a lesson that did not apply needs no mention.';
 // v-bind salience forcing-function (#8771 audit: ack ≠ act). Instead of a cheap
 // '#NN applied / n/a' verdict, demand the model bind the lesson to the concrete
 // line it's editing and quote the satisfying edit line. Selected by
 // CLAUDE_MEM_SALIENCE=bind; default stays ACK_DIRECTIVE.
 const BIND_DIRECTIVE =
   "For each lesson: state the one concrete check it forces on the line(s) you're editing, quote the edit line that satisfies it, then report '#NN: <check> — pass' or '#NN: n/a — <why this edit can't reach it>'.";
-const ACTIVE_DIRECTIVE = SALIENCE_BIND ? BIND_DIRECTIVE : ACK_DIRECTIVE;
+const ACTIVE_DIRECTIVE = SALIENCE_BIND
+  ? BIND_DIRECTIVE
+  : process.env.CLAUDE_MEM_SALIENCE === 'verdict'
+    ? VERDICT_DIRECTIVE
+    : ACK_DIRECTIVE;
 const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file
 // Feature ① (file intelligence): on the first Read of a file each session, inject
 // its approximate token size + a one-line summary so the agent can decide to read

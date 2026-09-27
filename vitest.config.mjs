@@ -46,6 +46,10 @@ export default defineConfig({
       'tmp/**',
       '.tmp/**',
       'tasks/**',
+      // `.claude/**`: an `isolation: "worktree"` agent checks the whole repo out under
+      // `.claude/worktrees/<name>/`, and every test file in that copy was collected and run
+      // against the copy's half-finished edits (2026-09-27: 887 files instead of 444).
+      '.claude/**',
     ],
     // D#40: the CLI auto-escalation path is default-ON in production but must
     // never spawn a real `claude` subprocess during the suite. This forces

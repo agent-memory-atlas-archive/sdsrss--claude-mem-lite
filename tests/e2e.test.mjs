@@ -1272,13 +1272,13 @@ describe('Suite 4b: one summary row per session across turns and /clear', () => 
     stop();
     const rows = rowsOf(sid);
     expect(rows, 'premise: the Stop wrote the row').toHaveLength(1);
-    expect(rows[0].completed.startsWith('Summary I fixed the retry loop in src/net.mjs')).toBe(true);
+    expect(rows[0].completed.startsWith('Summary I fixed the retry loop in `src/net.mjs`')).toBe(true);
     expect(rows[0].notes.startsWith('donetail ')).toBe(true);
 
     const next = runHook('session-start', { env: env() });
     const ctx = JSON.parse(next.stdout).hookSpecificOutput.additionalContext;
     expect(ctx, 'premise: Last Session rendered').toContain('### Last Session');
-    expect(ctx).toMatch(/^Completed: Summary I fixed the retry loop in src\/net\.mjs/m);
+    expect(ctx).toMatch(/^Completed: Summary I fixed the retry loop in `src\/net\.mjs`/m);
   });
 
   it('a later turn that reports only a Not done replaces the old Not done and keeps the Done', () => {

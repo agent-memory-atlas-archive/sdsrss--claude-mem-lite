@@ -568,10 +568,11 @@ describe('the final reply as a Done floor (D#121)', () => {
       tail: `## Result\n\n${REPLY}\n\n\`\`\`js\nparse('')\n\`\`\`\n- **Next:** node_modules untouched`,
     });
     const r = one('s1');
-    expect(r.completed.startsWith('Result I fixed the parser: parse() now rejects an empty header')).toBe(
+    // Heading marker and the code block go; inline markup stays (it is not rewritten, see below).
+    expect(r.completed.startsWith('Result I fixed the parser: `parse()` now rejects an empty header')).toBe(
       true,
     );
-    expect(r.completed).not.toMatch(/[#`*]/);
+    expect(r.completed).not.toMatch(/^#|parse\(''\)/);
     expect(r.completed.length).toBeLessThanOrEqual(TAIL_FLOOR_CHARS);
     expect(parseSummaryNotes(r.notes)).toMatchObject({ done: 'tail', left: 'other' });
   });
@@ -635,21 +636,41 @@ describe('the final reply as a Done floor (D#121)', () => {
     expect(parseSummaryNotes(one('s1').notes).done).toBe('titles');
   });
 
-  // v6.18.0 pre-tag review: scrub the RAW reply before flattening or cutting it. Flattening
-  // rewrote characters inside a secret (`|` → space) and let its tail through; cutting first
-  // left a prefix too short for the pattern.
-  it('scrubs the raw reply first: a secret the flattening would split is still caught', () => {
-    stop('s1', { tail: 'Set the config: password=hunter2|Zq9xw7Lk and restart.' });
-    expect(one('s1').completed).not.toContain('Zq9xw7Lk');
-    expect(one('s1').completed).not.toContain('hunter2');
+  // v6.18.0 pre-tag reviews: no ORDER of scrub and markup-stripping is safe. Stripping first
+  // let a backtick-split key's tail through; scrubbing first missed a pipe-split Bearer token
+  // the scrubber only sees once the pipe is gone. The floor is a convenience, so it fails
+  // closed: a reply in which the scrubber finds a secret — as written, or with `, | and *
+  // removed — writes no floor for that turn.
+  it('a reply carrying a secret in any markup view writes no floor', () => {
+    const key = 'sk-' + 'ant-api03-' + 'Q'.repeat(40);
+    const inputs = [
+      'Set the config: password=hunter2|Zq9xw7Lk and restart.',
+      '| Authorization: Bearer | ' + 'tok' + 'X'.repeat(30) + ' |',
+      'Use `' + key.slice(0, 20) + '`' + key.slice(20) + ' for the call.',
+      'Use ' + key.slice(0, 20) + '**' + key.slice(20) + '** for the call.',
+      `${'word '.repeat(22)}${'gh' + 'p_' + 'C'.repeat(36)} straddles the cut`,
+      // Invisible to the scrubber as written, caught once the markup is gone:
+      'Set **password**=hunter2Zq9 and restart.',
+      'Use `' + key.slice(0, 8) + '`' + key.slice(8) + ' now.',
+      'Use ' + key.slice(0, 8) + '*' + key.slice(8) + ' now.',
+      'Use gh|' + ('gh' + 'p_' + 'C'.repeat(36)).slice(2) + ' now.',
+    ];
+    inputs.forEach((raw, n) => {
+      const sid = `s${(n % 4) + 1}`;
+      db.prepare('DELETE FROM session_summaries WHERE memory_session_id = ?').run(sid);
+      stop(sid, { tail: raw }, '');
+      expect(one(sid).completed, `input ${n} wrote a floor`).toBe('');
+    });
+    // Premise: the same shape without a secret does write one.
+    db.prepare("DELETE FROM session_summaries WHERE memory_session_id = 's1'").run();
+    stop('s1', { tail: 'Set the config: retries=3|timeout=30 and restart.' }, '');
+    expect(one('s1').completed).toBe('Set the config: retries=3|timeout=30 and restart.');
   });
 
-  it('scrubs before the cut: a secret straddling the 120-char cut leaves no prefix', () => {
-    const secret = 'gh' + 'p_' + 'C'.repeat(36);
-    stop('s1', { tail: `${'word '.repeat(22)}${secret} and more text after it` });
-    const r = one('s1');
-    expect(r.completed.length).toBeLessThanOrEqual(TAIL_FLOOR_CHARS);
-    expect(r.completed).not.toContain('ghp_');
+  it('a secret-bearing reply leaves an earlier floor in place', () => {
+    stop('s1', { tail: REPLY });
+    stop('s1', { tail: 'Rotated it: password=hunter2|Zq9xw7Lk. ' + 'x'.repeat(TAIL_MIN_REPLACE) });
+    expect(one('s1').completed.startsWith('I fixed the parser')).toBe(true);
   });
 
   it('a reply that opens with a code block stores the prose after it', () => {
@@ -657,13 +678,11 @@ describe('the final reply as a Done floor (D#121)', () => {
     expect(one('s1').completed).toBe('I replaced the constant with a config read.');
   });
 
-  it('keeps identifiers: dunder names, globs and emphasis-free asterisks', () => {
-    stop('s1', {
-      tail: 'Touched pkg/__init__.py, __tests__/a.test.mjs and __dirname; matched *.mjs and src/**/*.ts. **Done** now.',
-    });
-    expect(one('s1').completed).toBe(
-      'Touched pkg/__init__.py, __tests__/a.test.mjs and __dirname; matched *.mjs and src/**/*.ts. Done now.',
-    );
+  it('leaves every token as written: dunder names, globs, bold and backticks', () => {
+    const line =
+      'Touched pkg/__init__.py and __dirname; matched *.mjs and *.cjs, `**/__tests__/**`. **Done**.';
+    stop('s1', { tail: line });
+    expect(one('s1').completed).toBe(line);
   });
 
   it('a Not-done-only or Failed-only reply is a report: no floor from it', () => {
@@ -708,6 +727,13 @@ describe('the final reply as a Done floor (D#121)', () => {
     stop('s1', { tail: SECOND }, 'new titles');
     expect(one('s1').completed).toBe('new titles');
     expect(parseSummaryNotes(one('s1').notes).done).toBe('titles');
+    // Titles are usually EMPTY for such a user: the opt-out must still clear the floor.
+    delete process.env.CLAUDE_MEM_SUMMARY_TAIL;
+    stop('s2', { tail: REPLY }, '');
+    process.env.CLAUDE_MEM_SUMMARY_TAIL = '0';
+    stop('s2', { tail: SECOND }, '');
+    expect(one('s2').completed).toBe('');
+    expect(parseSummaryNotes(one('s2').notes).done).toBe('titles');
   });
 
   // Stop runs this on every turn over text the model wrote, which can quote anything: each

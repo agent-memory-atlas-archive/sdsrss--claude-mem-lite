@@ -375,6 +375,18 @@ describe('get D#N — deferred detail read surface', () => {
     const { stdout } = runCli(['defer', 'list']);
     expect(stdout).toMatch(/get D#/);
   });
+
+  // FAILS IF: a page smaller than the open set drops rows without saying so — 11 open items
+  // listed as 10, with nothing telling the reader one exists.
+  it('defer list says how many open items the page left out', () => {
+    for (let i = 1; i <= 12; i++) runCli(['defer', 'add', `paged item ${i}`]);
+    const { stdout } = runCli(['defer', 'list']);
+    expect(stdout.match(/paged item \d+/g)).toHaveLength(10);
+    expect(stdout).toContain('2 more open items not shown — raise --limit (max 100)');
+    const all = runCli(['defer', 'list', '--limit', '12']).stdout;
+    expect(all.match(/paged item \d+/g)).toHaveLength(12);
+    expect(all).not.toMatch(/more open item/);
+  });
 });
 
 // ─── P2: search surfaces open deferred items (trailer) ───────────────────────

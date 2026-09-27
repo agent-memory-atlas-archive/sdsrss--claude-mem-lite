@@ -132,6 +132,7 @@ import {
   searchDeferredWork,
   formatDeferredSearchTrailer,
   formatDeferListRow,
+  formatDeferMoreHint,
   countStaleOpen,
   formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
@@ -1251,6 +1252,8 @@ server.registerTool(
     for (const r of list) {
       lines.push(formatDeferListRow(r));
     }
+    const moreHint = formatDeferMoreHint(list, 'pass a larger limit (max 50)');
+    if (moreHint) lines.push(moreHint);
     const staleHint = formatDeferStaleHint(countStaleOpen(db, project));
     if (staleHint) lines.push(staleHint);
     // Affordance for the detail field — list stays title-only by design.

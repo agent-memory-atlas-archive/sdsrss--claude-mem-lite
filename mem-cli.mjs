@@ -170,6 +170,7 @@ import {
   searchDeferredWork,
   formatDeferredSearchTrailer,
   formatDeferListRow,
+  formatDeferMoreHint,
   countStaleOpen,
   formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
@@ -1463,6 +1464,8 @@ function cmdDeferList(db, args) {
   for (const r of list) {
     out(`  ${formatDeferListRow(r)}`);
   }
+  const moreHint = formatDeferMoreHint(list, 'raise --limit (max 100)');
+  if (moreHint) out(`  ${moreHint}`);
   const staleHint = formatDeferStaleHint(countStaleOpen(db, project));
   if (staleHint) out(`  ${staleHint}`);
   // Affordance for the detail field — list stays title-only by design (it is

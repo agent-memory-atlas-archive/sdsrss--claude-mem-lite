@@ -412,6 +412,14 @@ describe('MCP feature sweep: public tools', () => {
     // Priority order (3 before 1) and the detail affordance are part of the contract.
     expect(list.indexOf('Split the retry helper')).toBeLessThan(list.indexOf('Document the backoff ceiling'));
     expect(list).toContain('Full detail: mem_get ids=["D#<id>"]');
+    // Two items fit the default page: no "more" line (it would claim hidden rows).
+    expect(list).not.toMatch(/more open item/);
+
+    // A page smaller than the open set says so instead of dropping rows silently.
+    const paged = await call('mem_defer_list', { project: P, limit: 1 });
+    expect(paged).toContain('Split the retry helper out of transport');
+    expect(paged).not.toContain('Document the backoff ceiling');
+    expect(paged).toContain('1 more open item not shown — pass a larger limit (max 50)');
   });
 
   itTool('mem_defer_drop', async () => {

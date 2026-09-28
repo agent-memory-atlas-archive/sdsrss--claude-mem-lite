@@ -68,6 +68,8 @@ const SHAPES = {
   diff: (ls) => ls.map((l) => `-${l}`).join('\n'),
   jsConcat: (ls) => `const k =\n${ls.map((l) => `  "${l.replace(/\\/g, '\\\\')}\\n" +`).join('\n')}\n  "";`,
   jsonReadTool: (ls) => `{"content":${J(numbered(ls))}}`,
+  // An escaped CRLF is one break (v6.19.4 pre-tag defect review F4: nothing pinned it).
+  jsonCrlf: (ls) => `{"content":${J(ls.join('\r\n'))}}`,
 };
 
 const PROSE = 'Thanks, that was the key.';
@@ -573,6 +575,19 @@ describe('D#160: code or a string opener around the line prefix on the BEGIN lin
     quoteThenPlus: ["'+", () => '+'],
     bytesThenPlus: ["b'+", () => '+'],
     doubleQuoteThenMinus: ['"-', () => '-'],
+    // Opener forms the defect review's mutants showed unpinned: a backtick, two letters, a triple
+    // quote, leading blanks.
+    backtickThenPlus: ['`+', () => '+'],
+    rawBytesThenPlus: ["rb'+", () => '+'],
+    tripleQuoteThenPlus: ["'''+", () => '+'],
+    indentedBytesThenPlus: ["  b'+", () => '+'],
+  };
+  // Escaped once or twice (a tool result in a JSONL line), a single quote is still unescaped, and
+  // the BEGIN line's left context stopped at it: `-KEY = '''` became '' (claims review P1).
+  const WRAPS = {
+    raw: (t) => t,
+    json: (t) => `{"type":"tool_result","content":${J(t)}}`,
+    jsonTwice: (t) => J(`{"content":${J(t)}}`),
   };
   for (const [kind, key] of Object.entries(KEYS)) {
     const long = key.body.filter((l) => l.length >= 16).flatMap((l) => [l.slice(0, 16), l.slice(-16)]);
@@ -580,17 +595,76 @@ describe('D#160: code or a string opener around the line prefix on the BEGIN lin
       it(`${kind} / ${cutName}`, () => {
         const failures = [];
         for (const [leftName, [left, pre]] of Object.entries(LEFT)) {
-          const [begin, ...rest] = CUTS[cutName](key);
-          const text = ['$ git diff', left + begin, ...rest.map((l, i) => pre(i) + l), PROSE].join('\n');
-          const out = scrubSecrets(text);
-          const kept = long.filter((w) => out.includes(w));
-          if (kept.length) failures.push(`${leftName}: ${kept.length} key windows kept`);
-          if (!out.includes('$ git diff') || !out.includes(PROSE)) failures.push(`${leftName}: text lost`);
+          for (const [wrapName, wrap] of Object.entries(WRAPS)) {
+            const [begin, ...rest] = CUTS[cutName](key);
+            const text = ['$ git diff', left + begin, ...rest.map((l, i) => pre(i) + l), PROSE].join('\n');
+            const out = scrubSecrets(wrap(text));
+            const kept = long.filter((w) => out.includes(w));
+            if (kept.length) failures.push(`${leftName}/${wrapName}: ${kept.length} key windows kept`);
+            if (!out.includes('$ git diff') || !out.includes(PROSE))
+              failures.push(`${leftName}/${wrapName}: text lost`);
+          }
         }
         expect(failures).toEqual([]);
       });
     }
   }
+
+  // Claims review: import-jsonl scrubs a tool_result's content array as JSON (lib/import-jsonl.mjs).
+  it('Read output of a cut key in an import-jsonl content array', () => {
+    const body = [KL, b64(64), b64(64)];
+    const text = [
+      "     5\tKEY = '''-----BEGIN RSA PRIVATE KEY-----",
+      ...body.map((l, i) => `${String(6 + i).padStart(6)}\t${l}`),
+    ].join('\n');
+    const out = scrubSecrets(JSON.stringify([{ type: 'text', text }]));
+    expect(body.map((l) => l.slice(20, 36)).filter((w) => out.includes(w))).toEqual([]);
+  });
+
+  // Claims review P2: the key's first chunk on the BEGIN line, as in `head -c` output. The reread
+  // was limited to keys with nothing on the BEGIN line, and the prefixed lines below were stored.
+  it.each([
+    [
+      'a diff',
+      (k) => [`-KEY = '''-----BEGIN RSA PRIVATE KEY-----${k[0]}`, ...k.slice(1).map((l) => `-${l}`)],
+    ],
+    [
+      'Read output',
+      (k) => [
+        `     5\tKEY = """-----BEGIN RSA PRIVATE KEY----- ${k[0]}`,
+        ...k.slice(1).map((l, i) => `${String(6 + i).padStart(6)}\t${l}`),
+      ],
+    ],
+  ])('a key begun on its code BEGIN line in %s', (_name, lines) => {
+    const k = [`MIIE${b64(60)}`, b64(64), b64(64), b64(20)];
+    const out = scrubSecrets([...lines(k), PROSE].join('\n'));
+    expect(
+      k
+        .slice(0, 3)
+        .map((l) => l.slice(20, 36))
+        .filter((w) => out.includes(w)),
+    ).toEqual([]);
+    expect(out).toContain(PROSE);
+  });
+
+  // Claims review P2: a key taken from an earlier BEGIN swallowed a later BEGIN in one of its header
+  // lines, and the scan skipped it, although that BEGIN's own reading takes the key lines below.
+  it('a BEGIN inside a span an earlier BEGIN took is still read', () => {
+    const [l3, l4, l5] = [`MIIE${b64(60)}`, b64(64), b64(64)];
+    const H = '-----BEGIN RSA PRIVATE KEY-----';
+    const input = [
+      `-KEY = '''${H}`,
+      `-Comment: ${H}`,
+      l3,
+      `-Comment: ${l4}`,
+      `-Comment: ${l5}`,
+      `-Comment: ${b64(20)}`,
+      PROSE,
+    ];
+    const out = scrubSecrets(input.join('\n'));
+    expect([l3, l4, l5].map((l) => l.slice(20, 36)).filter((w) => out.includes(w))).toEqual([]);
+    expect(out).toContain(PROSE);
+  });
 
   it.each([
     [
@@ -618,8 +692,9 @@ describe('D#160: code or a string opener around the line prefix on the BEGIN lin
   });
 
   // Code that starts with the key's first letter: the shared `M` is not a line prefix. Taken for
-  // one, it stripped `M` from `MHcC…` (the differential fuzz's one new leak) or left every line
-  // after the first unmatched.
+  // one, it stripped `M` from `MHcC…` (a leak the differential fuzz found in a draft; that line is
+  // also kept from a second reading, since the first already takes it as key material) or left
+  // every line after the first unmatched (held by the word rule alone).
   it.each([
     [
       'a one-letter name',
@@ -630,6 +705,16 @@ describe('D#160: code or a string opener around the line prefix on the BEGIN lin
       'a name in a diff',
       `-MY_KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-${KL}\n-${KL.slice(9)}x\n-${KL.slice(20)}yz\n${PROSE}`,
       [KL.slice(0, 16), KL.slice(9, 25), KL.slice(20, 36)],
+    ],
+    [
+      'a longer name',
+      `-MIIE_PEM = '''-----BEGIN RSA PRIVATE KEY-----\n-${KL}\n-${KL.slice(9)}x\n-${KL.slice(20)}yz\n${PROSE}`,
+      [KL.slice(0, 16), KL.slice(9, 25), KL.slice(20, 36)],
+    ],
+    [
+      'a name with a digit',
+      `-K1 = '''-----BEGIN RSA PRIVATE KEY-----\n-K9${KL.slice(3)}\n-${KL.slice(9)}x\n-${KL.slice(20)}yz\n${PROSE}`,
+      [KL.slice(9, 25), KL.slice(20, 36)],
     ],
   ])('%s sharing the key’s first letter', (_name, input, windows) => {
     const out = scrubSecrets(input);
@@ -646,6 +731,63 @@ describe('D#160: code or a string opener around the line prefix on the BEGIN lin
     const out = scrubSecrets(JSON.stringify({ content: `${lines.join('\r')}\rexportedArmoredPrivateKey` }));
     expect([l1, l2, last].map((l) => l.slice(0, 12)).filter((w) => out.includes(w))).toEqual([]);
     expect(out).toContain('exportedArmoredPrivateKey');
+  });
+
+  // Read as a break and then an empty line, an escaped CRLF put a blank line before the key's short
+  // last line, which a blank line ends the key before (defect review F4, mutant M34).
+  it('an escaped CRLF before the short last line of a cut key', () => {
+    const [l1, l2, last] = [`MIIE${b64(60)}`, b64(64), b64(14)];
+    const lines = ['-----BEGIN RSA PRIVATE KEY-----', l1, l2, last];
+    const out = scrubSecrets(JSON.stringify({ content: `${lines.join('\r\n')}\r\n` }));
+    expect(out).not.toContain(last);
+  });
+
+  // Defect review F3: the shared part stopped after the backslash of `\"` over `\t`, and the `t` left
+  // on each line made two 15-letter names a key, with no key there.
+  it('a shared part that ends inside an escape is not a prefix', () => {
+    const lines = [
+      '$ cat k.js',
+      '"\tconst k = `-----BEGIN PRIVATE KEY-----',
+      '\tSessionManager1',
+      '\tTokenRefresher2',
+      'the end',
+    ];
+    const out = scrubSecrets(JSON.stringify({ content: lines.join('\n') }));
+    expect(out).toContain('SessionManager1');
+    expect(out).toContain('TokenRefresher2');
+  });
+
+  // gpg's own export: a blank line between the BEGIN and the body, no armor header. The first line is
+  // the SHORT `+` (or an empty Read-tool line), which the reread must take (defect review F4).
+  it.each([
+    ['a diff', (b) => ["'+-----BEGIN PGP PRIVATE KEY BLOCK-----", '+', ...b.map((l) => `+${l}`)]],
+    [
+      'Read output',
+      (b) => [
+        '     5\tKEY = """-----BEGIN PGP PRIVATE KEY BLOCK-----',
+        '     6\t',
+        ...b.map((l, i) => `${String(7 + i).padStart(6)}\t${l}`),
+      ],
+    ],
+  ])('a PGP key with a blank line and no header in %s', (_name, lines) => {
+    const b = [`lQ${b64(62)}`, b64(64), b64(64)];
+    const out = scrubSecrets([...lines(b), PROSE].join('\n'));
+    expect(b.map((l) => l.slice(20, 36)).filter((w) => out.includes(w))).toEqual([]);
+    expect(out).toContain(PROSE);
+  });
+
+  // Defect review F7: a left context over 256 characters had no prefix shape and no second reading.
+  it('a cut key under a long line of code', () => {
+    const [l1, l2] = [`MIIE${b64(60)}`, b64(64)];
+    const input = [
+      `-${'x'.repeat(290)} = '''-----BEGIN RSA PRIVATE KEY-----`,
+      `-${l1}`,
+      `-${l2}`,
+      PROSE,
+    ].join('\n');
+    const out = scrubSecrets(input);
+    expect([l1, l2].map((l) => l.slice(20, 36)).filter((w) => out.includes(w))).toEqual([]);
+    expect(out).toContain(PROSE);
   });
 
   // A first line the first reading already takes as key material is not read again: with `+` as

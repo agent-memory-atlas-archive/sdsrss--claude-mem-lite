@@ -4,7 +4,8 @@
 // this pattern erases (docs/audits/20260928-v6.19.3-pretag-*.md). These cases are the leak arm those
 // reviews built; a next attempt must pass them unchanged, and must change the last case on purpose.
 // It must also add a kept-block shape to secret-scrub-linear.test.mjs: a kept block is re-read on
-// all 32 passes, and two such shapes measured 10.6x and 12.6x benign under coverage (review F3).
+// every pass of the fixed-point loop (32 under the suite's CHAIN prefix), and two such shapes
+// measured 10.6x and 12.6x benign under coverage (review F3).
 import { describe, it, expect } from 'vitest';
 import { scrubSecrets } from '../secret-scrub.mjs';
 

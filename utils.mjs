@@ -289,13 +289,34 @@ const DESC_SCRUB_WINDOW = 4096;
 // before the first remaining `<private>` or private-key BEGIN, so no field shows a span whose end
 // is out of view. Before v6.19.0 an unclosed opener in the window (a Grep line
 // `notes.md:3:<private>bank pin 4412`) was shown as written (v6.19.0 pre-tag reviews P3-1, r3 P2-1).
-// The PEM half is case-sensitive, like the scrubber's PEM pattern.
-const PRIVATE_OPENER_RE = /<[Pp][Rr][Ii][Vv][Aa][Tt][Ee]>|-----BEGIN [A-Z0-9 ]*PRIVATE KEY/;
-function scrubTruncate(str, max) {
+// A `</private>` or private-key END that comes first is a span whose START is out of view (a
+// nested span, `tail key.pem`), so everything before it may be its inside: the field shows nothing
+// (round-3 P3-1). The PEM half is case-sensitive, like the scrubber's PEM pattern.
+const PRIVATE_MARK_RE = /<\/?[Pp][Rr][Ii][Vv][Aa][Tt][Ee]>|-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY/;
+// A window edge that cuts a token leaves a fragment shorter than its pattern needs (`ghp_` and 12
+// of its 36 characters), and whitespace collapsing can bring it into view: the cut token is
+// dropped (defect review P3-6, round-3 P3-4/P3-6). A head window with no whitespace keeps it: its
+// start is intact and it is the only part shown. A tail window with no whitespace is all one cut token.
+const isWs = (c) => c === ' ' || c === '\n' || c === '\t' || c === '\r' || /\s/.test(c);
+function dropCutTokenAtEnd(win, next) {
+  if (next === undefined || isWs(next)) return win;
+  let i = win.length;
+  while (i > 0 && !isWs(win[i - 1])) i--;
+  return i > 0 ? win.slice(0, i) : win;
+}
+function dropCutTokenAtStart(win, prev) {
+  if (prev === undefined || isWs(prev)) return win;
+  let i = 0;
+  while (i < win.length && !isWs(win[i])) i++;
+  return win.slice(i);
+}
+function scrubTruncate(str, max, window = DESC_SCRUB_WINDOW) {
   if (typeof str !== 'string' || str === '') return truncate(str, max);
-  let win = stripPrivate(str).slice(0, DESC_SCRUB_WINDOW);
-  const at = win.search(PRIVATE_OPENER_RE);
-  if (at >= 0) win = win.slice(0, at);
+  const stripped = stripPrivate(str);
+  let win = stripped.slice(0, window);
+  const mark = PRIVATE_MARK_RE.exec(win);
+  if (mark) win = mark[0][1] === '/' || mark[0].startsWith('-----END') ? '' : win.slice(0, mark.index);
+  else win = dropCutTokenAtEnd(win, stripped[window]);
   // The window edge can split a surrogate pair; truncate only guards a cut it makes itself.
   if (/[\uD800-\uDBFF]$/.test(win)) win = win.slice(0, -1);
   return truncate(_scrubSecrets(win), max);
@@ -314,6 +335,7 @@ function scrubTruncate(str, max) {
 // key with no END more than 4096 characters back).
 const PRIVATE_TAG_HINT_RE = /<\/?private>/i;
 const HEAD_ONLY_MAX = 60;
+const oneSpace = (s) => s.replace(/\s+/g, ' ');
 // The early return needs the WHOLE output inside the head window: a long output whose first
 // 4096 characters collapse to a few (whitespace) still has a tail to show (v6.19.0 pre-tag
 // claims review F2).
@@ -321,11 +343,24 @@ function scrubTruncateEnds(str, max) {
   if (typeof str === 'string' && (str.includes('PRIVATE KEY') || PRIVATE_TAG_HINT_RE.test(str))) {
     return scrubTruncate(str, HEAD_ONLY_MAX);
   }
-  const flat = scrubTruncate(str, DESC_SCRUB_WINDOW);
-  const whole = typeof str !== 'string' || str.length <= DESC_SCRUB_WINDOW;
+  // Up to two windows long, one window covers the whole output: two overlapping windows showed
+  // the same text twice (delta review P3-4).
+  const window =
+    typeof str === 'string' && str.length <= 2 * DESC_SCRUB_WINDOW
+      ? 2 * DESC_SCRUB_WINDOW
+      : DESC_SCRUB_WINDOW;
+  // Whitespace runs are one space: a blank-line run no longer spends the budget (or, before the
+  // one-window rule, hid behind the window edge).
+  const flat = oneSpace(scrubTruncate(str, window, window));
+  const whole = typeof str !== 'string' || str.length <= window;
   if (whole && flat.length <= max) return flat;
   const tailLen = Math.floor(max / 2) - 1;
-  const tailSrc = whole ? flat : normalizeInline(_scrubSecrets(str.slice(-DESC_SCRUB_WINDOW)));
+  const tailSrc = whole
+    ? flat
+    : oneSpace(
+        normalizeInline(_scrubSecrets(dropCutTokenAtStart(str.slice(-window), str[str.length - window - 1]))),
+      );
+  if (tailSrc === '') return truncate(flat, max);
   // Drop a lone low surrogate the tail's cut may start on.
   const tail = tailSrc.slice(-tailLen).replace(/^[\uDC00-\uDFFF]/, '');
   // A head short enough to escape truncate's own "…" still gets one before the tail.

@@ -1228,8 +1228,8 @@ describe('makeEntryDesc', () => {
       const desc = makeEntryDesc('Bash', { command: 'make test' }, resp, { isError: true });
       expect(desc).toContain('Compiling...');
       expect(desc).toContain('FAILED: 3 tests');
-      // The head escaped truncate's own ellipsis, so one is added before the tail.
-      expect(desc).toContain('Compiling...…FAILED: 3 tests');
+      // Under two windows' length one window covers the whole output, so nothing is elided.
+      expect(desc).toBe('make test → ERROR: Compiling... FAILED: 3 tests');
       expect(desc.length).toBeLessThanOrEqual('make test → ERROR: '.length + 100);
     });
 
@@ -1285,9 +1285,66 @@ describe('makeEntryDesc', () => {
     });
 
     it('does not end the head window on a lone high surrogate', () => {
-      const resp = `${' '.repeat(4095)}😀${'x'.repeat(10)}`;
+      // No whitespace, so the window keeps its cut token; the scrub shrinks it to `***`, which
+      // brings the window's last code unit (the high half of the 😀 it cut) into view.
+      const jwt = `eyJ${'a'.repeat(20)}.eyJ${'b'.repeat(20)}.`;
+      const resp = `${jwt}${'s'.repeat(4095 - jwt.length)}😀${'x'.repeat(5000)}`;
       const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
-      expect(desc).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      expect(desc).toBe('c → ***');
+    });
+
+    // v6.19.0 pre-tag reviews (defect P3-6, round-3 P3-6, D#139): a window edge that cut a
+    // token showed its fragment, below the length its pattern needs.
+    it('shows no fragment of a token the head window cut', () => {
+      const resp = `${' '.repeat(4080)}ghp_${'A'.repeat(36)} ${'z'.repeat(5000)} done`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/ghp_|AAAA/);
+      expect(desc).toContain('done');
+    });
+
+    // round-3 P3-4: the tail window started inside a long JWT, so its signature was shown.
+    it('shows no fragment of a token the tail window cut', () => {
+      const resp = `head eyJ${'a'.repeat(20)}.eyJ${'b'.repeat(8200)}.SIGLEAKsig${'c'.repeat(30)} done`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/SIGLEAK|ccc|eyJ|bbb/);
+      expect(desc).toBe('c → head…done');
+    });
+
+    it('keeps a whole token that starts the tail window', () => {
+      const resp = `head ${'b'.repeat(5000)} verdictword${' '.repeat(4096 - 11)}`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).toBe('c → head…verdictword');
+    });
+
+    it('shows no tail when the tail window holds no whole token', () => {
+      const resp = `head ${'b'.repeat(9000)}`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).toBe('c → head');
+    });
+
+    // delta review P3-4: two overlapping windows showed the same text twice.
+    it('shows text once when the output is under two windows long', () => {
+      const resp = `${' '.repeat(4000)}npm test: 12 passed${' '.repeat(80)}`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).toBe('c → npm test: 12 passed');
+    });
+
+    // round-3 P3-1: the cut stopped only at an opener, so text before a closer showed.
+    it('shows nothing before a </private> whose opener is out of view', () => {
+      for (const resp of [
+        '<private>a<private>b</private>NESTEDLEAK</private> ok',
+        'CLOSERLEAK</private> then',
+        'x CLOSERLEAK2</private> y <private>z</private>',
+      ]) {
+        const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+        expect(desc, resp).toBe('c → ');
+      }
+    });
+
+    it('shows nothing before a private-key END whose header is out of view', () => {
+      const resp = '$ tail -c 60 key.pem\nBODYLEAK0123 more body\n-----END RSA PRIVATE KEY-----\nok';
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).toBe('c → ');
     });
 
     it('scrubs a secret at the end of an output longer than the scrub window', () => {
@@ -1303,6 +1360,21 @@ describe('makeEntryDesc', () => {
   it('shows no text after an unclosed <private> in a Grep result', () => {
     const desc = makeEntryDesc('Grep', { pattern: 'pin' }, 'notes.md:3:<private>bank pin 4412');
     expect(desc).not.toMatch(/4412|bank pin/);
+  });
+
+  it('shows no text before a stray </private> in a Grep result', () => {
+    const desc = makeEntryDesc('Grep', { pattern: 'pin' }, 'notes.md:4:pin 4412</private> rotated');
+    expect(desc).toBe('Search "pin" → ');
+  });
+
+  it('shows no fragment of a token the window cut in a Grep result', () => {
+    const desc = makeEntryDesc('Grep', { pattern: 'p' }, `${' '.repeat(4080)}ghp_${'A'.repeat(36)} done`);
+    expect(desc).not.toMatch(/ghp_|AAAA/);
+  });
+
+  it('keeps a whole token that ends the window in a Grep result', () => {
+    const desc = makeEntryDesc('Grep', { pattern: 'p' }, `${' '.repeat(4091)}hello ${'z'.repeat(5000)}`);
+    expect(desc).toBe('Search "p" → hello');
   });
 
   it('shows no text after an unclosed <private> in an Edit fragment', () => {

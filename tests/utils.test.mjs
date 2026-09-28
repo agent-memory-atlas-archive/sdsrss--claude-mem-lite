@@ -1221,8 +1221,6 @@ describe('makeEntryDesc', () => {
       expect(desc).toContain(VERDICT);
     });
 
-    // v6.19.0 pre-tag review P3-1: a private block longer than the tail's scrub window shows
-    // that window only its closer, which neither stripPrivate nor the PEM pattern redacts.
     // v6.19.0 pre-tag claims review F2: the early return tested only the collapsed head, so
     // output whose first 4096 characters are mostly whitespace lost the verdict at its end.
     it('keeps the verdict when the head window collapses to a few characters', () => {
@@ -1230,8 +1228,13 @@ describe('makeEntryDesc', () => {
       const desc = makeEntryDesc('Bash', { command: 'make test' }, resp, { isError: true });
       expect(desc).toContain('Compiling...');
       expect(desc).toContain('FAILED: 3 tests');
+      // The head escaped truncate's own ellipsis, so one is added before the tail.
+      expect(desc).toContain('Compiling...…FAILED: 3 tests');
       expect(desc.length).toBeLessThanOrEqual('make test → ERROR: '.length + 100);
     });
+
+    // v6.19.0 pre-tag reviews: output carrying a private span shows no tail (a span can cross
+    // the tail window's edge) and only a head that stops before any span whose end it cannot see.
 
     it('shows no tail when a <private> block ends the output from outside the tail window', () => {
       const resp = `${HEAD}\n<private>${'p'.repeat(5000)} MY-PRIVATE-TOTP 481-992 </private>`;
@@ -1247,6 +1250,26 @@ describe('makeEntryDesc', () => {
       expect(desc).toContain(HEAD.slice(0, 30));
     });
 
+    it('redacts a closed <private> span that holds an unterminated key header', () => {
+      const resp = 'ok <private>TOTP 481-992 -----BEGIN RSA PRIVATE KEY-----</private> done';
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).toBe('c → ok [redacted] done');
+    });
+
+    it('shows nothing of a key with no END whose header is past the tail window', () => {
+      const line = 'lQdGBGW3xq0BEAC7t6uE1oF2gH3jI5kL0mN9bV8cX7zA6s\n';
+      const resp = `$ gpg --export-secret-keys | head -c 6000\n-----BEGIN PGP PRIVATE KEY BLOCK-----\n${line.repeat(130)}TAILKEYMATERIALxyz`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/TAILKEY|lQdGBG|BEGIN PGP/);
+      expect(desc).toContain('$ gpg --export-secret-keys');
+    });
+
+    it('shows nothing after an unclosed <private> opener', () => {
+      const resp = `start <private>${'q'.repeat(5000)} SECRET-PIN-4412`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).toBe('c → start');
+    });
+
     it('shows no tail when a PEM key ends the output from outside the tail window', () => {
       const body = 'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\n'.repeat(120);
       const resp = `$ cat key.pem ${'x'.repeat(200)}\n-----BEGIN RSA PRIVATE KEY-----\n${body}elsz6BIPWdkry5AHOVc\n-----END RSA PRIVATE KEY-----`;
@@ -1259,6 +1282,12 @@ describe('makeEntryDesc', () => {
       const resp = `${HEAD}\n${'y'.repeat(200)}${'😀'.repeat(25)}`;
       const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
       expect(desc).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    });
+
+    it('does not end the head window on a lone high surrogate', () => {
+      const resp = `${' '.repeat(4095)}😀${'x'.repeat(10)}`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     });
 
     it('scrubs a secret at the end of an output longer than the scrub window', () => {

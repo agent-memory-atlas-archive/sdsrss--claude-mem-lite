@@ -2,6 +2,41 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.19.1 — secret scrubber and description fixes
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Security: three shapes of secret were stored in plaintext.**
+  - A JWT glued to a prefix longer than 40 characters (`session-<uuid>-eyJ…`). 6.19.0 had
+    narrowed where a JWT may start to keep the pattern linear; the pattern now starts at any
+    `eyJ` and stays linear another way.
+  - A private key cut off before its END line (`head id_rsa`, a tool output cut mid-key) when
+    no second key followed it. This goes back before 6.18.0. The header and the base64 lines
+    after it are now scrubbed, also where the line breaks are escaped (`\n` in a JSON string
+    saved or imported as text).
+  - A key body and END with no header (`tail key.pem`), including an armored PGP key's last
+    data line and checksum.
+  - Prose that names two private-key headers in one sentence no longer loses the text between
+    them.
+  - Known limits: a cut-off key whose lines carry a prefix (line numbers from `cat -n` or the
+    Read tool, a `grep` file name, `> ` quoting) is still stored. 6.19.0 stored it too, except
+    when a second key followed, where it erased everything up to that key; this release does
+    not. A fragment of 15 characters or fewer is kept. Right next to a key
+    header or END, a line that starts with 16 or more letters, digits, `+`, `/` or `=` (a long
+    path, `================`) loses that start.
+- **Episode descriptions never show part of a token a window edge cut.** A secret split by
+  the 4096-character scrub window (a whitespace run, then `ghp_…`) showed the fragment the
+  pattern could not recognise, and the Bash output's tail could start inside a long JWT and
+  show its signature. A `</private>` or private-key END that comes first (a nested span,
+  `tail key.pem`) no longer shows the text before it. Output between one and two windows long
+  no longer shows the same text twice, and whitespace runs in a Bash output snippet are one
+  space.
+- **Search's 🤖 mark covers two more machine writers.** A memory rewritten by the daily
+  cluster-merge and an event promoted by `activity promote --execute` were shown as explicit
+  saves.
+- **`defer add` / `mem_defer` print the new item's number past 50 open items** (they printed
+  `(item ?)`).
+
 ## v6.19.0 — search marks machine-written memories; scrubber and ranking fixes
 
 **Upgrade note.** No schema change and no migration. The default output of `search` / `get`

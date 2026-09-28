@@ -1,11 +1,8 @@
-// D#155: the complete-block pattern erased everything from a private-key BEGIN to the next END, so
-// prose or code that names both markers lost the text between them ("Keys start with <BEGIN> and
-// end with <END>" lost "and end with"; the `cryptography` package's serialization/ssh.py lost the
-// line of code between its two marker constants). A block is now kept when the text between its
-// markers is short text naming them (isMarkerProse). Both directions are judged here:
-//   - the leak arm: keys between the markers in every form measured, each must still go whole;
-//   - the prose arm: short text naming both markers keeps its text;
-//   - each clause of the rule, at its threshold from both sides.
+// D#155 (open): the complete-block pattern erases everything from a private-key BEGIN to the next
+// END, so text naming both markers loses what is between them. Keeping such a block was tried for
+// 6.19.3 and withdrawn before the tag: each of the three keep rules measured stored keys this
+// pattern erases (docs/audits/20260928-v6.19.3-pretag-*.md). These cases are the leak arm those
+// reviews built; a next attempt must pass them unchanged, and must change the last case on purpose.
 import { describe, it, expect } from 'vitest';
 import { scrubSecrets } from '../secret-scrub.mjs';
 
@@ -18,10 +15,8 @@ const hex2 = (b) => b.toString(16).padStart(2, '0');
 
 const BEGIN = '-----BEGIN RSA PRIVATE KEY-----';
 const END = '-----END RSA PRIVATE KEY-----';
-const block = (body) => `${BEGIN}${body}${END}`;
-const kept = (body) => scrubSecrets(`k: ${block(body)} ok`) === `k: ${block(body)} ok`;
 
-describe('D#155 complete blocks: every key still goes', () => {
+describe('D#155 complete blocks: every key goes', () => {
   const SEPARATORS = ['\n', '\r\n', '\r', '\\n', '\\\\n', '<br>', ' ', '\t', ' | '];
   const PREFIXES = ['', '> ', '     2\t', '2→', 'id_rsa:'];
   const HEADERS = [
@@ -46,8 +41,7 @@ describe('D#155 complete blocks: every key still goes', () => {
     expect(leaks).toEqual([]);
   });
 
-  // No line of these is a 16-character run, so the run clause alone would keep them (pre-tag
-  // review of this change).
+  // No line of these is a 16-character run (round-1 claims review).
   it('takes a key re-wrapped to lines under 16 characters, under a line prefix', () => {
     const leaks = [];
     const body = 'MII' + b64(1597);
@@ -61,6 +55,7 @@ describe('D#155 complete blocks: every key still goes', () => {
     expect(leaks).toEqual([]);
   });
 
+  // Round-1 defect review F1: none of these has a base64 run.
   it('takes a decoded key between the markers: a hex dump, a C byte array, `\\x` escapes', () => {
     const secret = bytes(32);
     const dumpLines = [secret.slice(0, 15), secret.slice(15, 30), secret.slice(30)].map(
@@ -92,71 +87,29 @@ describe('D#155 complete blocks: every key still goes', () => {
     }
   });
 
-  it('still takes a placeholder body with no spaces in it', () => {
+  // Round-1 F2 and round-2 F1: a headerless key tail, then marker text, then a stray END. A kept
+  // marker block stood between the tail and the END's line, and the tail scan stopped at it.
+  it('takes a key tail above marker text and a stray END', () => {
+    const lines = [b64(64), b64(64), b64(64), b64(30)];
+    for (const marker of [
+      '-----BEGIN PRIVATE KEY----- a b\nc d -----END PRIVATE KEY----- -----END RSA PRIVATE KEY-----',
+      '-----BEGIN PRIVATE KEY----- a b c d -----END PRIVATE KEY----- -----END RSA PRIVATE KEY-----',
+    ]) {
+      const out = scrubSecrets(`${lines.join('\n')}\n${marker}`);
+      expect(lines.filter((l) => out.includes(l))).toEqual([]);
+    }
+  });
+
+  it('takes a placeholder body', () => {
     for (const body of ['MIIEabc', 'MIIFDjBA...secret...', 'YOUR-ORGS-VALIDATION-KEY-HERE', '']) {
       expect(scrubSecrets(`k: ${BEGIN}\n${body}\n${END} ok`)).toBe('k: ***PEM_KEY*** ok');
     }
   });
-});
 
-describe('D#155 complete blocks: text naming both markers keeps its text', () => {
-  const CASES = {
-    sentence: `Keys start with ${BEGIN} and end with ${END} in PEM files.`,
-    // The shape of the `cryptography` package's serialization/ssh.py.
-    pythonConstants: `_SK_MAGIC = b"openssh-key-v1\\0"\n_SK_START = b"-----BEGIN OPENSSH PRIVATE KEY-----"\n_SK_END = b"-----END OPENSSH PRIVATE KEY-----"\n_BCRYPT = b"bcrypt"`,
-    jsCheck: `if (pem.startsWith('-----BEGIN PRIVATE KEY-----') && pem.trimEnd().endsWith('-----END PRIVATE KEY-----')) return parse(pem);`,
-    // A 14-letter word: the run clause counts 16.
-    longWord: `Keys start with ${BEGIN} (authentication) and end with ${END}.`,
-  };
-  for (const [name, text] of Object.entries(CASES)) {
-    it(name, () => {
-      expect(scrubSecrets(text)).toBe(text);
-    });
-    it(`${name}, JSON-escaped`, () => {
-      const json = JSON.stringify({ stdout: text });
-      expect(scrubSecrets(json)).toBe(json);
-    });
-  }
-
-  it('a real key after the prose still goes', () => {
-    const body = [b64(64), b64(64), b64(20)];
-    const text = `${CASES.sentence}\n${BEGIN}\n${body.join('\n')}\n${END}\nafter`;
-    expect(scrubSecrets(text)).toBe(`${CASES.sentence}\n***PEM_KEY***\nafter`);
-  });
-});
-
-// Each clause of isMarkerProse on both sides of its threshold, with the other clauses satisfied.
-describe('D#155 the keep rule, clause by clause', () => {
-  it('length: 256 characters are kept, 257 go', () => {
-    expect(kept(` a b${' '.repeat(252)}`)).toBe(true);
-    expect(kept(` a b${' '.repeat(253)}`)).toBe(false);
-  });
-
-  it('lines: one break is kept, two go', () => {
-    expect(kept(' and end\nwith it ')).toBe(true);
-    expect(kept(' and end\nwith\nit ')).toBe(false);
-    expect(kept(' and end\\nwith\\nit ')).toBe(false);
-    expect(kept(' and end<br>with<br>it ')).toBe(false);
-  });
-
-  it('base64-class characters: 39 are kept, 40 go', () => {
-    const words = (n) =>
-      ` ${'abcd efgh ijkl mnop qrst uvwx yz01 2345 6789 +/=a'
-        .replace(/ /g, '')
-        .slice(0, n)
-        .match(/.{1,4}/g)
-        .join(' ')} `;
-    expect(kept(words(39))).toBe(true);
-    expect(kept(words(40))).toBe(false);
-  });
-
-  it('runs: 15 in a row are kept, 16 go', () => {
-    expect(kept(' see MIIEpAIBAAKCAQE here ')).toBe(true);
-    expect(kept(' see MIIEpAIBAAKCAQEA here ')).toBe(false);
-  });
-
-  it('words: a space between two non-space characters', () => {
-    expect(kept(' see-here ')).toBe(false);
-    expect(kept(' see here ')).toBe(true);
+  // The known limit D#155 is about. A change here is the next attempt, and must be made on purpose.
+  it('text naming both markers still loses the text between them', () => {
+    expect(scrubSecrets(`Keys start with ${BEGIN} and end with ${END} in PEM files.`)).toBe(
+      'Keys start with ***PEM_KEY*** in PEM files.',
+    );
   });
 });

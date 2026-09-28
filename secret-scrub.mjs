@@ -203,14 +203,13 @@ export const SECRET_PATTERNS = [
   // chars. A block whose END is missing is left to the next pattern. Nor does it cross a mark this
   // scrubber wrote: on a later pass, a BEGIN that a scrubbed key used to block reached a far END
   // and erased the prose between (v6.19.2 pre-tag defect review F5).
-  // The delimiters alone do not make a key: prose or code naming both markers ("Keys start with
-  // <BEGIN> and end with <END>", or `_SK_START = b"<BEGIN>"` over `_SK_END = b"<END>"`) paired them
-  // and lost the text between (D#155). Such a block stays when the text between is short text
-  // naming the markers; see isMarkerProse.
+  // Text that names a BEGIN and, later, an END with no key between them loses the text between
+  // (D#155, open). Keeping such a block was tried for 6.19.3 and withdrawn before the tag: each of
+  // the three keep rules measured stored keys this pattern erases, either a key it took for text
+  // or a key tail the kept markers hid from scrubKeyTails (docs/audits/20260928-v6.19.3-pretag-*.md).
   [
     /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
-    (m) =>
-      isMarkerProse(m.slice(m.indexOf('-----', 11) + 5, m.lastIndexOf('-----END '))) ? m : '***PEM_KEY***',
+    '***PEM_KEY***',
   ],
   // A cut-off key (`head id_rsa`, a tool output cut mid-key) and a headerless key tail (`tail
   // key.pem`). These are line scanners, not patterns (D#145): three rounds of review each found a
@@ -421,29 +420,6 @@ function isB64Code(c) {
   );
 }
 
-/**
- * Whether the text between a private-key BEGIN and END is short text naming the markers rather than
- * a key (D#155): every clause must hold.
- *   - At most 256 characters, on at most two lines (one break: real, escaped at any depth, or
- *     `<br>`): a sentence, or two adjacent lines of code. It also keeps the kept blocks, which every
- *     pass of scrubSecrets reads again, small.
- *   - Fewer than 40 letters, digits, `+`, `/` and `=`. A key has more in each form measured
- *     between the markers: a PEM body (Ed25519's, the smallest, is 64), or the secret decoded as
- *     `openssl pkey -text` prints it (two hex digits a byte: 64 for a 32-byte scalar), as a C byte
- *     array or as `\x` escapes. Without this clause a decoded key, or a key re-wrapped to lines under
- *     16 characters, was kept (v6.19.3 pre-tag defect review F1).
- *   - No run of 16 of them: a key line cut short (a truncated EC key's first line holds its secret).
- *     A 16+ letter word or a path in the prose counts too, and its block goes.
- *   - A space between two non-space characters. A body with none (a placeholder such as `MIIEabc`,
- *     compact JSON) goes as before.
- */
-function isMarkerProse(body) {
-  if (body.length > 256) return false;
-  if ((body.match(/\r\n|\r|\n|\\+[nr]|<br\s*\/?>/gi) || []).length > 1) return false;
-  if ((body.match(/[A-Za-z0-9+/=]/g) || []).length >= 40) return false;
-  return !/[A-Za-z0-9+/=]{16}/.test(body) && /\S[ \t]+\S/.test(body);
-}
-
 function backslashesBefore(text, i, floor) {
   let j = i;
   while (j > floor && text[j - 1] === '\\') j--;
@@ -592,7 +568,7 @@ function cutRun(core) {
  * is there. One base64 line alone is a key only when it is 40+ characters, starts the way a key
  * encoding starts (DER `MII…`, OpenSSH `b3BlbnNzaC1rZXktdjE…`) or follows armor headers: a path
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
- * block with a key line in it never gets here; the block pattern above takes it first.
+ * block never gets here; the block pattern above takes it first.
  */
 function cutOffKeyEnd(text, b, be) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.

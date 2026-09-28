@@ -50,6 +50,10 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     pemBodyNoEnd: CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\n' + 'MIIEabcdefghijklmnop\n'.repeat(N / 21),
     base64LinesNoEnd: CHAIN + ' ' + 'MIIEabcdefghijklmnop\n'.repeat(N / 21),
     base64ShortLinesNoEnd: CHAIN + ' ' + 'MIIEabcdef\n'.repeat(N / 11),
+    // The same lines with JSON-escaped breaks (a literal backslash and n).
+    pemEscapedBodyNoEnd:
+      CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\\n' + 'MIIEabcdefghijklmnop\\n'.repeat(N / 22),
+    base64EscapedLinesNoEnd: CHAIN + ' ' + 'MIIEabcdefghijklmnop\\n'.repeat(N / 22),
     base64LinesThenCertEnd:
       CHAIN +
       ' ' +
@@ -174,6 +178,35 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
       'base64 lines that end at no private-key END stay',
       'abc\nMIIBcert\n-----END CERTIFICATE-----\nlines\nof\nwords',
       'abc\nMIIBcert\n-----END CERTIFICATE-----\nlines\nof\nwords',
+    ],
+    // v6.19.1 pre-tag claims review F1: in text whose line breaks are JSON-escaped (`\n` as two
+    // characters: mem_save or import-jsonl of a serialised tool result) the whole-line patterns
+    // saw one line, so a cut-off key before a later key, which v6.18.0 and v6.19.0 scrubbed by
+    // erasing up to that key, was stored.
+    [
+      'a JSON-escaped cut-off key before a later complete block',
+      '$ head -c 80 id_rsa\\n-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\\n$ cat id_rsa\\n-----BEGIN RSA PRIVATE KEY-----\\nMIIEabc\\n-----END RSA PRIVATE KEY-----',
+      '$ head -c 80 id_rsa\\n***PEM_KEY***\\n$ cat id_rsa\\n***PEM_KEY***',
+    ],
+    [
+      'a JSON-escaped cut-off key at the end of a string',
+      '{"content": "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEF\\r\\nAASCBKcwggSjAgEAAoIBAQC7\\nAbc"}',
+      '{"content": "***PEM_KEY***"}',
+    ],
+    [
+      'a JSON-escaped encrypted cut-off key keeps the text after it',
+      '"-----BEGIN RSA PRIVATE KEY-----\\nProc-Type: 4,ENCRYPTED\\nDEK-Info: AES-128-CBC,3F2A\\n\\nMIIEowIBAAKCAQEAu1SU\\n", "next": "kept"',
+      '"***PEM_KEY***\\n", "next": "kept"',
+    ],
+    [
+      'a JSON-escaped key body and END with no header',
+      'x\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\\nAbc=\\n-----END RSA PRIVATE KEY-----\\nok',
+      'x\\n***PEM_KEY***\\nok',
+    ],
+    [
+      'JSON-escaped one-word lines after a key header stay',
+      'is -----BEGIN RSA PRIVATE KEY-----\\nThen\\ncomes\\nthe\\nbody.',
+      'is -----BEGIN RSA PRIVATE KEY-----\\nThen\\ncomes\\nthe\\nbody.',
     ],
     // v6.19.1 pre-tag review F3: a line of one word matched the body class, so prose after a
     // header and words above an END were erased. A body line is 16+ characters; one shorter

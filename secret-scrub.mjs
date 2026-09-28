@@ -211,15 +211,17 @@ export const SECRET_PATTERNS = [
   // (v6.19.0 round-3 P3-3: ending the block at the next key header erased the prose between two).
   // A body line is 16+ characters, and one shorter line may end the body (a key's last line): a
   // line of one word or number is prose (v6.19.1 pre-tag review F3), so the body needs a long line.
+  // A line break may be JSON-escaped (`\n` as two characters, from mem_save or import-jsonl of a
+  // serialised tool result), and a closing quote may end the last line (v6.19.1 claims review F1).
   [
-    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*\r?\n(?=[ \t]*\r?\n))*(?:[ \t]*\r?\n[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\r\n]*)[ \t]*(?=\r?\n|$))(?:[ \t]*\r?\n[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\r\n]*)[ \t]*(?=\r?\n|$)|[ \t]*\r?\n(?=[ \t]*\r?\n))*(?:[ \t]*\r?\n[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?=\r?\n|$))?/g,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\r\n\\]*)[ \t]*(?=\r?\n|\\[rn]|"|$))(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\r\n\\]*)[ \t]*(?=\r?\n|\\[rn]|"|$)|[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?=\r?\n|\\[rn]|"|$))?/g,
     '***PEM_KEY***',
   ],
   // The other end (`tail key.pem`): whole base64 lines ending in a private-key END, the same line
   // rule as above. A run of lines that does not end there is consumed and returned unchanged, so no
   // line starts a second scan.
   [
-    /(?<![^\n])(?:[ \t]*[A-Za-z0-9+/=]{16,}[ \t]*\r?\n)+(?:[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*\r?\n)?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----)?/g,
+    /(?:(?<![^\n])|(?<=\\n))(?:[ \t]*[A-Za-z0-9+/=]{16,}[ \t]*(?:\r?\n|\\r\\n|\\n))+(?:[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?:\r?\n|\\r\\n|\\n))?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----)?/g,
     (m) => (m.endsWith('-----') ? '***PEM_KEY***' : m),
   ],
   // Long hex strings in credential assignments (e.g. SECRET_KEY=abc123def456...).

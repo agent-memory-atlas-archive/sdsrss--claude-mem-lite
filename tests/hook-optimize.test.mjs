@@ -1236,9 +1236,11 @@ describe('cluster-merge', () => {
 
   // v6.19.1 pre-tag review F5a: `compress-<project>` for a 27-character project shaped like
   // xxxx-xxxx-xxxx-xxxxxxxxxxxx has the uuid shape the sdk_sessions trigger refuses, and the
-  // refusal failed every merge in that project.
+  // refusal failed every merge in that project. D#147: the writer id now gets one more character
+  // there, so the keeper is marked machine-written like in any other project.
   it('a merge in a project whose writer id would look like a uuid still merges', async () => {
     const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    const { isAutoWritten } = await import('../lib/provenance.mjs');
     const P = 'abcd-abcd-abcd-abcdefghijkl';
     insertSession(db, { id: 'manual-u', project: P });
     insertObs(db, {
@@ -1260,8 +1262,12 @@ describe('cluster-merge', () => {
       importance: 2,
     });
     expect((await executeMergeCluster(db, obs)).merged).toBe(true);
-    const keeper = db.prepare('SELECT title FROM observations WHERE id = ?').get(obs[0].id);
+    const keeper = db
+      .prepare('SELECT title, memory_session_id FROM observations WHERE id = ?')
+      .get(obs[0].id);
     expect(keeper.title).toBe('Merged');
+    expect(keeper.memory_session_id).toBe(`compress-${P}~`);
+    expect(isAutoWritten(keeper.memory_session_id)).toBe(true);
   });
 
   it('a machine-written keeper keeps its session id through the merge', async () => {
@@ -1511,6 +1517,33 @@ describe('smart-compress', () => {
     const summary = db.prepare('SELECT * FROM observations WHERE id = ?').get(result.summaryId);
     expect(summary.importance).toBe(2);
     expect(summary.title).toContain('Utils.mjs');
+  });
+
+  // D#147: `compress-<project>` for a 27-character project shaped xxxx-xxxx-xxxx-xxxxxxxxxxxx has
+  // the uuid shape sdk_sessions refuses, so every run in that project failed after its model call.
+  it('compresses in a project whose writer id would look like a uuid', async () => {
+    const { executeSmartCompressCluster } = await import('../hook-optimize.mjs');
+    const P = 'abcd-abcd-abcd-abcdefghijkl';
+    const oldEpoch = -(31 * 86400000);
+    for (let i = 0; i < 3; i++) {
+      insertObs(db, { project: P, title: `Old ${i}`, narrative: 'n', epochOffset: oldEpoch - i * 1000 });
+    }
+    const obs = db.prepare('SELECT * FROM observations WHERE project = ? ORDER BY id').all(P);
+    callModelJSONAsync.mockResolvedValue({
+      should_compress: true,
+      title: 'Summary',
+      narrative: 'summary text',
+      concepts: [],
+      facts: [],
+      lesson_learned: 'none',
+      search_aliases: [],
+    });
+    const result = await executeSmartCompressCluster(db, obs, P);
+    expect(result.compressed).toBe(true);
+    const summary = db
+      .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
+      .get(result.summaryId);
+    expect(summary.memory_session_id).toBe(`compress-${P}~`);
   });
 
   // D#10. This path HIDES its inputs — the originals get compressed_into set, which

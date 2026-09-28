@@ -32,7 +32,7 @@ import { normalizeScope, SCOPE_PROMPT_LEGEND, insertObservationRow } from './lib
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
-import { MANUAL_SESSION_ID_PREFIX } from './lib/provenance.mjs';
+import { MANUAL_SESSION_ID_PREFIX, writerSessionId } from './lib/provenance.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // P1-14: same resolver as hook-shared.mjs — this was the second module that had never
@@ -1315,15 +1315,15 @@ Return ONLY valid JSON:
       // The keeper now holds model text. Search reads authorship from memory_session_id, so an
       // explicit save's `manual-` id would mark it as one (D#138); it moves to the compression
       // writer's id. A machine-written keeper keeps its id, and so does the snapshot above, which
-      // is the original save. The writer's session row is best-effort: sdk_sessions refuses an id
-      // shaped like a uuid, which `compress-<project>` is for a 27-character project shaped
-      // xxxx-xxxx-xxxx-xxxxxxxxxxxx, and that refusal must not fail the merge (v6.19.1 pre-tag F5a).
+      // is the original save. writerSessionId keeps the id out of the uuid shape sdk_sessions
+      // refuses (D#147); the row stays best-effort, so no refusal can fail the merge (v6.19.1
+      // pre-tag F5a).
       let rewriteSessionId = null;
       const keeperSession = db
         .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
         .get(keeper.id);
       if (keeperSession?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
-        const compressSessionId = `compress-${keeper.project}`;
+        const compressSessionId = writerSessionId('compress-', keeper.project);
         try {
           db.prepare(
             `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
@@ -1580,7 +1580,7 @@ export async function executeSmartCompressCluster(db, observations, project) {
       ) {
         return null;
       }
-      const sessionId = `compress-${project}`;
+      const sessionId = writerSessionId('compress-', project);
       const now = new Date();
       db.prepare(
         `INSERT OR IGNORE INTO sdk_sessions

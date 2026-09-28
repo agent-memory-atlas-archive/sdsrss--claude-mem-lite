@@ -370,7 +370,8 @@ const B64_RUN_RE = /^[A-Za-z0-9+/=]{16,}/;
 // ends the string a key sits in (`…', 'rc': 0}`, `…","stderr":…`): the scanners do not track which
 // quote opened a string, since no character before a quote tells an opening quote from prose
 // (`Here's`, `Run 'head id_rsa'`, `b'…'`; v6.19.2 pre-tag reviews, delta F1 and round-3 F1/F2).
-const CUT_MARK_RE = /^(?: ?…| ?\.\.\.| ?\[| ?<|[`"'])/;
+// Two escapes deep a string ends at `\"` (round-4 F2).
+const CUT_MARK_RE = /^(?: ?…| ?\.\.\.| ?\[| ?<|[`"']|\\+["'])/;
 const PGP_CRC_RE = /^=[A-Za-z0-9+/]{4}$/;
 // How a key's base64 starts: a DER SEQUENCE (PKCS#1, PKCS#8, SEC1) or OpenSSH's `openssh-key-v1`;
 // under a PGP header, a secret-key packet in the old or new format (`lQ…`, `xc…`/`xV…`).
@@ -391,7 +392,11 @@ const CONCAT_AFTER_RE = /["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']/y;
 const CONCAT_BEFORE_RE = /(?:\\r)?\\n["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']$/;
 const PEM_MARK = '***PEM_KEY***';
 // After an END that ends its line: a closing quote or punctuation, then a break or the text end.
-const CLEAN_AFTER_END_RE = /[ \t"'`,;)\]}]*(?:<\/[A-Za-z][\w:.-]{0,40}>[ \t]*)?(?:\r|\n|\\+[nr]|$)/y;
+// Closing tags may be nested and a string may end after them (`END</key>"}`, `END</code></pre>`;
+// round-4 F3).
+const CLEAN_AFTER_END_RE = /(?:[ \t"'`,;)\]}]|<\/[A-Za-z][\w:.-]{0,40}>|\\+["'])*(?:\r|\n|\\+[nr]|$)/y;
+// A string's closing quote and the start of the next field or the end of the object.
+const STRING_THEN_FIELD_RE = /(?<!\\)["']\s*(?:,\s*\\?["']|[}\]])/;
 
 const BLANK = 0;
 const LONG = 1;
@@ -619,6 +624,9 @@ function cutOffKeyEnd(text, b, be) {
       continue;
     }
     if (longs === 0) {
+      // In escaped text a header value that runs on past its string's end into the next fields
+      // (`Comment: work","note":"…`) ends the key there (v6.19.2 pre-tag round-4 review F4).
+      if (kind === ARMOR && u > 0 && STRING_THEN_FIELD_RE.test(core)) break;
       if (kind === ARMOR && ++armors <= MAX_ARMOR_HEADERS) continue;
       if (kind !== LONG && kind !== CUT) break;
     }
@@ -629,17 +637,21 @@ function cutOffKeyEnd(text, b, be) {
       pendingBlank = false;
       continue;
     }
-    if (pendingBlank) break;
-    if (kind === SHORT && (shorts === 0 || (shorts === 1 && PGP_CRC_RE.test(core)))) {
-      shorts++;
-      end = coreEnd;
-      continue;
-    }
+    // A cut line ends the key whatever came before it, blank lines included: a PGP or encrypted
+    // key has one before its body, and `head` of it in a JSON string ends in a cut line (round-4
+    // F1: checked after the blank-line stop, it was never read and the whole key was stored).
     if (kind === CUT && shorts === 0) {
       const run = cutRun(core);
       if (longs++ === 0) first = run;
       longest = Math.max(longest, run.length);
       end = start + run.length;
+      break;
+    }
+    if (pendingBlank) break;
+    if (kind === SHORT && (shorts === 0 || (shorts === 1 && PGP_CRC_RE.test(core)))) {
+      shorts++;
+      end = coreEnd;
+      continue;
     }
     break;
   }

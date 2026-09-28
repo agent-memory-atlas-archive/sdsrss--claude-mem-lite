@@ -463,3 +463,56 @@ describe('v6.19.2 pre-tag round-3 review', () => {
     expect(keep.filter((k) => !out.includes(k))).toEqual([]);
   });
 });
+
+describe('v6.19.2 pre-tag round-4 review', () => {
+  const H = '-----BEGIN RSA PRIVATE KEY-----';
+  const PH = '-----BEGIN PGP PRIVATE KEY BLOCK-----';
+  const E = '-----END RSA PRIVATE KEY-----';
+  const B = 'MIIEpAIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun';
+  const B2 = 'Kq8xLmN3vB7cZ2dF9gH1jK4lP6oI8uY0tR5eW3qA2sD7fG9hJ1kL3zX5cV8bN0mQ';
+  const P1 = 'lQdGBFXq9ZbT2kLp8WvR4nYc7MfH1sJd6GaU3eQo5iKx0wBzNtVy';
+  const L30 = 'Xq9ZbT2kLp8WvR4nYc7MfH1sJd6GaU';
+  it.each([
+    // F1: a cut line after a blank line (PGP and encrypted PEM put one before the body) ended the
+    // scan before it was read, so the whole key was stored.
+    ['a PGP head in a JSON string', JSON.stringify({ stdout: `${PH}\n\n${P1}`, stderr: '' }), [P1]],
+    [
+      'an encrypted PEM head in a JSON string',
+      JSON.stringify({
+        stdout: `${H}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123456789ABCDEF\n\n${B}`,
+        stderr: '',
+      }),
+      [B],
+    ],
+    ['a PGP head in a Python repr', `{'stdout': '${PH}\\n\\n${P1}', 'rc': 0}`, [P1]],
+    [
+      'a double-spaced body in a JSON string',
+      JSON.stringify({ stdout: `${H}\n\n${B}\n\n${B2}`, rc: 0 }),
+      [B, B2],
+    ],
+    ['a PGP head cut with a truncation note', `${PH}\n\n${P1} [truncated]\n`, [P1]],
+    // F2: a string two escapes deep ends at `\"`.
+    [
+      'a key in JSON inside JSON',
+      JSON.stringify({ content: JSON.stringify({ stdout: `${H}\n${B}\n${B2}\n${L30}`, rc: 0 }) }),
+      [L30],
+    ],
+    // F3: a closing tag after the END, then a quote, a comma or another tag.
+    ['a key tail in XML inside a JSON string', JSON.stringify({ x: `<key>\n${L30}\n${E}</key>` }), [L30]],
+    ['a key tail in nested tags', `<pre><code>\n${L30}\n${E}</code></pre>\n`, [L30]],
+  ])('%s', (_name, input, keyParts) => {
+    const out = scrubSecrets(input);
+    expect(keyParts.filter((k) => out.includes(k))).toEqual([]);
+  });
+
+  // F4: a header value that runs on past its string's closing quote into the next fields is the
+  // end of that string, so a base64-looking line in a later field does not join the key.
+  it('JSON fields after a cut header value keep their text', () => {
+    const input = JSON.stringify({
+      stdout: `head -n 2 k.asc\n${PH}\nComment: work`,
+      note: 'the function\nreadPrivateKeyFromFile\nis used',
+    });
+    const out = scrubSecrets(input);
+    expect(['"note":"the function', 'readPrivateKeyFromFile'].filter((k) => !out.includes(k))).toEqual([]);
+  });
+});

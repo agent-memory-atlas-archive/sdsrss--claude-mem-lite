@@ -47,10 +47,13 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // until a lookahead gated it (500k chars: 407 ms → 3,387 ms → 428 ms).
     chainedWordRun: CHAIN + " '" + 'secret'.repeat(N / 6),
     // 2026-09-28 cut-off key and headerless-body patterns: base64 lines with no END anywhere.
-    pemBodyNoEnd: CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\n' + 'MIIEabcdef\n'.repeat(N / 11),
-    base64LinesNoEnd: CHAIN + ' ' + 'MIIEabcdef\n'.repeat(N / 11),
+    pemBodyNoEnd: CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\n' + 'MIIEabcdefghijklmnop\n'.repeat(N / 21),
+    base64LinesNoEnd: CHAIN + ' ' + 'MIIEabcdefghijklmnop\n'.repeat(N / 21),
+    base64ShortLinesNoEnd: CHAIN + ' ' + 'MIIEabcdef\n'.repeat(N / 11),
     base64LinesThenCertEnd:
-      CHAIN + ' ' + ('MIIEabcdef\n'.repeat(20) + '-----END CERTIFICATE-----\n').repeat(N / 246),
+      CHAIN +
+      ' ' +
+      ('MIIEabcdefghijklmnop\n'.repeat(20) + 'Ab=\n-----END CERTIFICATE-----\n').repeat(N / 450),
     jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),
     jwtDotChain: ('eyJ' + 'A'.repeat(12) + '.').repeat(N / 16),
   };
@@ -171,6 +174,29 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
       'base64 lines that end at no private-key END stay',
       'abc\nMIIBcert\n-----END CERTIFICATE-----\nlines\nof\nwords',
       'abc\nMIIBcert\n-----END CERTIFICATE-----\nlines\nof\nwords',
+    ],
+    // v6.19.1 pre-tag review F3: a line of one word matched the body class, so prose after a
+    // header and words above an END were erased. A body line is 16+ characters; one shorter
+    // line may end the body (a key's last line).
+    [
+      'one-word lines after a key header stay',
+      'The header line is -----BEGIN RSA PRIVATE KEY-----\nThen\ncomes\nthe\nbody.',
+      'The header line is -----BEGIN RSA PRIVATE KEY-----\nThen\ncomes\nthe\nbody.',
+    ],
+    [
+      'short lines after a header and a blank line stay',
+      'Checklist -----BEGIN OPENSSH PRIVATE KEY-----\n\nStep1\nStep2\n\nDone with it',
+      'Checklist -----BEGIN OPENSSH PRIVATE KEY-----\n\nStep1\nStep2\n\nDone with it',
+    ],
+    [
+      'words above a key body and END stay',
+      'done\nOK\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\nAbc=\n-----END RSA PRIVATE KEY-----\nnext',
+      'done\nOK\n***PEM_KEY***\nnext',
+    ],
+    [
+      'numbers above a key body and END stay',
+      'count\n42\n7\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\n-----END RSA PRIVATE KEY-----',
+      'count\n42\n7\n***PEM_KEY***',
     ],
     // v6.19.0 round-3 P3-3: ending an unterminated key at the next key header erased the prose
     // between two headers named in one sentence.

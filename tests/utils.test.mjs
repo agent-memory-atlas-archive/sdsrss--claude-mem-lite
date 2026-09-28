@@ -1316,6 +1316,17 @@ describe('makeEntryDesc', () => {
       expect(desc).toBe('c → head…verdictword');
     });
 
+    // v6.19.1 pre-tag review F1: a label cut by the tail window's edge left its value unlabelled,
+    // and whitespace collapsing brought the window's start into view.
+    it('scrubs a value whose label the tail window cut', () => {
+      const tail = `word: sEcReTvAlUe1234567890${' '.repeat(4096 - 27 - 9)} 3 passed`;
+      expect(tail.length).toBe(4096);
+      const resp = `head ${'x'.repeat(5000)} pass${tail}`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/sEcReT/);
+      expect(desc).toContain('3 passed');
+    });
+
     it('shows no tail when the tail window holds no whole token', () => {
       const resp = `head ${'b'.repeat(9000)}`;
       const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });

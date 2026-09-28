@@ -1234,6 +1234,36 @@ describe('cluster-merge', () => {
     expect(snap.memory_session_id).toBe('manual-test');
   });
 
+  // v6.19.1 pre-tag review F5a: `compress-<project>` for a 27-character project shaped like
+  // xxxx-xxxx-xxxx-xxxxxxxxxxxx has the uuid shape the sdk_sessions trigger refuses, and the
+  // refusal failed every merge in that project.
+  it('a merge in a project whose writer id would look like a uuid still merges', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    const P = 'abcd-abcd-abcd-abcdefghijkl';
+    insertSession(db, { id: 'manual-u', project: P });
+    insertObs(db, {
+      sessionId: 'manual-u',
+      project: P,
+      title: 'Saved by hand',
+      narrative: 'x',
+      importance: 3,
+    });
+    insertObs(db, { project: P, title: 'Hook member', narrative: 'y', importance: 1 });
+    const obs = db.prepare('SELECT * FROM observations WHERE project = ? ORDER BY id').all(P);
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'model text',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'l',
+      importance: 2,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    const keeper = db.prepare('SELECT title FROM observations WHERE id = ?').get(obs[0].id);
+    expect(keeper.title).toBe('Merged');
+  });
+
   it('a machine-written keeper keeps its session id through the merge', async () => {
     const { executeMergeCluster } = await import('../hook-optimize.mjs');
     insertObs(db, { title: 'Hook keeper', narrative: 'x', importance: 3 });

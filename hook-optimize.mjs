@@ -1315,17 +1315,30 @@ Return ONLY valid JSON:
       // The keeper now holds model text. Search reads authorship from memory_session_id, so an
       // explicit save's `manual-` id would mark it as one (D#138); it moves to the compression
       // writer's id. A machine-written keeper keeps its id, and so does the snapshot above, which
-      // is the original save.
-      const compressSessionId = `compress-${keeper.project}`;
-      db.prepare(
-        `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-         VALUES (?, ?, ?, ?, ?, 'active')`,
-      ).run(compressSessionId, compressSessionId, keeper.project, new Date().toISOString(), Date.now());
+      // is the original save. The writer's session row is best-effort: sdk_sessions refuses an id
+      // shaped like a uuid, which `compress-<project>` is for a 27-character project shaped
+      // xxxx-xxxx-xxxx-xxxxxxxxxxxx, and that refusal must not fail the merge (v6.19.1 pre-tag F5a).
+      let rewriteSessionId = null;
+      const keeperSession = db
+        .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
+        .get(keeper.id);
+      if (keeperSession?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
+        const compressSessionId = `compress-${keeper.project}`;
+        try {
+          db.prepare(
+            `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+             VALUES (?, ?, ?, ?, ?, 'active')`,
+          ).run(compressSessionId, compressSessionId, keeper.project, new Date().toISOString(), Date.now());
+          rewriteSessionId = compressSessionId;
+        } catch (e) {
+          debugCatch(e, 'cluster-merge writer session');
+        }
+      }
       db.prepare(
         `
         UPDATE observations SET title=?, narrative=?, concepts=?, facts=?, text=?,
           importance=?, lesson_learned=?, minhash_sig=?, optimized_at=?,
-          memory_session_id = CASE WHEN memory_session_id LIKE ? THEN ? ELSE memory_session_id END
+          memory_session_id = COALESCE(?, memory_session_id)
         WHERE id = ?
       `,
       ).run(
@@ -1338,8 +1351,7 @@ Return ONLY valid JSON:
         safe.lesson_learned,
         minhashSig,
         Date.now(),
-        `${MANUAL_SESSION_ID_PREFIX}%`,
-        compressSessionId,
+        rewriteSessionId,
         keeper.id,
       );
 

@@ -335,6 +335,16 @@ function scrubTruncate(str, max, window = DESC_SCRUB_WINDOW) {
 // key with no END more than 4096 characters back).
 const PRIVATE_TAG_HINT_RE = /<\/?private>/i;
 const HEAD_ONLY_MAX = 60;
+// The tail window is scrubbed with TAIL_CONTEXT characters before it, which are then dropped: a
+// label cut by the window's edge (`pass|word: <value>`) is seen whole, so its value is not left
+// unlabelled at the window's start, where whitespace collapsing can bring it into view (v6.19.1
+// pre-tag review F1). A replacement inside the context moves the cut by its length change; the
+// token the cut lands in is dropped either way.
+const TAIL_CONTEXT = 256;
+function scrubTailWindow(str, window) {
+  const scrubbed = _scrubSecrets(str.slice(-(window + TAIL_CONTEXT)));
+  return dropCutTokenAtStart(scrubbed.slice(TAIL_CONTEXT), scrubbed[TAIL_CONTEXT - 1]);
+}
 const oneSpace = (s) => s.replace(/\s+/g, ' ');
 // The early return needs the WHOLE output inside the head window: a long output whose first
 // 4096 characters collapse to a few (whitespace) still has a tail to show (v6.19.0 pre-tag
@@ -355,11 +365,7 @@ function scrubTruncateEnds(str, max) {
   const whole = typeof str !== 'string' || str.length <= window;
   if (whole && flat.length <= max) return flat;
   const tailLen = Math.floor(max / 2) - 1;
-  const tailSrc = whole
-    ? flat
-    : oneSpace(
-        normalizeInline(_scrubSecrets(dropCutTokenAtStart(str.slice(-window), str[str.length - window - 1]))),
-      );
+  const tailSrc = whole ? flat : oneSpace(normalizeInline(scrubTailWindow(str, window)));
   if (tailSrc === '') return truncate(flat, max);
   // Drop a lone low surrogate the tail's cut may start on.
   const tail = tailSrc.slice(-tailLen).replace(/^[\uDC00-\uDFFF]/, '');

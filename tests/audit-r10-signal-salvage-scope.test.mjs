@@ -18,6 +18,7 @@ import { tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { spawn } from 'child_process';
 import { projectNameFromDir } from '../project-utils.mjs';
+import Database from 'better-sqlite3';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(REPO, 'hook.mjs');
@@ -137,6 +138,16 @@ describe('R10 P3-2 — only the interactive hook salvages the episode buffer on 
     expect(ready, 'the child never registered a SIGTERM listener').toBe(true);
     expect(wasAlive, 'the process exited before the signal; this case proves nothing').toBe(true);
     expect(existsSync(p), 'the interactive salvage path stopped working').toBe(false);
+    // Deleting the buffer is not salvaging it: the episode must be in the DB (v6.19.1 pre-tag F7).
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
+    try {
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM observations').get().n,
+        'the buffer was deleted but no episode was saved',
+      ).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
   });
 
   // The background arm is STRUCTURAL, and that is a limitation worth stating rather than

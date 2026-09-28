@@ -435,40 +435,33 @@ const isEscBreak = (r, u) => u > 0 && r % (2 * u) === u;
 // An unescaped quote at depth u ends the string: r % 2u < u.
 const isStringEnd = (r, u) => u > 0 && r % (2 * u) < u;
 
-// The characters nextLine acts on; a native scan skips the rest. Read per character in JS, a body
-// line cost about twice as much under coverage (pemBodyNoEnd, 2026-09-28, this machine: 0.15-0.16x
-// benign on 26dcd49, 0.08-0.09x on e59daed).
-const LINE_STOP_RE = /[\r\n]/g;
-const LINE_STOP_ESC_RE = /[\r\n\\]/g;
-
 /** The line starting at s: its end, and where the next line starts (-1 at the end of the text). */
 function nextLine(text, s, u) {
   const n = text.length;
-  const stop = u > 0 ? LINE_STOP_ESC_RE : LINE_STOP_RE;
   let i = s;
   while (i < n) {
-    stop.lastIndex = i;
-    if (!stop.exec(text)) break;
-    i = stop.lastIndex - 1;
     const ch = text[i];
     if (ch === '\n') return { end: i, next: i + 1 };
     if (ch === '\r') return { end: i, next: text[i + 1] === '\n' ? i + 2 : i + 1 };
-    // A backslash run, stopped on only when u > 0.
-    let j = i;
-    while (j < n && text[j] === '\\') j++;
-    const r = j - i;
-    const c = text[j];
-    if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
-      let next = j + 1;
-      if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
-      if (u === 1) {
-        CONCAT_AFTER_RE.lastIndex = next;
-        const m = CONCAT_AFTER_RE.exec(text);
-        if (m) next += m[0].length;
+    if (u > 0 && ch === '\\') {
+      let j = i;
+      while (j < n && text[j] === '\\') j++;
+      const r = j - i;
+      const c = text[j];
+      if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
+        let next = j + 1;
+        if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
+        if (u === 1) {
+          CONCAT_AFTER_RE.lastIndex = next;
+          const m = CONCAT_AFTER_RE.exec(text);
+          if (m) next += m[0].length;
+        }
+        return { end: j - u, next };
       }
-      return { end: j - u, next };
+      i = j + 1;
+      continue;
     }
-    i = j + 1;
+    i++;
   }
   return { end: n, next: -1 };
 }
@@ -510,97 +503,6 @@ function prefixShape(prefix) {
     .replace(/\d+/g, '\\d+')
     .replace(/[:-]/g, '[:-]');
   return new RegExp(`^[ \\t]*${src}`);
-}
-
-const MAX_SHARED_PREFIX = 64;
-const isDigitCode = (c) => c >= 48 && c <= 57;
-const isWordCode = (c) => isDigitCode(c) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
-// A string opener before a line prefix on a BEGIN line: `'+`, `b'+`, `"-`, `'''+`, and escaped
-// (`\"-` once a JSON string holds it).
-const OPENER_RE = /^[ \t]*[A-Za-z]{0,2}\\*(['"`])(?:\\*\1){0,2}/;
-
-/**
- * How much of `left` (a BEGIN line's left context) the line `line` starts with, under prefixShape's
- * equivalences: leading blanks free, digit runs of any length, `:` and `-` interchangeable. It
- * ends at a character that is not a word character, or after an escape (`\t`), as a line prefix
- * does: `-MY_KEY = '''` over `-MIIE…` shares `-M` by chance and `-` is the prefix; `M = '''` over
- * `MHcC…` shares nothing; `\tMII = """` over `\tMHcC…` shares `\t`. Over MAX_SHARED_PREFIX
- * characters it is 0: a line prefix is a diff mark, a quote, a Read-tool or grep column, a log
- * stamp, and scanning longer ones cost every BEGIN line of a crafted text up to twice the time
- * under coverage (v6.19.4 pre-tag defect review F5).
- */
-function sharedPrefixLength(left, line) {
-  const max = MAX_SHARED_PREFIX;
-  let i = 0;
-  let j = 0;
-  while (i <= max && i < left.length && (left[i] === ' ' || left[i] === '\t')) i++;
-  while (j <= max && j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
-  let n = 0;
-  while (i <= max && i < left.length && j < line.length) {
-    if (isDigitCode(left.charCodeAt(i)) && isDigitCode(line.charCodeAt(j))) {
-      while (i <= max && i < left.length && isDigitCode(left.charCodeAt(i))) i++;
-      while (j <= max && j < line.length && isDigitCode(line.charCodeAt(j))) j++;
-    } else if (left[i] === line[j] || (':-'.includes(left[i]) && ':-'.includes(line[j]))) {
-      i++;
-      j++;
-    } else break;
-    n = i;
-  }
-  if (n > max) return 0;
-  // Back off a word, and a lone backslash (`\"` over `\t` shares only `\`, and the `t` it would
-  // leave on every line made 15-letter names 16-character key lines; defect review F3).
-  for (;;) {
-    if (n > 0 && left[n - 1] === '\\') n--;
-    else if (n > 0 && isWordCode(left.charCodeAt(n - 1)) && left[n - 2] !== '\\') n--;
-    else break;
-  }
-  return n;
-}
-
-/**
- * A line prefix for the first line under a BEGIN whose whole left context that line does not start
- * with (D#160): the part of a left context the line shares, after a string opener if the context
- * starts with one. The contexts are tried nearest first; null when none shares anything.
- */
-function sharedShape(lefts, line) {
-  for (const left of lefts) {
-    let base = left;
-    let n = sharedPrefixLength(base, line);
-    const opener = n === 0 && OPENER_RE.exec(left);
-    if (opener) {
-      base = left.slice(opener[0].length);
-      n = sharedPrefixLength(base, line);
-    }
-    if (n > 0) return prefixShape(base.slice(0, n));
-  }
-  return null;
-}
-
-/**
- * The left contexts of the BEGIN at `b` whose line starts at `ls`. In escaped text the walk to `ls`
- * stopped at an unescaped quote, which may be code on the line rather than the string's start: JSON
- * never escapes `'`, so `-KEY = '''` in a tool result left '' (claims review P1). The longer
- * contexts reach back past each such run of quotes, up to 4 runs, toward the line's start; a run
- * is passed whole, since a context of quotes alone shares no prefix.
- */
-function leftContexts(text, ls, b, u) {
-  const lefts = [text.slice(ls, b)];
-  let i = ls;
-  for (let k = 0; u > 0 && k < 4 && i > 0 && b - i <= 512; k++) {
-    let j = i;
-    while (j > 0 && (text[j - 1] === '"' || text[j - 1] === "'")) j--;
-    if (j === i) break;
-    while (j > 0) {
-      const c = text[j - 1];
-      if (c === '\n' || c === '\r') break;
-      if ((c === 'n' || c === 'r') && isEscBreak(backslashesBefore(text, j - 1, 0), u)) break;
-      if ((c === '"' || c === "'") && isStringEnd(backslashesBefore(text, j - 1, 0), u)) break;
-      j--;
-    }
-    lefts.push(text.slice(j, b));
-    i = j;
-  }
-  return lefts;
 }
 
 /** The judged part of line [s, e): no prefix of the key's shape, no padding, no string quotes. */
@@ -728,15 +630,7 @@ function cutOffKeyEnd(text, b, be) {
   // per pass (v6.19.2 pre-tag round-5 review F2).
   let run = 0;
   while (run < 16 && b - run > ls && isB64Code(text.charCodeAt(b - run - 1))) run++;
-  let shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
-  // D#160: code or a string opener around the line prefix on the BEGIN line (`-KEY = '''`,
-  // `     5\tKEY = """`, `'+`) is on no line below, so no line lost its prefix and the lines of a
-  // cut key were stored. When the first line, read that way, is SHORT or OTHER and does not start
-  // with the whole left context, it is read once more with the prefix it shares with a left context,
-  // and that prefix is kept. OTHER ended the key there; with a prefix off, an OTHER line can only
-  // become key material and a SHORT one stays SHORT or blank, so no key character the first reading
-  // took is left. That holds for one call; across passes it does not (D#166).
-  let reread = run < 16;
+  const shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
 
   let armors = 0;
   let shorts = 0;
@@ -745,21 +639,8 @@ function cutOffKeyEnd(text, b, be) {
     // Another BEGIN line is never part of this key; stop before reading it whole.
     if (!shape && text.startsWith('-----BEGIN ', next)) break;
     const line = nextLine(text, next, u);
-    let { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
-    let kind = classify(core);
-    if (reread) {
-      reread = false;
-      const lineText = text.slice(next, line.end);
-      const alt =
-        (kind === SHORT || kind === OTHER) &&
-        !shape?.test(lineText) &&
-        sharedShape(leftContexts(text, ls, b, u), lineText);
-      if (alt) {
-        shape = alt;
-        ({ core, start, end: coreEnd } = lineCore(text, next, line.end, shape));
-        kind = classify(core);
-      }
-    }
+    const { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
+    const kind = classify(core);
     next = line.next;
     if (kind === END) {
       if (longs > 0) end = start + KEY_END_LINE_RE.exec(core)[0].length;
@@ -813,13 +694,9 @@ function scrubCutOffKeys(text) {
   while ((m = KEY_BEGIN_RE.exec(text))) {
     const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
     if (end === -1) continue;
-    // A BEGIN inside the span just taken (in one of its header lines) is still read, and its key
-    // joins the span: skipped, its own reading of the lines below was lost (claims review P2).
-    if (m.index < last) last = Math.max(last, end);
-    else {
-      out += text.slice(last, m.index) + PEM_MARK;
-      last = end;
-    }
+    out += text.slice(last, m.index) + PEM_MARK;
+    last = end;
+    KEY_BEGIN_RE.lastIndex = end;
   }
   return last === 0 ? text : out + text.slice(last);
 }

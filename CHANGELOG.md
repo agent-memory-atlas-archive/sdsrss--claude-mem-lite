@@ -2,6 +2,23 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.19.4 — ip-address security floor
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **`ip-address` up to 10.5.0 has two moderate advisories**: GHSA-rpw4-54j3-4h4q (`isLinkLocal()`
+  recognises only `fe80::/64` of the `fe80::/10` range) and GHSA-2vr4-cq9g-pvrc (the NAT64
+  local-use range `64:ff9b:1::/48` is not recognised). It comes in through the MCP SDK's rate
+  limiter, which only the SDK's HTTP authorization router loads; claude-mem-lite runs its MCP
+  server over stdio and never loads either. 6.19.4 requires `ip-address` 10.6.0 or later:
+  - an install from the npm registry uses the package's lock file and gets 10.7.2, where 6.19.3's
+    lock file pinned 10.5.0;
+  - `npx claude-mem-lite` sets up `~/.claude-mem-lite` without a lock file and takes the newest
+    version allowed when it runs (a 6.19.3 set-up made after the fixed versions came out already
+    has one);
+  - a plugin whose dependencies are linked from `~/.claude-mem-lite/node_modules` keeps the tree
+    that is already there.
+
 ## v6.19.3 — capture in uuid-shaped projects; browse and restore provenance
 
 Fixes only; no schema change, no migration, no new setting.

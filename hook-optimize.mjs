@@ -32,6 +32,7 @@ import { normalizeScope, SCOPE_PROMPT_LEGEND, insertObservationRow } from './lib
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
+import { MANUAL_SESSION_ID_PREFIX } from './lib/provenance.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // P1-14: same resolver as hook-shared.mjs — this was the second module that had never
@@ -1108,7 +1109,7 @@ export function findMergeCandidates(db, maxClusters = 5, { project } = {}) {
     -- keeper.search_aliases when it rebuilt the keeper's TF-IDF vector. Phase-2 removed that
     -- rebuild, so the column had no reader left and went with it. Do NOT re-add it on the
     -- strength of R10 P3-7 -- that finding is moot, not pending. executeMergeCluster reads
-    -- keeper.{id,importance,narrative,concepts,facts} and o.{id,title,type,narrative,
+    -- keeper.{id,project,importance,narrative,concepts,facts} and o.{id,title,type,narrative,
     -- importance,access_count,lesson_learned}, and nothing else off these rows.
     SELECT id, title, narrative, project, type, access_count, importance, created_at_epoch, minhash_sig, lesson_learned, concepts, facts
     FROM observations
@@ -1311,10 +1312,20 @@ Return ONLY valid JSON:
          SELECT ${snapColList}, ? FROM observations WHERE id = ?`,
       ).run(keeper.id, keeper.id);
 
+      // The keeper now holds model text. Search reads authorship from memory_session_id, so an
+      // explicit save's `manual-` id would mark it as one (D#138); it moves to the compression
+      // writer's id. A machine-written keeper keeps its id, and so does the snapshot above, which
+      // is the original save.
+      const compressSessionId = `compress-${keeper.project}`;
+      db.prepare(
+        `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+         VALUES (?, ?, ?, ?, ?, 'active')`,
+      ).run(compressSessionId, compressSessionId, keeper.project, new Date().toISOString(), Date.now());
       db.prepare(
         `
         UPDATE observations SET title=?, narrative=?, concepts=?, facts=?, text=?,
-          importance=?, lesson_learned=?, minhash_sig=?, optimized_at=?
+          importance=?, lesson_learned=?, minhash_sig=?, optimized_at=?,
+          memory_session_id = CASE WHEN memory_session_id LIKE ? THEN ? ELSE memory_session_id END
         WHERE id = ?
       `,
       ).run(
@@ -1327,6 +1338,8 @@ Return ONLY valid JSON:
         safe.lesson_learned,
         minhashSig,
         Date.now(),
+        `${MANUAL_SESSION_ID_PREFIX}%`,
+        compressSessionId,
         keeper.id,
       );
 

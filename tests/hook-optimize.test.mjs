@@ -1204,6 +1204,55 @@ describe('cluster-merge', () => {
     expect(other.compressed_into).toBe(obs[0].id);
   });
 
+  // D#138: provenance is read from memory_session_id, and a manual- keeper rewritten with model
+  // text rendered as an explicit save. The snapshot keeps the original id (it IS the save).
+  it('a manual keeper rewritten by the merge is marked machine-written; its snapshot is not', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    const { isAutoWritten } = await import('../lib/provenance.mjs');
+    insertSession(db, { id: 'manual-test', project: 'test' });
+    insertObs(db, { sessionId: 'manual-test', title: 'Saved by hand', narrative: 'x', importance: 3 });
+    insertObs(db, { title: 'Hook member', narrative: 'y', importance: 1 });
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged by the model',
+      merged_narrative: 'model text',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'l',
+      importance: 2,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    const keeper = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(obs[0].id);
+    expect(keeper.memory_session_id).toBe('compress-test');
+    expect(isAutoWritten(keeper.memory_session_id)).toBe(true);
+    const snap = db
+      .prepare(
+        "SELECT memory_session_id FROM observations WHERE compressed_into = ? AND title = 'Saved by hand'",
+      )
+      .get(obs[0].id);
+    expect(snap.memory_session_id).toBe('manual-test');
+  });
+
+  it('a machine-written keeper keeps its session id through the merge', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Hook keeper', narrative: 'x', importance: 3 });
+    insertObs(db, { title: 'Hook member', narrative: 'y', importance: 1 });
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Merged',
+      merged_narrative: 'model text',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'l',
+      importance: 2,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    const keeper = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(obs[0].id);
+    expect(keeper.memory_session_id).toBe('sess-1');
+  });
+
   it('snapshots the keeper original text before in-place overwrite (HIGH-3: data loss)', async () => {
     const { executeMergeCluster } = await import('../hook-optimize.mjs');
     insertObs(db, {

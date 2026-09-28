@@ -209,19 +209,23 @@ export const SECRET_PATTERNS = [
   // base64 (or RFC 1421 headers) that follow it. Stored whole through v6.19.0 when no later key
   // header followed. Whole lines only, so prose naming a header mid-sentence keeps its text
   // (v6.19.0 round-3 P3-3: ending the block at the next key header erased the prose between two).
-  // A body line is 16+ characters, and one shorter line may end the body (a key's last line): a
-  // line of one word or number is prose (v6.19.1 pre-tag review F3), so the body needs a long line.
-  // A line break may be JSON-escaped (`\n` as two characters, from mem_save or import-jsonl of a
-  // serialised tool result), and a closing quote may end the last line (v6.19.1 claims review F1).
+  // A body line starts with 16+ base64 characters, and one shorter whole line may follow the last
+  // of them (a key's last line): a line of one word or number is prose (v6.19.1 pre-tag review F3),
+  // so the body needs a long line, and blank lines count only between long ones. A long line need
+  // not be whole, so a key cut mid-line loses the cut line too. A line break may be JSON-escaped
+  // (`\n` as two characters) and a quote may end the last line (v6.19.1 claims review F1). A header
+  // value may hold a backslash that does not start an escaped break (a Windows path), and it does
+  // not share its whitespace with a second quantifier, which was quadratic (delta review P1).
   [
-    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\r\n\\]*)[ \t]*(?=\r?\n|\\[rn]|"|$))(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\r\n\\]*)[ \t]*(?=\r?\n|\\[rn]|"|$)|[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?=\r?\n|\\[rn]|"|$))?/g,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):(?:[^\r\n\\]|\\(?![rn]))*(?=\r?\n|\\[rn]|["']|$)))(?:(?:[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):(?:[^\r\n\\]|\\(?![rn]))*(?=\r?\n|\\[rn]|["']|$))))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?=\r?\n|\\[rn]|["']|$))?/g,
     '***PEM_KEY***',
   ],
   // The other end (`tail key.pem`): whole base64 lines ending in a private-key END, the same line
-  // rule as above. A run of lines that does not end there is consumed and returned unchanged, so no
-  // line starts a second scan.
+  // rule as above but with two shorter lines allowed before the END (an armored PGP key's last data
+  // line and its `=XXXX` checksum; delta review P2). A line may start after a quote. A run of lines
+  // that does not end there is consumed and returned unchanged, so no line starts a second scan.
   [
-    /(?:(?<![^\n])|(?<=\\n))(?:[ \t]*[A-Za-z0-9+/=]{16,}[ \t]*(?:\r?\n|\\r\\n|\\n))+(?:[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?:\r?\n|\\r\\n|\\n))?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----)?/g,
+    /(?:(?<![^\n])|(?<=\\n|["']))(?:[ \t]*[A-Za-z0-9+/=]{16,}[ \t]*(?:\r?\n|\\r\\n|\\n))+(?:[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?:\r?\n|\\r\\n|\\n)){0,2}(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----)?/g,
     (m) => (m.endsWith('-----') ? '***PEM_KEY***' : m),
   ],
   // Long hex strings in credential assignments (e.g. SECRET_KEY=abc123def456...).

@@ -53,6 +53,11 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // The same lines with JSON-escaped breaks (a literal backslash and n).
     pemEscapedBodyNoEnd:
       CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\\n' + 'MIIEabcdefghijklmnop\\n'.repeat(N / 22),
+    // v6.19.1 delta review P1: a whitespace run inside an RFC 1421 header value, ended by a
+    // backslash or a lone CR, backtracked quadratically (48.9 s at 200k).
+    pemHeaderSpacesBackslash: '-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment:' + ' '.repeat(N) + '\\x',
+    pemHeaderSpacesLoneCr: '-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment:' + ' '.repeat(N) + '\rx',
+    pemEscapedHeaderTabs: '-----BEGIN PGP PRIVATE KEY BLOCK-----\\nComment:' + '\t'.repeat(N) + '\\t',
     base64EscapedLinesNoEnd: CHAIN + ' ' + 'MIIEabcdefghijklmnop\\n'.repeat(N / 22),
     base64LinesThenCertEnd:
       CHAIN +
@@ -207,6 +212,42 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
       'JSON-escaped one-word lines after a key header stay',
       'is -----BEGIN RSA PRIVATE KEY-----\\nThen\\ncomes\\nthe\\nbody.',
       'is -----BEGIN RSA PRIVATE KEY-----\\nThen\\ncomes\\nthe\\nbody.',
+    ],
+    // v6.19.1 delta review P2: an armored PGP tail ends in a short data line and a `=XXXX`
+    // checksum line, two short lines, so the body never reached its END and was stored.
+    [
+      'a PGP key tail with a short last line and a checksum',
+      'x\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\nAbCdEf\n=XyZw\n-----END PGP PRIVATE KEY BLOCK-----\nok',
+      'x\n***PEM_KEY***\nok',
+    ],
+    // delta review P3-1: a header value holding a backslash (a Windows path) ended the body.
+    [
+      'a cut-off key whose Comment holds a Windows path',
+      '-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: C:\\Users\\me\\key.asc\n\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\n',
+      '***PEM_KEY***\n',
+    ],
+    // delta review P3-2: a key cut mid-line before a later key kept the cut line.
+    [
+      'a key cut mid-line keeps no part of the cut line',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\nlQdGBGW3xq0BEAC7t6uE1oF2gH3jI5kL0mN9bV8c…\n$ cat id_rsa\n-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----',
+      '***PEM_KEY***…\n$ cat id_rsa\n***PEM_KEY***',
+    ],
+    // delta review P3-5: blank lines let the one short final line be a word far below the body.
+    [
+      'a word after blank lines below a cut-off key stays',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\n\n\nThanks',
+      '***PEM_KEY***\n\n\nThanks',
+    ],
+    // delta review P3-3: a quote next to the first or last body line.
+    [
+      'a JSON string holding a key tail',
+      '"MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\\nAbc=\\n-----END RSA PRIVATE KEY-----"',
+      '"***PEM_KEY***"',
+    ],
+    [
+      'a single-quoted cut-off key',
+      "'-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV\\nAbc'",
+      "'***PEM_KEY***'",
     ],
     // v6.19.1 pre-tag review F3: a line of one word matched the body class, so prose after a
     // header and words above an END were erased. A body line is 16+ characters; one shorter

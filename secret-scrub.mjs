@@ -184,31 +184,40 @@ export const SECRET_PATTERNS = [
   [/\b(?:xox[bpasr]|xapp|xoxe)-[a-zA-Z0-9-]{10,}\b/g, '***'],
   // Slack incoming-webhook URL — the path after /services/ is the shared secret.
   [/(https:\/\/hooks\.slack\.com\/services\/)[A-Za-z0-9/]+/g, '$1***'],
-  // JWT tokens (eyJ...eyJ...). A JWT begins its own token, so the start is `(?<![\w-])`, not
-  // `\b`: `-` is a base64url character, and `\b` let every `-eyJ` inside one dotless run be a
-  // fresh start that rescans the run to its end — quadratic, 9.6 s on 200k chars of `eyJ-`
-  // (D#130). A `-eyJ` start is the middle of a run, never a JWT's first character.
-  // A JWT glued by a hyphen to up to 40 characters of hyphenated words (`my-sess-eyJ…`,
-  // `X-Auth-Token-eyJ…`) is a start too. `\b` allowed any length; past 40 characters it is missed. The lookbehind needs a token
-  // boundary within those 41 characters, so a hyphen run has at most ~10 starts, not one per
-  // `-eyJ` (v6.19.0 pre-tag reviews P3-2, delta P3-1).
+  // JWT tokens (eyJ...eyJ...), from any `eyJ`: one glued to a prefix (`my-sess-eyJ…`,
+  // `session-<uuid>-eyJ…`, `tok_eyJ…`) is still a JWT. Every `eyJ` of one dotless run used to be a
+  // fresh start that rescanned the run to its end — quadratic, 9.6 s on 200k chars of `eyJ-`
+  // (D#130) — and v6.19.0's bounded lookbehind that fixed it missed a prefix over 40 characters
+  // (round-3 review P3-2). Here a failed start consumes its run instead (`|eyJ[\w-]*`, returned
+  // unchanged), so the scan resumes after it. Nothing is lost: the first segment cannot contain a
+  // `.`, so every later `eyJ` of the same run reaches the same run end and fails the same way.
   [
-    /(?:(?<![\w-])|(?<=(?:^|[^\w-])[\w-]{1,40}-))eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\b/g,
-    '***',
+    /eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\b|eyJ[a-zA-Z0-9_-]*/g,
+    (m) => (m.includes('.') ? '***' : m),
   ],
   // PEM private key blocks. `[A-Z0-9 ]*` covers every armor label — RSA/EC/DSA/
   // OPENSSH plus ENCRYPTED and PGP (… PRIVATE KEY BLOCK) — that the fixed
   // alternation missed; the block delimiters make FP impossible.
   // The body stops at the next `-----BEGIN ` (D#130): with `[\s\S]*?` every header with no END
   // scanned to the end of the text, on each of scrubSecrets' passes — quadratic, 8.3 s on 500k
-  // chars. A block whose END is missing ends where the next private-key BEGIN starts, so a cut-off
-  // key's body is scrubbed too (v6.19.0 pre-tag review P2-1: requiring the END there stored that
-  // body); any other BEGIN (a certificate) does not end it, so a bare header in prose does not
-  // erase the text up to one (delta review P3-2). A header with no END and no later key header
-  // is left as it was in v6.18.0.
+  // chars. A block whose END is missing is left to the next pattern.
   [
-    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY)[\s\S])*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|(?=-----BEGIN [A-Z0-9 ]*PRIVATE KEY))/g,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
     '***PEM_KEY***',
+  ],
+  // A cut-off key (`head id_rsa`, a tool output cut mid-key): the header and the WHOLE lines of
+  // base64 (or RFC 1421 headers) that follow it. Stored whole through v6.19.0 when no later key
+  // header followed. Whole lines only, so prose naming a header mid-sentence keeps its text
+  // (v6.19.0 round-3 P3-3: ending the block at the next key header erased the prose between two).
+  [
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*\r?\n[ \t]*(?:[A-Za-z0-9+/=]+|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\r\n]*)[ \t]*(?=\r?\n|$)|[ \t]*\r?\n(?=[ \t]*\r?\n))+/g,
+    '***PEM_KEY***',
+  ],
+  // The other end (`tail key.pem`): whole base64 lines ending in a private-key END. A run of lines
+  // that does not end there is consumed and returned unchanged, so no line starts a second scan.
+  [
+    /(?<![^\n])(?:[ \t]*[A-Za-z0-9+/=]+[ \t]*\r?\n)+(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----)?/g,
+    (m) => (m.endsWith('-----') ? '***PEM_KEY***' : m),
   ],
   // Long hex strings in credential assignments (e.g. SECRET_KEY=abc123def456...).
   // `hash` deliberately excluded: `hash: <40hex>` / `hash=<md5>` are git SHAs and

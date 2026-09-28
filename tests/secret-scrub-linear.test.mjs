@@ -46,6 +46,13 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // Linear but slow: D#128's code-label branch ran a 40-char lookbehind at every position
     // until a lookahead gated it (500k chars: 407 ms → 3,387 ms → 428 ms).
     chainedWordRun: CHAIN + " '" + 'secret'.repeat(N / 6),
+    // 2026-09-28 cut-off key and headerless-body patterns: base64 lines with no END anywhere.
+    pemBodyNoEnd: CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\n' + 'MIIEabcdef\n'.repeat(N / 11),
+    base64LinesNoEnd: CHAIN + ' ' + 'MIIEabcdef\n'.repeat(N / 11),
+    base64LinesThenCertEnd:
+      CHAIN + ' ' + ('MIIEabcdef\n'.repeat(20) + '-----END CERTIFICATE-----\n').repeat(N / 246),
+    jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),
+    jwtDotChain: ('eyJ' + 'A'.repeat(12) + '.').repeat(N / 16),
   };
   // Timed against benign prose of the same length, not a wall-clock bound: a 500 ms bound
   // passed locally (335 ms) and failed on CI under coverage (555 ms). The benign text runs
@@ -113,22 +120,77 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
       'k: -----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY----- ok',
       'k: ***PEM_KEY*** ok',
     ],
+    // A header with no body is not key material: it stays, and the complete block after it goes.
     [
       'a later complete PEM block after a stray header',
       '-----BEGIN EC PRIVATE KEY-----\n-----BEGIN EC PRIVATE KEY-----\nMIIEabc\n-----END EC PRIVATE KEY-----',
-      '***PEM_KEY******PEM_KEY***',
+      '-----BEGIN EC PRIVATE KEY-----\n***PEM_KEY***',
     ],
     // v6.19.0 pre-tag review P2-1: a body that stopped at the next BEGIN failed to match at
-    // all when its own END was missing, so the cut-off key's body was stored.
+    // all when its own END was missing, so the cut-off key's body was stored. The cut-off body
+    // is its whole base64 lines; the text between the two keys stays.
     [
       'a cut-off key body before a later complete block',
       '$ head -c 80 id_rsa\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\n$ cat id_rsa\n-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----',
-      '$ head -c 80 id_rsa\n***PEM_KEY******PEM_KEY***',
+      '$ head -c 80 id_rsa\n***PEM_KEY***\n$ cat id_rsa\n***PEM_KEY***',
     ],
     [
       'a key body, then a certificate, then another key',
       '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----\n-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEabc\n-----END OPENSSH PRIVATE KEY-----',
-      '***PEM_KEY******PEM_KEY***',
+      '***PEM_KEY***\n-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----\n***PEM_KEY***',
+    ],
+    // 2026-09-28: a key with no END and no later key header was stored whole, in v6.18.0 too
+    // (`head id_rsa`, a tool output cut mid-key).
+    [
+      'a cut-off key at the end of the text',
+      'before\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\nMOREKEYBODYxyz0123456789\n',
+      'before\n***PEM_KEY***\n',
+    ],
+    [
+      'a cut-off key followed by prose',
+      '-----BEGIN OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXktdjEAAAAA\r\nMOREKEYBODY==\r\ndone.',
+      '***PEM_KEY***\r\ndone.',
+    ],
+    [
+      'an encrypted cut-off key keeps no header line either',
+      '-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,3F2A\n\nMIIEowIBAAKCAQEAu1SU\n',
+      '***PEM_KEY***\n',
+    ],
+    [
+      'a cut-off key followed only by a certificate',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU\n-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----',
+      '***PEM_KEY***\n-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----',
+    ],
+    // `tail key.pem`: the body and the END with no header.
+    [
+      'a key body and END with no header',
+      'ok\n$ tail -2 key.pem\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgO\nMOREKEYBODY==\n-----END RSA PRIVATE KEY-----\nnext',
+      'ok\n$ tail -2 key.pem\n***PEM_KEY***\nnext',
+    ],
+    [
+      'base64 lines that end at no private-key END stay',
+      'abc\nMIIBcert\n-----END CERTIFICATE-----\nlines\nof\nwords',
+      'abc\nMIIBcert\n-----END CERTIFICATE-----\nlines\nof\nwords',
+    ],
+    // v6.19.0 round-3 P3-3: ending an unterminated key at the next key header erased the prose
+    // between two headers named in one sentence.
+    [
+      'prose naming two key headers',
+      'RSA keys start with -----BEGIN RSA PRIVATE KEY----- and EC keys with -----BEGIN EC PRIVATE KEY----- ok',
+      'RSA keys start with -----BEGIN RSA PRIVATE KEY----- and EC keys with -----BEGIN EC PRIVATE KEY----- ok',
+    ],
+    // v6.19.0 round-3 P3-2: past 40 characters of hyphenated prefix the JWT was stored.
+    [
+      'JWT after a 44-character hyphenated prefix',
+      `cookie: session-3f2a9c1e-8b4d-4e2f-9a1b-7c6d5e4f3a2b-${jwt}`,
+      'cookie: session-3f2a9c1e-8b4d-4e2f-9a1b-7c6d5e4f3a2b-***',
+    ],
+    ['JWT after a long path segment', `/tmp/${'a'.repeat(52)}-${jwt} x`, `/tmp/${'a'.repeat(52)}-*** x`],
+    ['JWT glued by an underscore', `tok_${jwt}`, 'tok_***'],
+    [
+      'a dotless eyJ run stays',
+      `eyJ-${'a'.repeat(30)}-eyJ${'b'.repeat(30)} ok`,
+      `eyJ-${'a'.repeat(30)}-eyJ${'b'.repeat(30)} ok`,
     ],
     // v6.19.0 pre-tag delta review P3-2: ending an unterminated key at ANY later BEGIN erased
     // prose up to a certificate header.

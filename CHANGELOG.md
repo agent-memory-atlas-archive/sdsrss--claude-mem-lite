@@ -2,6 +2,30 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.19.3 — capture in uuid-shaped projects; browse and restore provenance
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Nothing was captured in a project whose hook session id took the uuid shape.** The hook
+  names each session `hook-<project>-<8 hex>` and stores the id in both session columns. When the
+  project name (`<parent>--<directory>`, such as `dev--abc-efgh-jklm-opq` for
+  `~/dev/abc-efgh-jklm-opq`) is 22 characters with a dash as its 4th, 9th, 14th and 19th
+  character, that id is 36 characters with dashes where a uuid has them, the database refused
+  the session row, and every hook write in the project failed. The hook still exited normally,
+  so the error went only to its stderr and to the hook-errors count `stats` shows. Such an id now
+  gets one more character (`~`), as the other writers' ids have since 6.19.2.
+- **`browse` and `mem_browse` could list every explicit save in a project as working memory.**
+  Their "current session" was the project's newest active session row. The first `mem_save` in
+  a project (or its first merge, promote or narrow re-enrich) adds such a row, which stays
+  active until a session starts at least 24 hours later, while the hook's own session is marked
+  completed at the end of every reply. Only the hook's own session counts now.
+- **`restore` brought every row back as an explicit save.** Rows the hook, a merge, a promote
+  or an import wrote came back unmarked in `search` and `get`. They are restored as
+  machine-written now (under `restore-<project>`); explicit saves, and rows from a backup
+  without session ids, are restored as explicit saves as before.
+- The private-key line scanners do less work on text with many key headers. The output is
+  unchanged.
+
 ## v6.19.2 — private keys in every line shape; saving in uuid-shaped projects
 
 Fixes only; no schema change, no migration, no new setting.

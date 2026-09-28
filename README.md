@@ -237,6 +237,20 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.19.0
+
+**Search output changes; no switch.** No schema change and no migration, so reverting is
+pinning `claude-mem-lite@6.18.0`.
+
+- **`search` / `mem_search` mark machine-written observations with `🤖`**, and `get` /
+  `mem_get` name them in the header. Hook-captured, imported and compressed rows carry it;
+  explicit saves and events do not. The result line explains the mark whenever a shown row
+  has it, and `search --json` adds `auto` to observation rows.
+- **`mem_search` shows a snippet line only when it adds to the title.**
+- Fixes: a lone search match in a new per-project store no longer sorts last; a Bash
+  step's stored description keeps the end of its output; the secret scrubber catches values
+  behind markdown labels and stays linear-time on crafted input.
+
 ## Upgrading to 6.18.0
 
 **One default changes, with a switch.** No schema change and no migration. Pinning

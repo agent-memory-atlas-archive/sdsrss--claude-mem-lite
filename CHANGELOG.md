@@ -2,6 +2,49 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.19.0 — search marks machine-written memories; scrubber and ranking fixes
+
+**Upgrade note.** No schema change and no migration. The default output of `search` / `get`
+changes (below); there is no switch for it. Reverting everything is pinning
+`claude-mem-lite@6.18.0`.
+
+- **Search and get mark observations that were not saved explicitly** (#38, by
+  @danitrrga). A row written by hook capture, transcript import or compression, or imported
+  from an older store, shows `🤖` after its type in `search` (CLI and `mem_search`), and the
+  result line explains it (`🤖 = auto-written, not an explicit save`) whenever a shown row
+  carries it. `get` / `mem_get` name it in the row header. Explicit saves (`mem_save`,
+  `save`, `/lesson`, `/bug`) are unmarked, as every row was before, and so are events.
+  `search --json` carries `auto: true|false` on observation rows.
+- **`mem_search` stops repeating the title as its snippet line.** The snippet line is shown
+  only when the excerpt says something the title does not.
+- **Fix: a lone match whose IDF FTS5 clamped ranked last in cross-source search** (#36,
+  reported by @danitrrga). When a term is in at least half of a table's rows (in a new
+  per-project store, any two-row table), FTS5 replaces its IDF with 1e-6 and the row's score
+  stops saying how well it matched. A source with one such match was scored as a grazing hit
+  and sorted below every row of every other source; it is now scored like the best row of
+  any other source, which is what two such matches already got. It changes nothing where the
+  IDF is informative.
+- **Fix: a Bash step's description keeps the verdict its output ends with** (#37, by
+  @danitrrga). The episode summarizer saw only the first 60 characters of a command's output,
+  so a check that printed its result last read as unresolved, and a passing check was
+  written up as a bugfix. The description now keeps the head and the tail of the output (100
+  characters), each scrubbed before the cut. Output that contains a `<private>` tag or a
+  private-key header anywhere keeps the old 60-character head and no tail. Every description
+  field (Bash output and command, Edit, Grep and the rest) now stops before an unclosed
+  `<private>` tag or private-key header, where it used to show what followed. The extraction
+  prompt also says to state only outcomes the actions show.
+- **Security fixes in the secret scrubber** (found in the v6.18.0 review; present since
+  6.17.x):
+  - A label with markup between the noun and its value (`- **Password**: \`<value>\``,
+    `**Password:** <value>`) was not recognised, so the value was stored. It is now scrubbed,
+    in observations, prompts and session reports alike.
+  - Four patterns ran in quadratic time on crafted input (a JSON vendor key, quoted keys, a
+    JWT-shaped run, PEM headers with no END). Every stored field goes through the scrubber on
+    a synchronous hook path, and crafted input drove Stop past its 5-second timeout (27 s).
+    All four are linear now.
+  - A stored report could forge the /clear handoff's `<session-summary>` wrapper; that tag is
+    now defanged like the other context wrappers.
+
 ## v6.18.0 — Last Session says how the previous session ended, without a report
 
 **Upgrade note.** No schema change and no migration. One default behaviour changes, and it

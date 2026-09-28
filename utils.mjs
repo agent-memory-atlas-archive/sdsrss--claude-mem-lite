@@ -284,9 +284,18 @@ export function isRelatedToEpisode(episode, newFiles) {
 // seen whole by the patterns, at bounded cost.
 const DESC_SCRUB_WINDOW = 4096;
 
+// Every field is cut strictly around private spans: closed `<private>` spans are redacted across
+// the WHOLE input first (one linear pass; hook input is capped at 256 KiB), then the window stops
+// before the first remaining `<private>` or private-key BEGIN, so no field shows a span whose end
+// is out of view. Before v6.19.0 an unclosed opener in the window (a Grep line
+// `notes.md:3:<private>bank pin 4412`) was shown as written (v6.19.0 pre-tag reviews P3-1, r3 P2-1).
+// The PEM half is case-sensitive, like the scrubber's PEM pattern.
+const PRIVATE_OPENER_RE = /<[Pp][Rr][Ii][Vv][Aa][Tt][Ee]>|-----BEGIN [A-Z0-9 ]*PRIVATE KEY/;
 function scrubTruncate(str, max) {
   if (typeof str !== 'string' || str === '') return truncate(str, max);
-  let win = str.slice(0, DESC_SCRUB_WINDOW);
+  let win = stripPrivate(str).slice(0, DESC_SCRUB_WINDOW);
+  const at = win.search(PRIVATE_OPENER_RE);
+  if (at >= 0) win = win.slice(0, at);
   // The window edge can split a surrogate pair; truncate only guards a cut it makes itself.
   if (/[\uD800-\uDBFF]$/.test(win)) win = win.slice(0, -1);
   return truncate(_scrubSecrets(win), max);
@@ -299,27 +308,18 @@ function scrubTruncate(str, max) {
 // the verdict of any output longer than DESC_SCRUB_WINDOW.
 //
 // Output with a private span anywhere in it (a `<private>` tag or a PEM private-key marker) shows
-// no tail, only v6.18.0's 60-character head. The tail is scrubbed in its own window, which
-// cannot see a span that crosses its edge, and pairing the markers per window stored span text
-// two ways in the v6.19.0 pre-tag review (a cut inside a closed `<private>`, a key with no END
-// more than 4096 characters back). That head is made strict: closed `<private>` spans are
-// redacted across the WHOLE output first (one linear pass), then the head stops before the first
-// remaining `<private>` or private-key BEGIN, so it never shows a span whose end it cannot see.
+// no tail, only v6.18.0's 60-character head (cut as above). The tail is scrubbed in its own
+// window, which cannot see a span that crosses its edge, and pairing the markers per window
+// stored span text two ways in the v6.19.0 pre-tag review (a cut inside a closed `<private>`, a
+// key with no END more than 4096 characters back).
 const PRIVATE_TAG_HINT_RE = /<\/?private>/i;
-const PRIVATE_OPENER_RE = /<private>|-----BEGIN [A-Z0-9 ]*PRIVATE KEY/i;
 const HEAD_ONLY_MAX = 60;
-function privateSafeHead(str, max) {
-  let win = stripPrivate(str).slice(0, DESC_SCRUB_WINDOW);
-  const at = win.search(PRIVATE_OPENER_RE);
-  if (at >= 0) win = win.slice(0, at);
-  return scrubTruncate(win, max);
-}
 // The early return needs the WHOLE output inside the head window: a long output whose first
 // 4096 characters collapse to a few (whitespace) still has a tail to show (v6.19.0 pre-tag
 // claims review F2).
 function scrubTruncateEnds(str, max) {
   if (typeof str === 'string' && (str.includes('PRIVATE KEY') || PRIVATE_TAG_HINT_RE.test(str))) {
-    return privateSafeHead(str, HEAD_ONLY_MAX);
+    return scrubTruncate(str, HEAD_ONLY_MAX);
   }
   const flat = scrubTruncate(str, DESC_SCRUB_WINDOW);
   const whole = typeof str !== 'string' || str.length <= DESC_SCRUB_WINDOW;

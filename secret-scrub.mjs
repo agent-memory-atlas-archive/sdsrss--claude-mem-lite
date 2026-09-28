@@ -189,7 +189,7 @@ export const SECRET_PATTERNS = [
   // fresh start that rescans the run to its end — quadratic, 9.6 s on 200k chars of `eyJ-`
   // (D#130). A `-eyJ` start is the middle of a run, never a JWT's first character.
   // A JWT glued by a hyphen to up to 40 characters of hyphenated words (`my-sess-eyJ…`,
-  // `X-Auth-Token-eyJ…`) is a start too, as `\b` allowed. The lookbehind needs a token
+  // `X-Auth-Token-eyJ…`) is a start too. `\b` allowed any length; past 40 characters it is missed. The lookbehind needs a token
   // boundary within those 41 characters, so a hyphen run has at most ~10 starts, not one per
   // `-eyJ` (v6.19.0 pre-tag reviews P3-2, delta P3-1).
   [

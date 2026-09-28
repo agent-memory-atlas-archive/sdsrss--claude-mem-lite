@@ -1298,6 +1298,23 @@ describe('makeEntryDesc', () => {
     });
   });
 
+  // v6.19.0 pre-tag round-3 review P2-1: every field, not only Bash output, stops before an
+  // unclosed <private> or key header.
+  it('shows no text after an unclosed <private> in a Grep result', () => {
+    const desc = makeEntryDesc('Grep', { pattern: 'pin' }, 'notes.md:3:<private>bank pin 4412');
+    expect(desc).not.toMatch(/4412|bank pin/);
+  });
+
+  it('shows no text after an unclosed <private> in an Edit fragment', () => {
+    const desc = makeEntryDesc('Edit', {
+      file_path: '/x/notes.md',
+      old_string: 'vault <private>pin 7731',
+      new_string: 'x',
+    });
+    expect(desc).not.toMatch(/7731/);
+    expect(desc).toContain('vault');
+  });
+
   it('describes Grep tool', () => {
     const desc = makeEntryDesc('Grep', { pattern: 'TODO' }, 'src/foo.js:10: TODO fix');
     expect(desc).toContain('Search');

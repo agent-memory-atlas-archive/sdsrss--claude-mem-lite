@@ -375,7 +375,10 @@ const KEY_MAGIC_RE = /^(?:MII|MIG|MC4C|MHcC|b3BlbnNzaC1rZXktdjE)/;
 const PGP_MAGIC_RE = /^(?:lQ|x[cV])/;
 // RFC 1421 / RFC 4880 armor headers, before the body. Named, not any `Word:`: a `Note:` line is
 // prose, and taking it for a header made the lone base64 line under it a key.
-const ARMOR_HEADER_RE = /^(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset|MessageID)[ \t]*:/i;
+// RFC 1421's full set and tool-written `X-` headers count too (v6.19.2 pre-tag delta review F4:
+// `Content-Domain` or `X-Custom` before the body stored the whole key).
+const ARMOR_HEADER_RE =
+  /^(?:Proc-Type|DEK-Info|Content-Domain|Originator-ID-(?:Asymmetric|Symmetric)|Originator-Certificate|Issuer-Certificate|MIC-Info|Key-Info|Recipient-ID-(?:Asymmetric|Symmetric)|CRL|Version|Comment|Hash|Charset|MessageID|X-[A-Za-z0-9-]+)[ \t]*:/i;
 const MAX_ARMOR_HEADERS = 16;
 // A JS/Python string split across source lines: `…\n" +` then `"…` on the next line. Not a comma:
 // `'…\n',` then `'…'` is the next element of a list, and its first word is not the key's last line.
@@ -384,6 +387,8 @@ const MAX_ARMOR_HEADERS = 16;
 const CONCAT_AFTER_RE = /["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']/y;
 const CONCAT_BEFORE_RE = /(?:\\r)?\\n["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']$/;
 const PEM_MARK = '***PEM_KEY***';
+// After an END that ends its line: a closing quote or punctuation, then a break or the text end.
+const CLEAN_AFTER_END_RE = /[ \t"'`,;)\]}]*(?:\r|\n|\\+[nr]|$)/y;
 
 const BLANK = 0;
 const LONG = 1;
@@ -609,7 +614,14 @@ function cutOffKeyEnd(text, b, be, seen) {
         break;
       }
       const ch = text[k - 1];
-      if ((ch === '"' || ch === "'") && isStringEnd(backslashesBefore(text, k - 1, 0), u)) {
+      // An opening quote sits where a string can start (after a space, `:`, `,`, `[`, `{`, `(`,
+      // `=` or at a line start). An apostrophe inside a word (`Here's`) is prose: taking it let
+      // the JSON string's closing `"` through (v6.19.2 pre-tag delta review F1).
+      if (
+        (ch === '"' || ch === "'") &&
+        isStringEnd(backslashesBefore(text, k - 1, 0), u) &&
+        (k - 1 === 0 || /[\s:,[{(=]/.test(text[k - 2]))
+      ) {
         quote = ch;
         break;
       }
@@ -739,24 +751,40 @@ function keyTailSpan(text, e, ee, floor) {
     return false;
   };
   // The END line's own prefix: a line prefix, the key's last base64 run glued to the END, or words.
+  // Words with spaces are a line prefix when the line above starts the same way (`web-1  | `, a
+  // syslog stamp, `> > `; v6.19.2 pre-tag delta review F2), and a sentence naming the END if not.
   const prefix = text.slice(ls, e);
   const trimmed = prefix.trim();
-  const sentence = /\S\s+\S/.test(trimmed);
   let shape = null;
+  let sentence = false;
+  let prefixed = false;
   if (/^[ \t]*[A-Za-z0-9+/=]+$/.test(prefix)) {
     const at = ls + prefix.indexOf(trimmed);
     if (!take(trimmed, at, at + trimmed.length)) return null;
-  } else if (!sentence) shape = prefixShape(prefix);
+  } else {
+    shape = prefixShape(prefix);
+    const above = shape && prevLine(text, ls, u, floor);
+    prefixed = Boolean(above && shape.test(text.slice(above.start, above.end)));
+    if (/\S\s+\S/.test(trimmed) && !prefixed) {
+      sentence = true;
+      shape = null;
+    }
+  }
+  // An END alone on its line (after nothing but a line prefix, before nothing but a quote or
+  // punctuation) is evidence enough for one line over it: `tail -n 2` of a key whose last line
+  // is 16-39 characters (F3). An END in a sentence or in inline code followed by words is not.
+  CLEAN_AFTER_END_RE.lastIndex = ee;
+  const clean = !sentence && (trimmed === '' || prefixed) && CLEAN_AFTER_END_RE.test(text);
   let cur = ls;
   for (let line; (line = prevLine(text, cur, u, floor)); cur = line.start) {
     const { core, start, end } = lineCore(text, line.start, line.end, shape);
     if (!take(core, start, end)) break;
   }
-  // The same evidence a cut-off key needs: one base64 line alone is a key tail only when it is 40+
-  // characters, starts like a key encoding or sits over a PGP checksum; an identifier of 16-39
-  // characters over an END in prose is not (F7).
+  // Otherwise the same evidence a cut-off key needs: one base64 line alone is a key tail only when
+  // it is 40+ characters, starts like a key encoding or sits over a PGP checksum; an identifier of
+  // 16-39 characters over an END named in prose is not (F7).
   if (longs === 0) return null;
-  if (!(longs >= 2 || longest >= 40 || crc || KEY_MAGIC_RE.test(topCore))) return null;
+  if (!(longs >= 2 || longest >= 40 || crc || clean || KEY_MAGIC_RE.test(topCore))) return null;
   return [top, sentence ? bottom : ee];
 }
 

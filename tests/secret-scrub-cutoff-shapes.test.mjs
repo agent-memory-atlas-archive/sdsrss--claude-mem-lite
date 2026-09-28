@@ -307,3 +307,83 @@ describe('v6.19.2 pre-tag defect review: prose and robustness', () => {
     expect(() => scrubSecrets(`${H} ${'A '.repeat(150_000)}\n`)).not.toThrow();
   });
 });
+
+describe('v6.19.2 pre-tag delta review', () => {
+  const H = '-----BEGIN RSA PRIVATE KEY-----';
+  const E = '-----END RSA PRIVATE KEY-----';
+  const B = 'MIIEpAIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun';
+  const X = 'Xq9ZbT2kLp8WvR4nYc7MfH1sJd6GaU3eQo5iKx0wBzNtVy';
+  it.each([
+    // F1: an apostrophe in prose earlier in a JSON string ("Here's") is not the string's opening
+    // quote; taking it let the closing `"` through and made `'` end the string.
+    [
+      'a cut-off key in a JSON string after an apostrophe',
+      JSON.stringify({
+        stdout: `Here's the head:\n${H}\n${B}\n${X.slice(0, 30)}`,
+        stderr: '',
+        interrupted: false,
+      }),
+      [X.slice(0, 30)],
+    ],
+    [
+      'a PGP key with an apostrophe in its Comment, after an apostrophe',
+      JSON.stringify({
+        stdout: `Here's it:\n-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: Alice's key\n\nlQdGBF${X}\n${X}${X}`,
+        stderr: '',
+      }),
+      [`lQdGBF${X}`, X.slice(0, 20)],
+    ],
+    // F2: a log prefix with spaces on every line, the END line included, is a line prefix.
+    [
+      'a key tail in docker compose logs',
+      `web-1  | ${X}\nweb-1  | ${X}\nweb-1  | abc=\nweb-1  | ${E}\nweb-1  | listening`,
+      [X],
+    ],
+    [
+      'a key tail in syslog lines',
+      `Sep 28 12:00:01 host app[1]: ${X}\nSep 28 12:00:01 host app[1]: ${X}\nSep 28 12:00:02 host app[1]: ${E}`,
+      [X],
+    ],
+    ['a key tail in a nested mail quote', `> > ${X}\n> > ${X}\n> > ${E}`, [X]],
+    // F3: `tail -n 2` of a key whose last line is 16-39 characters, over an END on its own line.
+    ['a one-line key tail of 30 characters', `${X.slice(0, 30)}\n${E}\n`, [X.slice(0, 30)]],
+    ['a one-line key tail of 16 characters', `$ tail -n 2 k.pem\n${X.slice(0, 16)}\n${E}`, [X.slice(0, 16)]],
+    // F4: RFC 1421 headers beyond the common ones, and tool-written `X-` headers.
+    [
+      'a Content-Domain header before the body',
+      `${H}\nProc-Type: 4,ENCRYPTED\nContent-Domain: RFC822\nDEK-Info: AES-128-CBC,ABCDEF0123456789\n\n${B}\n${B}`,
+      [B],
+    ],
+    ['an X- header before the body', `${H}\nX-Custom: foo\n\n${B}\n${B}`, [B]],
+  ])('%s', (_name, input, keyParts) => {
+    const out = scrubSecrets(input);
+    expect(keyParts.filter((k) => out.includes(k))).toEqual([]);
+  });
+
+  it.each([
+    // The F2 repair must not make a sentence naming an END a prefix: the line above has no such prefix.
+    [
+      'a sentence END under an identifier',
+      `Run the migration:\nnpmRunBuildAndTestEverything\nA PEM file ends with ${E} and nothing else.`,
+      ['npmRunBuildAndTestEverything', 'A PEM file ends with'],
+    ],
+    // The F3 repair needs a clean END line: an END in inline code followed by words is not one.
+    [
+      'an END in inline code under an identifier',
+      `readPrivateKeyFromFile\n\`${E}\` marks the end.`,
+      ['readPrivateKeyFromFile'],
+    ],
+    // Both halves of a clean END line are needed: nothing before it, and nothing after it.
+    [
+      'an END at a line start followed by words',
+      `readPrivateKeyFromFile\n${E} marks the end.`,
+      ['readPrivateKeyFromFile'],
+    ],
+    ['an END in a code span on its own line', `readPrivateKeyFromFile\n\`${E}\``, ['readPrivateKeyFromFile']],
+    // The F1 repair: a Python repr still ends at its single quote.
+    ['a Python repr after the key', `{'stdout': '${H}\\n${B}\\n${B}\\nZq9Xw2Lk', 'rc': 0}`, ["'rc': 0"]],
+  ])('%s keeps its text', (_name, input, keep) => {
+    const out = scrubSecrets(input);
+    expect(keep.filter((k) => !out.includes(k))).toEqual([]);
+  });
+});

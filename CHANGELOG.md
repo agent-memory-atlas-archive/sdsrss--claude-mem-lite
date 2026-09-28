@@ -2,6 +2,51 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.19.2 — private keys in every line shape; saving in uuid-shaped projects
+
+Fixes only; no schema change, no migration, no new setting.
+
+- **Security: a cut-off private key or key tail was stored when its lines had a prefix or an
+  unusual break.** 6.19.1 scrubbed plain LF/CRLF lines and single-escaped `\n` breaks. Stored in
+  full until now: lines numbered by the Read tool or `cat -n` (`     2\t`, `2→`), `grep` output
+  (`id_rsa:`, `id_rsa-12-`), `> ` quoting, diff markers, a key inside a JS string split over
+  source lines (`"…\n" +`), a key inside a single-quoted string (a Python repr, `echo -e '…'`),
+  breaks escaped twice (a JSON string inside a JSON string), lone CR breaks, a key pasted onto
+  its BEGIN line, a key whose last line is followed by a closing backtick or tag, a truncation
+  note or (after a full-length line) words, such as a single-line Ed25519 key in a code span,
+  and a PGP key whose `Comment:` holds a Windows path. The same goes for a key tail
+  (`tail key.pem`) in those shapes.
+- **Prose next to a key marker keeps its text.** 6.19.1 could erase the first word of a
+  sentence right under a key (`Don't` lost `Don`), a path or identifier that starts the line
+  after a key header or body, the JSON fields after a cut header value when no base64 line
+  follows, two short words above an END line, and the text between a BEGIN and a far END once a
+  key between them had been scrubbed.
+  - Known limits: a fragment of 15 characters or fewer is kept, which includes a short last
+    line followed by more fields of the same JSON object or repr. A word line of 16 or more
+    letters right under a key body is taken for the key's last line. One base64 line of 16–39
+    characters under a key header is kept unless it starts like a key encoding (`MII…`,
+    `b3BlbnNzaC1rZXktdjE…`, or `lQ…`/`xc…` under a PGP header) or follows `Proc-Type`-style
+    headers. Above an END on its own line, such a line is kept when it has no digit, `+` or `=`
+    padding; above an END named in a sentence or in a backtick code span, it is kept unless it
+    starts like a key encoding or sits over a PGP checksum. An END followed only by closing tags
+    (`</code>`, `</key>`) counts as standing on its own line.
+    A key tail whose first line starts mid-line after prose is kept, as is a cut-off key whose
+    BEGIN line goes on with words. Right after a key header or body, blank lines between or not,
+    a line that starts with 40 or more letters, digits, `+`, `/` or `=` loses that start, and so
+    does a shorter run that a `[`, `<`, a quote, a backtick or five dashes follow. In escaped text,
+    a header value whose string runs on into later fields loses those fields up to a later
+    base64-looking line, as in 6.19.1. A 16–39 character last line before `&quot;`, and one over
+    an END inside an XML attribute (`…END-----"/>`), is kept. Prose that names a BEGIN and, later,
+    an END with no key between loses the text between them, as in earlier releases.
+- **Saving works in a project whose name makes a writer id look like a uuid.** For one name
+  length and dash layout per writer (for example a 29-character name shaped
+  `x-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), every `mem_save` failed, `activity promote` skipped every
+  event, and smart-compress and the weekly compress failed every run; smart-compress spent its
+  model call each time.
+- **Search's 🤖 mark covers memories that narrow re-enrich rewrote.** An explicit save whose
+  save-time enrichment had failed was rewritten with model text and still shown as an explicit
+  save.
+
 ## v6.19.1 — secret scrubber and description fixes
 
 Fixes only; no schema change, no migration, no new setting.

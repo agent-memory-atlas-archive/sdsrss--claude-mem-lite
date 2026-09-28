@@ -406,6 +406,15 @@ const ARMOR = 4;
 const CUT = 5;
 const OTHER = 6;
 
+// Character-class checks by code, not a regex per character: the scanners visit every BEGIN on
+// every pass of the fixed-point loop, and under coverage instrumentation a per-character regex
+// test put the many-BEGINs linearity shape past its 10x budget on CI (v6.19.2 release run).
+function isB64Code(c) {
+  return (
+    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 43 || c === 47 || c === 61
+  );
+}
+
 function backslashesBefore(text, i, floor) {
   let j = i;
   while (j > floor && text[j - 1] === '\\') j--;
@@ -508,7 +517,7 @@ function lineCore(text, s, e, shape) {
   // (`</key>`), and escaped breaks before it. Read from the end: an unanchored
   // `(?:\\+[rn])*["']…$` retried every start in a backslash run.
   let q = b;
-  while (q > a && /[ \t+,;)\]}]/.test(line[q - 1])) q--;
+  while (q > a && ' \t+,;)]}'.includes(line[q - 1])) q--;
   const tag = q > a && line[q - 1] === '>' ? /<\/[A-Za-z][\w:.-]{0,40}>$/.exec(line.slice(a, q)) : null;
   if (tag) b = q - tag[0].length;
   else if (q > a && (line[q - 1] === '"' || line[q - 1] === "'" || line[q - 1] === '`')) {
@@ -559,7 +568,11 @@ function cutRun(core) {
 function cutOffKeyEnd(text, b, be) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
   let i = be;
-  while (i < text.length && /[A-Za-z0-9+/= \t]/.test(text[i])) i++;
+  for (
+    let c = text.charCodeAt(i);
+    i < text.length && (isB64Code(c) || c === 32 || c === 9);
+    c = text.charCodeAt(++i)
+  );
   const rest = text.slice(be, i).trim();
   let u;
   let next;
@@ -608,13 +621,15 @@ function cutOffKeyEnd(text, b, be) {
   // for one, it stripped this key's identical body line and one copy of a repeated cut key went
   // per pass (v6.19.2 pre-tag round-5 review F2).
   let run = 0;
-  while (run < 16 && b - run > ls && /[A-Za-z0-9+/=]/.test(text[b - run - 1])) run++;
+  while (run < 16 && b - run > ls && isB64Code(text.charCodeAt(b - run - 1))) run++;
   const shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
 
   let armors = 0;
   let shorts = 0;
   let pendingBlank = false;
   while (next !== -1) {
+    // Another BEGIN line is never part of this key; stop before reading it whole.
+    if (!shape && text.startsWith('-----BEGIN ', next)) break;
     const line = nextLine(text, next, u);
     const { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
     const kind = classify(core);

@@ -508,6 +508,54 @@ function prefixShape(prefix) {
   return new RegExp(`^[ \\t]*${src}`);
 }
 
+const isDigitCode = (c) => c >= 48 && c <= 57;
+const isWordChar = (ch) => /\w/.test(ch);
+// A string opener before a line prefix on a BEGIN line: `'+`, `b'+`, `"-`, `'''+`.
+const OPENER_RE = /^[ \t]*[A-Za-z]{0,2}(['"`])\1{0,2}/;
+
+/**
+ * How much of `left` (a BEGIN line's left context) the line `line` starts with, under prefixShape's
+ * equivalences: leading blanks free, digit runs of any length, `:` and `-` interchangeable. It
+ * ends at a character that is not a word character, or after an escape (`\t`), as a line prefix
+ * does: `-MY_KEY = '''` over `-MIIE…` shares `-M` by chance and `-` is the prefix; `M = '''` over
+ * `MHcC…` shares nothing; `\tMII = """` over `\tMHcC…` shares `\t`.
+ */
+function sharedPrefixLength(left, line) {
+  let i = 0;
+  let j = 0;
+  while (i < left.length && (left[i] === ' ' || left[i] === '\t')) i++;
+  while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
+  let n = 0;
+  while (i < left.length && j < line.length) {
+    if (isDigitCode(left.charCodeAt(i)) && isDigitCode(line.charCodeAt(j))) {
+      while (i < left.length && isDigitCode(left.charCodeAt(i))) i++;
+      while (j < line.length && isDigitCode(line.charCodeAt(j))) j++;
+    } else if (left[i] === line[j] || (':-'.includes(left[i]) && ':-'.includes(line[j]))) {
+      i++;
+      j++;
+    } else break;
+    n = i;
+  }
+  while (n > 0 && isWordChar(left[n - 1]) && left[n - 2] !== '\\') n--;
+  return n;
+}
+
+/**
+ * A line prefix for the first line under a BEGIN whose whole left context that line does not start
+ * with (D#160): the part of the context the line shares, after a string opener if the context
+ * starts with one. Null when it shares none.
+ */
+function sharedShape(left, line) {
+  let base = left;
+  let n = sharedPrefixLength(base, line);
+  const opener = n === 0 && OPENER_RE.exec(left);
+  if (opener) {
+    base = left.slice(opener[0].length);
+    n = sharedPrefixLength(base, line);
+  }
+  return n === 0 ? null : prefixShape(base.slice(0, n));
+}
+
 /** The judged part of line [s, e): no prefix of the key's shape, no padding, no string quotes. */
 function lineCore(text, s, e, shape) {
   let line = text.slice(s, e);
@@ -633,7 +681,13 @@ function cutOffKeyEnd(text, b, be) {
   // per pass (v6.19.2 pre-tag round-5 review F2).
   let run = 0;
   while (run < 16 && b - run > ls && isB64Code(text.charCodeAt(b - run - 1))) run++;
-  const shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
+  let shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
+  // D#160: code or a string opener around the line prefix on the BEGIN line (`-KEY = '''`,
+  // `     5\tKEY = """`, `'+`) is on no line below, so no line lost its prefix and a cut key was
+  // stored whole. When nothing of the key is on the BEGIN line and its first line, read that way,
+  // is not key material, that line is read once more with the prefix it shares with the BEGIN line,
+  // and that prefix is kept. Read the first way, such a key was never taken, so none goes less.
+  let reread = shape !== null && longs === 0;
 
   let armors = 0;
   let shorts = 0;
@@ -642,8 +696,21 @@ function cutOffKeyEnd(text, b, be) {
     // Another BEGIN line is never part of this key; stop before reading it whole.
     if (!shape && text.startsWith('-----BEGIN ', next)) break;
     const line = nextLine(text, next, u);
-    const { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
-    const kind = classify(core);
+    let { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
+    let kind = classify(core);
+    if (reread) {
+      reread = false;
+      const lineText = text.slice(next, line.end);
+      const alt =
+        (kind === SHORT || kind === OTHER) &&
+        !shape.test(lineText) &&
+        sharedShape(text.slice(ls, b), lineText);
+      if (alt) {
+        shape = alt;
+        ({ core, start, end: coreEnd } = lineCore(text, next, line.end, shape));
+        kind = classify(core);
+      }
+    }
     next = line.next;
     if (kind === END) {
       if (longs > 0) end = start + KEY_END_LINE_RE.exec(core)[0].length;

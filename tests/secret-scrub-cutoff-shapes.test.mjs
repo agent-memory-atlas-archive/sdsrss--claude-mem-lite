@@ -554,3 +554,113 @@ describe('v6.19.2 pre-tag round-5 review', () => {
     expect(scrubSecrets(input)).not.toContain(L30);
   });
 });
+
+// D#160: the BEGIN line's whole left context was the line prefix. With code between the line
+// prefix and the BEGIN (`-KEY = '''`, `     5\tKEY = """`) or a string opener before it (`'+`,
+// `b'+`), no line below started that way, none lost its prefix, and a cut key was stored whole.
+// Measured 2026-09-28 on e59daed (the output of 26dcd49): 68 of the 80 matrix cases stored key
+// lines (all 40 encrypted and PGP ones), as did the `-MY_KEY` and escaped-tab cases below.
+describe('D#160: code or a string opener around the line prefix on the BEGIN line', () => {
+  const LEFT = {
+    diffMinusCode: ["-KEY = '''", () => '-'],
+    diffPlusCode: ['+const k = `', () => '+'],
+    quoteCode: ['> key = "', () => '> '],
+    readToolCode: ['     5\tKEY = """', (i) => `${String(6 + i).padStart(6)}\t`],
+    readToolArrowCode: ['5→KEY = """', (i) => `${6 + i}→`],
+    grepContextCode: ["keys/conf.py:5:KEY = '''", (i) => `keys/conf.py-${6 + i}-`],
+    // `MY_KEY` and the key's `MII…` share an `M` that is not part of the line prefix.
+    diffIdentifierM: ["-MY_KEY = '''", () => '-'],
+    quoteThenPlus: ["'+", () => '+'],
+    bytesThenPlus: ["b'+", () => '+'],
+    doubleQuoteThenMinus: ['"-', () => '-'],
+  };
+  for (const [kind, key] of Object.entries(KEYS)) {
+    const long = key.body.filter((l) => l.length >= 16).flatMap((l) => [l.slice(0, 16), l.slice(-16)]);
+    for (const cutName of ['head', 'cutMidLine']) {
+      it(`${kind} / ${cutName}`, () => {
+        const failures = [];
+        for (const [leftName, [left, pre]] of Object.entries(LEFT)) {
+          const [begin, ...rest] = CUTS[cutName](key);
+          const text = ['$ git diff', left + begin, ...rest.map((l, i) => pre(i) + l), PROSE].join('\n');
+          const out = scrubSecrets(text);
+          const kept = long.filter((w) => out.includes(w));
+          if (kept.length) failures.push(`${leftName}: ${kept.length} key windows kept`);
+          if (!out.includes('$ git diff') || !out.includes(PROSE)) failures.push(`${leftName}: text lost`);
+        }
+        expect(failures).toEqual([]);
+      });
+    }
+  }
+
+  it.each([
+    [
+      'a placeholder under code in Read output',
+      '     5\tEXAMPLE = """-----BEGIN RSA PRIVATE KEY-----\n     6\t<paste your key here>\n     7\t"""',
+      '<paste your key here>',
+    ],
+    [
+      'an identifier then words in a diff',
+      "-KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-exportedArmoredPrivateKey\n-see the docs for the format",
+      '-exportedArmoredPrivateKey\n-see the docs',
+    ],
+    [
+      'words under a quoted PGP header',
+      "'+-----BEGIN PGP PRIVATE KEY BLOCK-----\n+\n+Paste the armored block here.",
+      '+Paste the armored block here.',
+    ],
+    [
+      'a bullet list under an opener',
+      '"-----BEGIN RSA PRIVATE KEY-----\n- configurationfileformat\n- authenticationdocs',
+      '- configurationfileformat\n- authenticationdocs',
+    ],
+  ])('%s keeps its text', (_name, input, kept) => {
+    expect(scrubSecrets(input)).toContain(kept);
+  });
+
+  // Code that starts with the key's first letter: the shared `M` is not a line prefix. Taken for
+  // one, it stripped `M` from `MHcC…` (the differential fuzz's one new leak) or left every line
+  // after the first unmatched.
+  it.each([
+    [
+      'a one-letter name',
+      `M = '''-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIJyFjEQuHQ8fMBhx4sAZW\n${PROSE}`,
+      ['MHcCAQEEIJyF'],
+    ],
+    [
+      'a name in a diff',
+      `-MY_KEY = '''-----BEGIN RSA PRIVATE KEY-----\n-${KL}\n-${KL.slice(9)}x\n-${KL.slice(20)}yz\n${PROSE}`,
+      [KL.slice(0, 16), KL.slice(9, 25), KL.slice(20, 36)],
+    ],
+  ])('%s sharing the key’s first letter', (_name, input, windows) => {
+    const out = scrubSecrets(input);
+    expect(windows.filter((w) => out.includes(w))).toEqual([]);
+    expect(out).toContain(PROSE);
+  });
+
+  // An escaped tab (`\t`, two characters) is one unit of the prefix. Split after its backslash, it
+  // left a `t` on every line, the 15-character last line read as a full one, and the word under
+  // the key went with it (differential fuzz; the same key without `MII = """` keeps the word).
+  it('an escaped tab prefix stays whole', () => {
+    const [l1, l2, last] = [b64(64), b64(64), b64(15)];
+    const lines = ['the fox', `\tMII = """-----BEGIN EC PRIVATE KEY-----`, `\t${l1}`, `\t${l2}`, `\t${last}`];
+    const out = scrubSecrets(JSON.stringify({ content: `${lines.join('\r')}\rexportedArmoredPrivateKey` }));
+    expect([l1, l2, last].map((l) => l.slice(0, 12)).filter((w) => out.includes(w))).toEqual([]);
+    expect(out).toContain('exportedArmoredPrivateKey');
+  });
+
+  // A first line the first reading already takes as key material is not read again: with `+` as
+  // the prefix, this 40-character line read as 39 and one line alone was no longer a key.
+  it('a first line already read as key material keeps that reading', () => {
+    const line = '+9z9+f7S+5ld3HbxiBYzii44D4/jMpI2l3wD6L+Q';
+    const out = scrubSecrets(`+x = b"-----BEGIN OPENSSH PRIVATE KEY-----\r\n${line}\r\nDone: rotated it`);
+    expect(out).not.toContain(line.slice(1, 17));
+    expect(out).toContain('Done: rotated it');
+  });
+
+  // A first line that starts with the whole left context is read as before. Read again, the prefix
+  // `a:b` lost its `b` to the word rule, and two 15-letter names became 16-character key lines.
+  it('a first line with the whole left context is not read again', () => {
+    const input = 'a:b-----BEGIN RSA PRIVATE KEY-----\na:bSessionManager1\na:bTokenRefresher2\nthe end';
+    expect(scrubSecrets(input)).toContain('a:bSessionManager1\na:bTokenRefresher2');
+  });
+});

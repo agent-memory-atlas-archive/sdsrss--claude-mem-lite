@@ -205,18 +205,12 @@ export const SECRET_PATTERNS = [
   // and erased the prose between (v6.19.2 pre-tag defect review F5).
   // The delimiters alone do not make a key: prose or code naming both markers ("Keys start with
   // <BEGIN> and end with <END>", or `_SK_START = b"<BEGIN>"` over `_SK_END = b"<END>"`) paired them
-  // and lost the text between (D#155). Such a block stays when its body holds no key line and has
-  // words in it. A key line is read on base64 alone: every line of every key format is a run of 16+
-  // base64 characters (64 in PEM and PGP, 70 in OpenSSH) in whatever line shape it arrives, so a
-  // body with no such run holds none. The words (a space between two non-space characters) keep a
-  // placeholder body (`MIIEabc`, `MIIFDjBA...`) going as before. A 16+ letter word or path in the
-  // prose reads as a key line, and that block still goes: a leak costs more than the prose.
+  // and lost the text between (D#155). Such a block stays when the text between is short text
+  // naming the markers; see isMarkerProse.
   [
     /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
-    (m) => {
-      const body = m.slice(m.indexOf('-----', 11) + 5, m.lastIndexOf('-----END '));
-      return !/[A-Za-z0-9+/=]{16}/.test(body) && /\S[ \t]+\S/.test(body) ? m : '***PEM_KEY***';
-    },
+    (m) =>
+      isMarkerProse(m.slice(m.indexOf('-----', 11) + 5, m.lastIndexOf('-----END '))) ? m : '***PEM_KEY***',
   ],
   // A cut-off key (`head id_rsa`, a tool output cut mid-key) and a headerless key tail (`tail
   // key.pem`). These are line scanners, not patterns (D#145): three rounds of review each found a
@@ -417,13 +411,37 @@ const ARMOR = 4;
 const CUT = 5;
 const OTHER = 6;
 
-// Character-class checks by code, not a regex per character: the scanners visit every BEGIN on
-// every pass of the fixed-point loop, and under coverage instrumentation a per-character regex
-// test put the many-BEGINs linearity shape past its 10x budget on CI (v6.19.2 release run).
+// Character-class checks by code, not a regex per character. (What brought the many-BEGINs linearity
+// shape back under its budget after the v6.19.2 CI run was cutOffKeyEnd stopping before another
+// BEGIN line, not these checks: under coverage the shape measured 5.6-6.2x benign with these checks
+// alone, 1.9-2.3x with the stop alone.)
 function isB64Code(c) {
   return (
     (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 43 || c === 47 || c === 61
   );
+}
+
+/**
+ * Whether the text between a private-key BEGIN and END is short text naming the markers rather than
+ * a key (D#155): every clause must hold.
+ *   - At most 256 characters, on at most two lines (one break: real, escaped at any depth, or
+ *     `<br>`): a sentence, or two adjacent lines of code. It also keeps the kept blocks, which every
+ *     pass of scrubSecrets reads again, small.
+ *   - Fewer than 40 letters, digits, `+`, `/` and `=`. A key has more in each form measured
+ *     between the markers: a PEM body (Ed25519's, the smallest, is 64), or the secret decoded as
+ *     `openssl pkey -text` prints it (two hex digits a byte: 64 for a 32-byte scalar), as a C byte
+ *     array or as `\x` escapes. Without this clause a decoded key, or a key re-wrapped to lines under
+ *     16 characters, was kept (v6.19.3 pre-tag defect review F1).
+ *   - No run of 16 of them: a key line cut short (a truncated EC key's first line holds its secret).
+ *     A 16+ letter word or a path in the prose counts too, and its block goes.
+ *   - A space between two non-space characters. A body with none (a placeholder such as `MIIEabc`,
+ *     compact JSON) goes as before.
+ */
+function isMarkerProse(body) {
+  if (body.length > 256) return false;
+  if ((body.match(/\r\n|\r|\n|\\+[nr]|<br\s*\/?>/gi) || []).length > 1) return false;
+  if ((body.match(/[A-Za-z0-9+/=]/g) || []).length >= 40) return false;
+  return !/[A-Za-z0-9+/=]{16}/.test(body) && /\S[ \t]+\S/.test(body);
 }
 
 function backslashesBefore(text, i, floor) {

@@ -93,6 +93,30 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       '-----BEGIN RSA PRIVATE KEY-----\\nAb\\n-----BEGIN RSA PRIVATE KEY-----\\\\nAb\\\\n'.repeat(N / 76),
     pemConcatLines:
       '"-----BEGIN RSA PRIVATE KEY-----\\n" +\n' + '  "MIIEabcdefghijklmnop\\n" +\n'.repeat(N / 28),
+    // D#155: a block that is text naming the markers stays in the text, so every pass reads it
+    // again. Kept blocks cost a constant factor, not a power: under the CHAIN's 32 passes these two
+    // measured 5.5x and 8.8x benign under coverage (2026-09-28), END-dense text alone already 3.7x
+    // in 6.19.2, so they are timed on one pass here, as most shapes are.
+    keptBlocksMany: '-----BEGIN RSA PRIVATE KEY----- a b -----END RSA PRIVATE KEY----- '.repeat(N / 67),
+    keptLongBodies: (
+      '-----BEGIN RSA PRIVATE KEY----- a b' +
+      ' '.repeat(250) +
+      '-----END RSA PRIVATE KEY----- '
+    ).repeat(N / 320),
+    // Before the keep rule was bounded, blocks of blank lines or of 15-letter words stayed, and went
+    // past this budget under coverage (v6.19.3 pre-tag defect review F3: 12.6x and 10.6x). They go
+    // on the first pass now.
+    keptBlankLines:
+      CHAIN +
+      ' ' +
+      ('-----BEGIN RSA PRIVATE KEY-----' + '\n'.repeat(2000) + 'a b-----END RSA PRIVATE KEY-----').repeat(
+        N / 2064,
+      ),
+    keptBodyRuns15:
+      CHAIN +
+      ' -----BEGIN RSA PRIVATE KEY-----' +
+      'abcdefghijklmno '.repeat(N / 16) +
+      '-----END RSA PRIVATE KEY-----',
     jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),
     jwtDotChain: ('eyJ' + 'A'.repeat(12) + '.').repeat(N / 16),
   };

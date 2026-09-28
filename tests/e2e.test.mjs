@@ -3320,7 +3320,8 @@ describe('Suite: R10-P1-1 — /clear handoff over the real host event sequence',
 
 // D#156: the hook mints `hook-<project>-<8 hex>` and stores it as both session ids. For a
 // 22-character project with dashes at 3, 8, 13 and 18 that is the uuid shape sdk_sessions refuses,
-// and every hook write in the project failed with nothing on stderr.
+// and every hook write in the project failed. The hook still exits 0, so the error reached only its
+// stderr and the hook-errors log.
 describe('Suite: D#156 — a project name that gives the hook id the uuid shape', () => {
   it('session-start, user-prompt and stop all write', () => {
     const dir = join(tmpHome, 'dev', 'abc-efgh-jklm-opq');

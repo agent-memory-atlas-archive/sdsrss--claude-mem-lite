@@ -2273,9 +2273,10 @@ function cmdExport(db, args) {
 // A machine-written row (any exported id but `manual-`) is restored under `restore-<project>`, so
 // lib/provenance.mjs still reads it as auto-written; before D#157 every row went under
 // `manual-<project>` and rendered as an explicit save. The exported id is not reused: saveObservation
-// stores it as both session ids of an active session row started now, and a bare session uuid
-// (rows imported from older stores) is the shape sdk_sessions refuses, a `hook-` id would become
-// browse's current session, and under --project the id names another project. A row exported
+// stores it as both session ids of an active session row, and a bare session uuid
+// (rows imported from older stores) is the shape sdk_sessions refuses, a `hook-` id could become
+// browse's current session (the only active hook row once Stop has marked the real one completed)
+// until a SessionStart sweeps it, and under --project the id names another project. A row exported
 // without the column restores as an explicit save, as before.
 const RESTORE_SESSION_ID_PREFIX = 'restore-';
 

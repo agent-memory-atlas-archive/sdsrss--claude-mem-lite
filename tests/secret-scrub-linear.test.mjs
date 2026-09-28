@@ -83,6 +83,14 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       'MIIEabcdefghijklmnop\n'
     ).repeat(N / 532),
     pemBeginChunksOneLine: '-----BEGIN RSA PRIVATE KEY----- ' + 'MIIEabcdefghijklmnop '.repeat(N / 21),
+    // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
+    // continuation pattern split the run between two quantifiers (200k: 16-19 s).
+    pemEscapedQuoteSpaces: '-----BEGIN RSA PRIVATE KEY-----\\n"' + ' '.repeat(N) + 'x',
+    pemEscapedQuoteTabs: '-----BEGIN RSA PRIVATE KEY-----\\n"' + '\t'.repeat(N) + 'x',
+    // The opening-quote walk (F3) is cached per escape depth: with one shared entry, BEGINs at
+    // alternating depths each walked back to the start of the text (200k: 1.6 s, x2.9 per doubling).
+    pemAlternatingDepths:
+      '-----BEGIN RSA PRIVATE KEY-----\\nAb\\n-----BEGIN RSA PRIVATE KEY-----\\\\nAb\\\\n'.repeat(N / 76),
     pemConcatLines:
       '"-----BEGIN RSA PRIVATE KEY-----\\n" +\n' + '  "MIIEabcdefghijklmnop\\n" +\n'.repeat(N / 28),
     jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),

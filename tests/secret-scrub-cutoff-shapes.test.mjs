@@ -13,6 +13,8 @@ let seed = 20260928;
 const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32;
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const b64 = (n) => Array.from({ length: n }, () => B64[Math.floor(rnd() * 64)]).join('');
+// A fixed 65-character key line for the single cases below.
+const KL = 'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunV';
 
 const KEYS = {
   rsa: {
@@ -213,7 +215,95 @@ describe('single-shape rules the matrix does not isolate', () => {
       `f.pem:-----BEGIN RSA PRIVATE KEY-----\nf.pem-${b64(64)}\nf.pem-${'MIIj' + b64(60)}`,
       'MIIj',
     ],
+    // v6.19.2 pre-tag defect review F3: the string's opening quote is found before the line the
+    // BEGIN is on, so a single-quoted string (a Python repr, `echo -e '…'`) ends at its quote.
+    [
+      'a key in a single-quoted Python repr',
+      `{'stdout': '$ head id_rsa\\n-----BEGIN RSA PRIVATE KEY-----\\n${KL}\\n${KL}\\nZq9Xw2Lk', 'rc': 0}`,
+      'Zq9Xw2Lk',
+    ],
+    // F4: text after the key's last line — a closing backtick or tag, a truncation note, words.
+    [
+      'an Ed25519 key in inline code',
+      '`-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIHh6d3Jjb3ZqZ2xpbmtlcnM0NTY3ODkwYWJjZGVm`',
+      'MC4CAQAwBQYDK2Vw',
+    ],
+    // A 40+ last line goes as a cut line whatever follows it; a short one needs the delimiter gone.
+    [
+      'a key in an XML element',
+      `<key>-----BEGIN RSA PRIVATE KEY-----\n${KL}\n${KL}\nZq9Xw2Lk</key>`,
+      'Zq9Xw2Lk',
+    ],
+    ['a key in a code span', `\`-----BEGIN RSA PRIVATE KEY-----\n${KL}\n${KL}\nZq9Xw2Lk\``, 'Zq9Xw2Lk'],
+    [
+      'a key line followed by words',
+      `-----BEGIN RSA PRIVATE KEY-----\n${'MIIk' + KL.slice(4)} see above`,
+      'MIIk',
+    ],
+    [
+      'a cut line followed by a truncation note',
+      `-----BEGIN RSA PRIVATE KEY-----\n${KL}\n${'MIIk' + KL.slice(4, 30)}[truncated]`,
+      'MIIk',
+    ],
+    // F10: current gpg writes no Version header, so a PGP key cut in its first line has only the
+    // packet start (`lQ…`, `xc…`) to go on.
+    // F7's other side: key lines over an END named in a sentence still go (the sentence stays).
+    [
+      'key lines over an END in a sentence',
+      `$ tail -3 key.pem\\n${KL}\\n${'MIIk' + KL.slice(4)}\\nA PEM file ends with ${'-----END RSA PRIVATE KEY-----'}.`,
+      'MIIk',
+    ],
+    [
+      'a PGP key cut inside its first line',
+      '$ head -c 70 key.asc\n-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQVYBGW3kXcBDADC5y1cG8fQ9oRk2m',
+      'lQVYBGW3',
+    ],
   ])('%s', (_name, input, keyPart) => {
     expect(scrubSecrets(input)).not.toContain(keyPart);
+  });
+});
+
+describe('v6.19.2 pre-tag defect review: prose and robustness', () => {
+  const H = '-----BEGIN RSA PRIVATE KEY-----';
+  const E = '-----END RSA PRIVATE KEY-----';
+  it.each([
+    // F5: the block pattern ran again on a later pass and paired an early BEGIN with a later END
+    // across the mark it had written for a key in between.
+    [
+      'prose between a BEGIN, a scrubbed key and a later END',
+      `Keys start with ${H} on their own line.\nIMPORTANT PROSE ONE.\n$ cat k\n${H}\n${KL}\n${E}\nIMPORTANT PROSE TWO.\nintro\n${KL}\nOK\nyes\n${E}\nafter`,
+      ['IMPORTANT PROSE ONE.', 'IMPORTANT PROSE TWO.'],
+    ],
+    // F7: an END in the middle of a sentence is not the end of a key tail.
+    [
+      'an END in a sentence under an identifier',
+      `Run the migration:\nnpmRunBuildAndTestEverything\nA PEM file ends with ${E} and nothing else.`,
+      ['npmRunBuildAndTestEverything', 'A PEM file ends with'],
+    ],
+    [
+      'an END in inline code under an identifier',
+      `readPrivateKeyFromFile\n\`${E}\` marks the end.`,
+      ['readPrivateKeyFromFile'],
+    ],
+    // Key lines over such an END go, and the sentence stays.
+    [
+      'the sentence naming an END under key lines',
+      `${KL}\n${KL}\nA PEM file ends with ${E}.`,
+      [`A PEM file ends with ${E}.`],
+    ],
+    // F9: words on the BEGIN line are prose, even one of 16+ letters.
+    [
+      'prose on the BEGIN line',
+      `${H} usually indicates misconfiguration\nAuthenticationFailedException\nnext`,
+      ['usually indicates misconfiguration', 'AuthenticationFailedException'],
+    ],
+  ])('%s', (_name, input, keep) => {
+    const out = scrubSecrets(input);
+    expect(keep.filter((k) => !out.includes(k))).toEqual([]);
+  });
+
+  // F2: a spread of ~125k chunks overflowed the stack, and scrubSecrets threw instead of returning.
+  it('a BEGIN line with 150k chunks returns', () => {
+    expect(() => scrubSecrets(`${H} ${'A '.repeat(150_000)}\n`)).not.toThrow();
   });
 });

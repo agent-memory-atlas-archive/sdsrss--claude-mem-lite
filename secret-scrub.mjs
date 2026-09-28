@@ -200,9 +200,11 @@ export const SECRET_PATTERNS = [
   // alternation missed; the block delimiters make FP impossible.
   // The body stops at the next `-----BEGIN ` (D#130): with `[\s\S]*?` every header with no END
   // scanned to the end of the text, on each of scrubSecrets' passes — quadratic, 8.3 s on 500k
-  // chars. A block whose END is missing is left to the next pattern.
+  // chars. A block whose END is missing is left to the next pattern. Nor does it cross a mark this
+  // scrubber wrote: on a later pass, a BEGIN that a scrubbed key used to block reached a far END
+  // and erased the prose between (v6.19.2 pre-tag defect review F5).
   [
-    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
     '***PEM_KEY***',
   ],
   // A cut-off key (`head id_rsa`, a tool output cut mid-key) and a headerless key tail (`tail
@@ -350,8 +352,11 @@ export const SECRET_PATTERNS = [
 // A body line is WHOLE base64: 16+ characters, or 1-15 for the last line. So a word under a key
 // body keeps its text (round-3 P3-A: `Don't` lost `Don`), as does a path or an identifier that
 // starts the next line (P3-B), and a body needs one long line, so a header followed by words is
-// not a key (F3). The one exception is a line cut by a truncation mark (`…`, `...`): its base64
-// goes, the mark stays (delta review P3-2).
+// not a key (F3). A string's closing quote, a backtick or a closing tag after the line is not part
+// of it. A line whose base64 run is followed by something else is a cut or annotated key line
+// when the run is 40+ characters or a truncation mark or delimiter follows it (`…`, `...`,
+// `[truncated]`, `<`): its base64 goes and the rest stays (delta review P3-2; v6.19.2 pre-tag
+// defect review F4). A shorter run followed by words starts a line of prose.
 
 const KEY_BEGIN_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g;
 const KEY_END_RE = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g;
@@ -360,18 +365,24 @@ const B64_LONG_RE = /^[A-Za-z0-9+/=]{16,}$/;
 const B64_SHORT_RE = /^[A-Za-z0-9+/=]{1,15}$/;
 // Space-separated chunks, allowed only on the BEGIN line itself (a key pasted onto one line).
 const B64_CHUNKS_RE = /^[A-Za-z0-9+/=]+(?:[ \t]+[A-Za-z0-9+/=]+)*$/;
-const B64_CUT_RE = /^[A-Za-z0-9+/=]{16,}(?=…|\.\.\.)/;
+const B64_RUN_RE = /^[A-Za-z0-9+/=]{16,}/;
+// What may follow a key line that was cut or annotated: a truncation mark or a delimiter.
+const CUT_MARK_RE = /^(?: ?…| ?\.\.\.| ?\[| ?<|`)/;
 const PGP_CRC_RE = /^=[A-Za-z0-9+/]{4}$/;
-// How a key's base64 starts: a DER SEQUENCE (PKCS#1, PKCS#8, SEC1) or OpenSSH's `openssh-key-v1`.
+// How a key's base64 starts: a DER SEQUENCE (PKCS#1, PKCS#8, SEC1) or OpenSSH's `openssh-key-v1`;
+// under a PGP header, a secret-key packet in the old or new format (`lQ…`, `xc…`/`xV…`).
 const KEY_MAGIC_RE = /^(?:MII|MIG|MC4C|MHcC|b3BlbnNzaC1rZXktdjE)/;
+const PGP_MAGIC_RE = /^(?:lQ|x[cV])/;
 // RFC 1421 / RFC 4880 armor headers, before the body. Named, not any `Word:`: a `Note:` line is
 // prose, and taking it for a header made the lone base64 line under it a key.
 const ARMOR_HEADER_RE = /^(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset|MessageID)[ \t]*:/i;
 const MAX_ARMOR_HEADERS = 16;
 // A JS/Python string split across source lines: `…\n" +` then `"…` on the next line. Not a comma:
 // `'…\n',` then `'…'` is the next element of a list, and its first word is not the key's last line.
-const CONCAT_AFTER_RE = /["'][ \t]*\+?[ \t]*(?:\r\n|\n|\r)[ \t]*["']/y;
-const CONCAT_BEFORE_RE = /(?:\\r)?\\n["'][ \t]*\+?[ \t]*(?:\r\n|\n|\r)[ \t]*["']$/;
+// One whitespace quantifier on each side of the `+`: `[ \t]*\+?[ \t]*` split a run between two
+// and was quadratic when no break followed (v6.19.2 pre-tag defect review F1: 16-19 s at 200k).
+const CONCAT_AFTER_RE = /["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']/y;
+const CONCAT_BEFORE_RE = /(?:\\r)?\\n["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']$/;
 const PEM_MARK = '***PEM_KEY***';
 
 const BLANK = 0;
@@ -481,12 +492,15 @@ function lineCore(text, s, e, shape) {
   let b = line.length;
   while (a < b && (line[a] === ' ' || line[a] === '\t')) a++;
   while (b > a && (line[b - 1] === ' ' || line[b - 1] === '\t')) b--;
-  if (a < b && (line[a] === '"' || line[a] === "'")) a++;
-  // A closing quote with what may follow it (`",`, `" +`, `')`), and escaped breaks before it.
-  // Read from the end: an unanchored `(?:\\+[rn])*["']…$` retried every start in a backslash run.
+  if (a < b && (line[a] === '"' || line[a] === "'" || line[a] === '`')) a++;
+  // A closing quote or backtick with what may follow it (`",`, `" +`, `')`), or a closing tag
+  // (`</key>`), and escaped breaks before it. Read from the end: an unanchored
+  // `(?:\\+[rn])*["']…$` retried every start in a backslash run.
   let q = b;
   while (q > a && /[ \t+,;)\]}]/.test(line[q - 1])) q--;
-  if (q > a && (line[q - 1] === '"' || line[q - 1] === "'")) {
+  const tag = q > a && line[q - 1] === '>' ? /<\/[A-Za-z][\w:.-]{0,40}>$/.exec(line.slice(a, q)) : null;
+  if (tag) b = q - tag[0].length;
+  else if (q > a && (line[q - 1] === '"' || line[q - 1] === "'" || line[q - 1] === '`')) {
     q--;
     for (;;) {
       if (q - 1 <= a || (line[q - 1] !== 'n' && line[q - 1] !== 'r')) break;
@@ -506,8 +520,20 @@ function classify(core) {
   if (B64_SHORT_RE.test(core)) return SHORT;
   if (KEY_END_LINE_RE.test(core)) return END;
   if (ARMOR_HEADER_RE.test(core)) return ARMOR;
-  if (B64_CUT_RE.test(core)) return CUT;
+  if (cutRun(core)) return CUT;
   return OTHER;
+}
+
+/**
+ * The base64 run a cut or annotated key line starts with, or null: 16+ characters followed by a
+ * truncation mark or a delimiter (`…`, `...`, `[truncated]`, `<`, a backtick), or 40+ followed by
+ * anything (`<64> see above`). A shorter run followed by text is an identifier or a path starting
+ * a line of prose (`exportedArmoredPrivateKey = …`, round-3 P3-B), which stays.
+ */
+function cutRun(core) {
+  const m = B64_RUN_RE.exec(core);
+  if (!m) return null;
+  return m[0].length >= 40 || CUT_MARK_RE.test(core.slice(m[0].length)) ? m[0] : null;
 }
 
 /**
@@ -519,7 +545,7 @@ function classify(core) {
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
  * block never gets here; the block pattern above takes it first.
  */
-function cutOffKeyEnd(text, b, be) {
+function cutOffKeyEnd(text, b, be, seen) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
   let i = be;
   while (i < text.length && /[A-Za-z0-9+/= \t]/.test(text[i])) i++;
@@ -544,26 +570,53 @@ function cutOffKeyEnd(text, b, be) {
   let first = '';
   let end = -1;
   if (rest) {
-    longest = Math.max(...rest.split(/[ \t]+/).map((t) => t.length));
-    if (!B64_CHUNKS_RE.test(rest) || longest < 16) return -1;
+    // A key pasted onto its BEGIN line: every chunk but the last is a full 16+ line. Words there
+    // are prose, even one of 16+ letters (v6.19.2 pre-tag defect review F9). A loop, not a spread:
+    // Math.max(...chunks) overflowed the stack past ~125k chunks (F2).
+    if (!B64_CHUNKS_RE.test(rest)) return -1;
+    const chunks = rest.split(/[ \t]+/);
+    for (let k = 0; k < chunks.length; k++) {
+      if (k < chunks.length - 1 && chunks[k].length < 16) return -1;
+      if (chunks[k].length > longest) longest = chunks[k].length;
+    }
+    if (longest < 16) return -1;
     longs = 1;
-    first = rest;
+    first = chunks[0];
     end = be + text.slice(be, i).trimEnd().length;
   }
-  // The BEGIN line's prefix and, in escaped text, the quote that opened the string.
+  // The BEGIN line's prefix.
   let ls = b;
-  let quote = '"';
   while (ls > 0) {
     const ch = text[ls - 1];
     if (ch === '\n' || ch === '\r') break;
     if (u > 0 && (ch === 'n' || ch === 'r') && isEscBreak(backslashesBefore(text, ls - 1, 0), u)) break;
-    if (u > 0 && (ch === '"' || ch === "'") && isStringEnd(backslashesBefore(text, ls - 1, 0), u)) {
-      quote = ch;
-      break;
-    }
+    if (u > 0 && (ch === '"' || ch === "'") && isStringEnd(backslashesBefore(text, ls - 1, 0), u)) break;
     ls--;
   }
   const shape = prefixShape(text.slice(ls, b));
+  // In escaped text, the quote that opened the string, which may sit lines before the BEGIN (a
+  // Python repr `{'stdout': '$ head id_rsa\n-----BEGIN…`, F3). The walk stops where the previous
+  // BEGIN of the same depth started its walk, and takes its answer, so each character is walked
+  // once per depth (one shared entry let alternating depths walk back to the start each time).
+  let quote = '"';
+  if (u > 0) {
+    let k = b;
+    for (;;) {
+      if (k <= 0 || text[k - 1] === '\n' || text[k - 1] === '\r') break;
+      const prev = seen.get(u);
+      if (prev && k <= prev.at) {
+        quote = prev.quote;
+        break;
+      }
+      const ch = text[k - 1];
+      if ((ch === '"' || ch === "'") && isStringEnd(backslashesBefore(text, k - 1, 0), u)) {
+        quote = ch;
+        break;
+      }
+      k--;
+    }
+    seen.set(u, { at: b, quote });
+  }
 
   let armors = 0;
   let shorts = 0;
@@ -600,7 +653,7 @@ function cutOffKeyEnd(text, b, be) {
       continue;
     }
     if (kind === CUT && shorts === 0) {
-      const run = B64_CUT_RE.exec(core)[0];
+      const run = cutRun(core);
       if (longs++ === 0) first = run;
       longest = Math.max(longest, run.length);
       end = start + run.length;
@@ -608,7 +661,8 @@ function cutOffKeyEnd(text, b, be) {
     break;
   }
   if (longs === 0) return -1;
-  return longs >= 2 || armors > 0 || longest >= 40 || KEY_MAGIC_RE.test(first) ? end : -1;
+  const magic = KEY_MAGIC_RE.test(first) || (text.slice(b, be).includes('PGP') && PGP_MAGIC_RE.test(first));
+  return longs >= 2 || armors > 0 || longest >= 40 || magic ? end : -1;
 }
 
 function scrubCutOffKeys(text) {
@@ -617,8 +671,9 @@ function scrubCutOffKeys(text) {
   let out = '';
   let last = 0;
   let m;
+  const seen = new Map(); // depth -> { at, quote } of the last BEGIN walked at that depth
   while ((m = KEY_BEGIN_RE.exec(text))) {
-    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
+    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, seen);
     if (end === -1) continue;
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;
@@ -628,12 +683,14 @@ function scrubCutOffKeys(text) {
 }
 
 /**
- * Where the key tail that ends with the END at `e` starts, or -1: whole base64 lines of 16+
- * characters directly above it, with one shorter line before the END, or two when the one before
- * the END is a PGP `=XXXX` checksum (delta review P2; two short words above an END are prose,
- * round-3 P3-D). `floor` is the end of the previous END, so no line is read twice.
+ * The span [start, end) of the key tail that ends with the END at [e, ee), or null: whole base64
+ * lines of 16+ characters directly above it, with one shorter line before the END, or two when the
+ * one before the END is a PGP `=XXXX` checksum (delta review P2; two short words above an END are
+ * prose, round-3 P3-D). The span takes the END too, unless words precede the END on its line (a
+ * sentence naming it): then the lines above go and the sentence stays (F7). `floor` is the end of
+ * the previous END, so no line is read twice.
  */
-function keyTailStart(text, e, floor) {
+function keyTailSpan(text, e, ee, floor) {
   let ls = e;
   let u = 0;
   while (ls > floor) {
@@ -652,11 +709,21 @@ function keyTailStart(text, e, floor) {
   let shorts = 0;
   let crc = false;
   let top = -1;
-  const take = (core, start) => {
+  let topCore = '';
+  let longest = 0;
+  let bottom = -1;
+  const take = (core, start, end) => {
+    if (!accept(core, start)) return false;
+    if (bottom === -1) bottom = end;
+    return true;
+  };
+  const accept = (core, start) => {
     const kind = classify(core);
     if (kind === LONG) {
       longs++;
       top = start;
+      topCore = core;
+      if (core.length > longest) longest = core.length;
       return true;
     }
     if (longs > 0 || kind !== SHORT) return false;
@@ -671,19 +738,26 @@ function keyTailStart(text, e, floor) {
     }
     return false;
   };
-  // The END line's own prefix is either a line prefix or the key's last base64 run, glued to the END.
+  // The END line's own prefix: a line prefix, the key's last base64 run glued to the END, or words.
   const prefix = text.slice(ls, e);
   const trimmed = prefix.trim();
+  const sentence = /\S\s+\S/.test(trimmed);
   let shape = null;
   if (/^[ \t]*[A-Za-z0-9+/=]+$/.test(prefix)) {
-    if (!take(trimmed, ls + prefix.indexOf(trimmed))) return -1;
-  } else shape = prefixShape(prefix);
+    const at = ls + prefix.indexOf(trimmed);
+    if (!take(trimmed, at, at + trimmed.length)) return null;
+  } else if (!sentence) shape = prefixShape(prefix);
   let cur = ls;
   for (let line; (line = prevLine(text, cur, u, floor)); cur = line.start) {
-    const { core, start } = lineCore(text, line.start, line.end, shape);
-    if (!take(core, start)) break;
+    const { core, start, end } = lineCore(text, line.start, line.end, shape);
+    if (!take(core, start, end)) break;
   }
-  return longs > 0 ? top : -1;
+  // The same evidence a cut-off key needs: one base64 line alone is a key tail only when it is 40+
+  // characters, starts like a key encoding or sits over a PGP checksum; an identifier of 16-39
+  // characters over an END in prose is not (F7).
+  if (longs === 0) return null;
+  if (!(longs >= 2 || longest >= 40 || crc || KEY_MAGIC_RE.test(topCore))) return null;
+  return [top, sentence ? bottom : ee];
 }
 
 function scrubKeyTails(text) {
@@ -694,10 +768,10 @@ function scrubKeyTails(text) {
   let floor = 0;
   let m;
   while ((m = KEY_END_RE.exec(text))) {
-    const start = keyTailStart(text, m.index, Math.max(floor, last));
-    if (start !== -1) {
-      out += text.slice(last, start) + PEM_MARK;
-      last = m.index + m[0].length;
+    const span = keyTailSpan(text, m.index, m.index + m[0].length, Math.max(floor, last));
+    if (span) {
+      out += text.slice(last, span[0]) + PEM_MARK;
+      last = span[1];
     }
     floor = m.index + m[0].length;
   }

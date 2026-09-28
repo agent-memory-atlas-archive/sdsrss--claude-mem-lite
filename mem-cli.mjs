@@ -25,7 +25,7 @@ import { resolveProject } from './project-utils.mjs';
 import { resolveCliProject as cliProject } from './lib/cli-project.mjs';
 import { reRankWithContext } from './search-scoring.mjs';
 import { searchObservationsHybrid } from './search-engine.mjs';
-import { autoHeaderNote, autoLegend, autoTag } from './lib/provenance.mjs';
+import { autoHeaderNote, autoLegend, autoTag, isAutoWritten, writerSessionId } from './lib/provenance.mjs';
 import {
   fetchObsDetail,
   fetchPromptDetail,
@@ -2268,8 +2268,17 @@ function cmdExport(db, args) {
 // (access/cited/uncited/injection/decay), branch, and concepts/facts/files_read that
 // saveObservation derives or zeros — so a restored backup keeps its citation-decay
 // history and original timing (created_at via the `now` param). Source ids are
-// discarded (local AUTOINCREMENT; export omits related_ids); session provenance
-// collapses to saveObservation's manual-<project> bucket (documented MVP tradeoff).
+// discarded (local AUTOINCREMENT; export omits related_ids). Session ids are not restored,
+// only whether a row was an explicit save: see RESTORE_SESSION_ID_PREFIX.
+// A machine-written row (any exported id but `manual-`) is restored under `restore-<project>`, so
+// lib/provenance.mjs still reads it as auto-written; before D#157 every row went under
+// `manual-<project>` and rendered as an explicit save. The exported id is not reused: saveObservation
+// stores it as both session ids of an active session row started now, and a bare session uuid
+// (rows imported from older stores) is the shape sdk_sessions refuses, a `hook-` id would become
+// browse's current session, and under --project the id names another project. A row exported
+// without the column restores as an explicit save, as before.
+const RESTORE_SESSION_ID_PREFIX = 'restore-';
+
 function cmdRestore(db, argv) {
   const { positional, flags } = parseArgs(argv);
   const file = positional[0];
@@ -2396,6 +2405,9 @@ function cmdRestore(db, argv) {
         files,
         lesson_learned: r.lesson_learned || null,
         now: new Date(createdEpoch),
+        sessionId: isAutoWritten(r.memory_session_id)
+          ? writerSessionId(RESTORE_SESSION_ID_PREFIX, project)
+          : undefined,
       });
       if (res.kind !== 'saved') {
         skipped++;

@@ -197,15 +197,26 @@ export const SECRET_PATTERNS = [
   ],
   // PEM private key blocks. `[A-Z0-9 ]*` covers every armor label — RSA/EC/DSA/
   // OPENSSH plus ENCRYPTED and PGP (… PRIVATE KEY BLOCK) — that the fixed
-  // alternation missed; the block delimiters make FP impossible.
+  // alternation missed.
   // The body stops at the next `-----BEGIN ` (D#130): with `[\s\S]*?` every header with no END
   // scanned to the end of the text, on each of scrubSecrets' passes — quadratic, 8.3 s on 500k
   // chars. A block whose END is missing is left to the next pattern. Nor does it cross a mark this
   // scrubber wrote: on a later pass, a BEGIN that a scrubbed key used to block reached a far END
   // and erased the prose between (v6.19.2 pre-tag defect review F5).
+  // The delimiters alone do not make a key: prose or code naming both markers ("Keys start with
+  // <BEGIN> and end with <END>", or `_SK_START = b"<BEGIN>"` over `_SK_END = b"<END>"`) paired them
+  // and lost the text between (D#155). Such a block stays when its body holds no key line and has
+  // words in it. A key line is read on base64 alone: every line of every key format is a run of 16+
+  // base64 characters (64 in PEM and PGP, 70 in OpenSSH) in whatever line shape it arrives, so a
+  // body with no such run holds none. The words (a space between two non-space characters) keep a
+  // placeholder body (`MIIEabc`, `MIIFDjBA...`) going as before. A 16+ letter word or path in the
+  // prose reads as a key line, and that block still goes: a leak costs more than the prose.
   [
     /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY|\*\*\*PEM_KEY\*\*\*)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
-    '***PEM_KEY***',
+    (m) => {
+      const body = m.slice(m.indexOf('-----', 11) + 5, m.lastIndexOf('-----END '));
+      return !/[A-Za-z0-9+/=]{16}/.test(body) && /\S[ \t]+\S/.test(body) ? m : '***PEM_KEY***';
+    },
   ],
   // A cut-off key (`head id_rsa`, a tool output cut mid-key) and a headerless key tail (`tail
   // key.pem`). These are line scanners, not patterns (D#145): three rounds of review each found a
@@ -563,7 +574,7 @@ function cutRun(core) {
  * is there. One base64 line alone is a key only when it is 40+ characters, starts the way a key
  * encoding starts (DER `MII…`, OpenSSH `b3BlbnNzaC1rZXktdjE…`) or follows armor headers: a path
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
- * block never gets here; the block pattern above takes it first.
+ * block with a key line in it never gets here; the block pattern above takes it first.
  */
 function cutOffKeyEnd(text, b, be) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.

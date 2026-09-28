@@ -392,6 +392,16 @@ describe('MCP feature sweep: public tools', () => {
     });
   });
 
+  // D#123: the ordinal came from a 50-row page, so an item added past 50 open printed `(item ?)`.
+  it('mem_defer past 50 open items prints its ordinal', async () => {
+    const P = 'mcpsweep-defer-deep';
+    withDb((db) => {
+      for (let i = 1; i <= 55; i++) insertDeferred(db, { project: P, title: `deep item ${i}`, priority: 2 });
+    });
+    const text = await call('mem_defer', { title: 'deep item last', priority: 1, project: P });
+    expect(text).toMatch(/\(item 56\)/);
+  });
+
   itTool('mem_defer_list', async () => {
     // Seeds its own rows (no dependency on the mem_defer case) in its own project.
     const P = 'mcpsweep-deferlist';

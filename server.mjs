@@ -125,6 +125,7 @@ import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
   insertDeferred,
   listOpenWithOrdinal,
+  openOrdinalOf,
   dropDeferred,
   formatDropReasonHint,
   resolveDeferredIds,
@@ -1221,8 +1222,7 @@ server.registerTool(
     });
     // Compute the ordinal for the freshly-inserted row so the response is
     // immediately actionable ("ok, I deferred this as item 1").
-    const open = listOpenWithOrdinal(db, project, 50);
-    const ord = open.find((o) => o.id === r.id)?.ordinal ?? null;
+    const ord = openOrdinalOf(db, project, r.id);
     return {
       content: [
         {

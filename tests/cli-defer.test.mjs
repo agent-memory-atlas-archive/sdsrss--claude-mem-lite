@@ -389,6 +389,15 @@ describe('get D#N — deferred detail read surface', () => {
     expect(all).not.toMatch(/more open item/);
   });
 
+  // D#123: the ordinal came from a 50-row page, so an item added past 50 open printed `(item ?)`.
+  it('defer add past 50 open items prints its ordinal', () => {
+    runCli(['defer', 'add', 'deep item 0']);
+    const { project } = db.prepare('SELECT project FROM deferred_work LIMIT 1').get();
+    for (let i = 1; i <= 55; i++) insertDeferred(db, { project, title: `deep item ${i}`, priority: 2 });
+    const { stdout } = runCli(['defer', 'add', 'deep item last', '--priority', '1']);
+    expect(stdout).toMatch(/\(item 57\)/);
+  });
+
   // FAILS IF: a page already at --limit's maximum still tells the reader to raise it
   // (D#115 P3-7). The first row goes through the CLI so the seeded rest share its project.
   it('defer list at the largest page does not advise raising --limit', () => {

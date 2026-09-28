@@ -163,6 +163,7 @@ import { aggregateMetrics, readMetrics } from './lib/metrics.mjs';
 import {
   insertDeferred,
   listOpenWithOrdinal,
+  openOrdinalOf,
   dropDeferred,
   formatDropReasonHint,
   resolveDeferredIds,
@@ -1448,9 +1449,8 @@ function cmdDeferAdd(db, args) {
     return;
   }
   // Compute the freshly-inserted row's ordinal for an immediately-actionable
-  // response ("ok, deferred this as item N"). Mirrors server.mjs:980.
-  const open = listOpenWithOrdinal(db, project, 50);
-  const ord = open.find((o) => o.id === r.id)?.ordinal ?? '?';
+  // response ("ok, deferred this as item N"), as mem_defer does.
+  const ord = openOrdinalOf(db, project, r.id) ?? '?';
   out(`[mem] Deferred as D#${r.id} (item ${ord}) in project "${project}".`);
 }
 

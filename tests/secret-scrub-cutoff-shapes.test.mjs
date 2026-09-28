@@ -505,14 +505,52 @@ describe('v6.19.2 pre-tag round-4 review', () => {
     expect(keyParts.filter((k) => out.includes(k))).toEqual([]);
   });
 
-  // F4: a header value that runs on past its string's closing quote into the next fields is the
-  // end of that string, so a base64-looking line in a later field does not join the key.
-  it('JSON fields after a cut header value keep their text', () => {
-    const input = JSON.stringify({
-      stdout: `head -n 2 k.asc\n${PH}\nComment: work`,
-      note: 'the function\nreadPrivateKeyFromFile\nis used',
-    });
+  // Round-5 F1: the round-4 F4 stop (a closing quote then a field in a header line) also fired
+  // inside header values (`Comment: ['work', 'home']`) and stored the whole key; it is gone.
+  it.each([
+    [
+      'a JSON string',
+      (body) => JSON.stringify({ stdout: `${PH}\nComment: ['work', 'home']\n\n${body}`, rc: 0 }),
+    ],
+    [
+      'a Python repr',
+      (body) => `{'stdout': '${PH}\\nComment: say "hi", "bye"\\n\\n${body.replace(/\n/g, '\\n')}', 'rc': 0}`,
+    ],
+  ])('a quoted, comma-separated Comment in %s', (_name, wrap) => {
+    const out = scrubSecrets(wrap(`${P1}\n${B2}\n${B}`));
+    expect([P1, B2, B].filter((k) => out.includes(k))).toEqual([]);
+  });
+});
+
+describe('v6.19.2 pre-tag round-5 review', () => {
+  const PH = '-----BEGIN PGP PRIVATE KEY BLOCK-----';
+  const E = '-----END RSA PRIVATE KEY-----';
+  const P1 = 'lQdGBFXq9ZbT2kLp8WvR4nYc7MfH1sJd6GaU3eQo5iKx0wBzNtVy';
+  const B2 = 'Kq8xLmN3vB7cZ2dF9gH1jK4lP6oI8uY0tR5eW3qA2sD7fG9hJ1kL3zX5cV8bN0mQ';
+  const L30 = 'Xq9ZbT2kLp8WvR4nYc7MfH1sJd6GaU';
+  // F2: the same key cut the same way and glued 40 times. Each BEGIN took the previous key's cut
+  // line for its line prefix and stripped its own body line with it, so one key went per pass.
+  // A cut run glued to the next key's BEGIN (`for i in …; do head -c 80 k; done`): five dashes
+  // after a base64 run are a key marker, never prose.
+  it('a short cut run glued to the next BEGIN goes', () => {
+    const input = `${PH}\n\n${P1}`.slice(0, 70).repeat(3);
+    expect(scrubSecrets(input)).not.toContain(P1.slice(0, 20));
+  });
+  it('40 glued copies of one cut key all go in one call', () => {
+    const input = `${PH}\n\n${P1}${B2}`.slice(0, 90).repeat(40);
     const out = scrubSecrets(input);
-    expect(['"note":"the function', 'readPrivateKeyFromFile'].filter((k) => !out.includes(k))).toEqual([]);
+    expect(out).not.toContain(P1.slice(0, 20));
+    expect(scrubSecrets(out)).toBe(out);
+  });
+  // F3: `tail -n 2` in a tool result whose next field follows the string: the END is alone on
+  // its line in the decoded text, and a string's closing quote after it says so.
+  it.each([
+    [
+      'a Bash tool result',
+      JSON.stringify({ stdout: `$ tail -n 2 k.pem\n${L30}\n${E}`, stderr: '', interrupted: false }),
+    ],
+    ['a repr with more fields', `{'stdout': '$ tail -n 2 k.pem\\n${L30}\\n${E}', 'rc': 0}`],
+  ])('a key tail in %s', (_name, input) => {
+    expect(scrubSecrets(input)).not.toContain(L30);
   });
 });

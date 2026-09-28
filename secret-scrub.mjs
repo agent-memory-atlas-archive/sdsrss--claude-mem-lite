@@ -370,8 +370,9 @@ const B64_RUN_RE = /^[A-Za-z0-9+/=]{16,}/;
 // ends the string a key sits in (`…', 'rc': 0}`, `…","stderr":…`): the scanners do not track which
 // quote opened a string, since no character before a quote tells an opening quote from prose
 // (`Here's`, `Run 'head id_rsa'`, `b'…'`; v6.19.2 pre-tag reviews, delta F1 and round-3 F1/F2).
-// Two escapes deep a string ends at `\"` (round-4 F2).
-const CUT_MARK_RE = /^(?: ?…| ?\.\.\.| ?\[| ?<|[`"']|\\+["'])/;
+// Two escapes deep a string ends at `\"` (round-4 F2). Five dashes are the next key's marker glued
+// to a cut line (`for i in …; do head -c 80 k; done`).
+const CUT_MARK_RE = /^(?: ?…| ?\.\.\.| ?\[| ?<|[`"']|\\+["']|-----)/;
 const PGP_CRC_RE = /^=[A-Za-z0-9+/]{4}$/;
 // How a key's base64 starts: a DER SEQUENCE (PKCS#1, PKCS#8, SEC1) or OpenSSH's `openssh-key-v1`;
 // under a PGP header, a secret-key packet in the old or new format (`lQ…`, `xc…`/`xV…`).
@@ -392,11 +393,10 @@ const CONCAT_AFTER_RE = /["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']/y;
 const CONCAT_BEFORE_RE = /(?:\\r)?\\n["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']$/;
 const PEM_MARK = '***PEM_KEY***';
 // After an END that ends its line: a closing quote or punctuation, then a break or the text end.
-// Closing tags may be nested and a string may end after them (`END</key>"}`, `END</code></pre>`;
-// round-4 F3).
-const CLEAN_AFTER_END_RE = /(?:[ \t"'`,;)\]}]|<\/[A-Za-z][\w:.-]{0,40}>|\\+["'])*(?:\r|\n|\\+[nr]|$)/y;
-// A string's closing quote and the start of the next field or the end of the object.
-const STRING_THEN_FIELD_RE = /(?<!\\)["']\s*(?:,\s*\\?["']|[}\]])/;
+// Closing tags may be nested (`END</code></pre>`; round-4 F3), and a string's closing quote, escaped
+// or not, ends the line whatever follows it: `…END-----","stderr":""` is `tail -n 2` in a tool
+// result (round-5 F3).
+const CLEAN_AFTER_END_RE = /(?:[ \t`,;)\]}]|<\/[A-Za-z][\w:.-]{0,40}>)*(?:\r|\n|\\+[nr]|\\*["']|$)/y;
 
 const BLANK = 0;
 const LONG = 1;
@@ -604,7 +604,12 @@ function cutOffKeyEnd(text, b, be) {
     if (u > 0 && (ch === '"' || ch === "'") && isStringEnd(backslashesBefore(text, ls - 1, 0), u)) break;
     ls--;
   }
-  const shape = prefixShape(text.slice(ls, b));
+  // A 16+ base64 run glued to the BEGIN is the previous key's cut line, not a line prefix: taken
+  // for one, it stripped this key's identical body line and one copy of a repeated cut key went
+  // per pass (v6.19.2 pre-tag round-5 review F2).
+  let run = 0;
+  while (run < 16 && b - run > ls && /[A-Za-z0-9+/=]/.test(text[b - run - 1])) run++;
+  const shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
 
   let armors = 0;
   let shorts = 0;
@@ -624,9 +629,6 @@ function cutOffKeyEnd(text, b, be) {
       continue;
     }
     if (longs === 0) {
-      // In escaped text a header value that runs on past its string's end into the next fields
-      // (`Comment: work","note":"…`) ends the key there (v6.19.2 pre-tag round-4 review F4).
-      if (kind === ARMOR && u > 0 && STRING_THEN_FIELD_RE.test(core)) break;
       if (kind === ARMOR && ++armors <= MAX_ARMOR_HEADERS) continue;
       if (kind !== LONG && kind !== CUT) break;
     }

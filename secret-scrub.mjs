@@ -205,29 +205,12 @@ export const SECRET_PATTERNS = [
     /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
     '***PEM_KEY***',
   ],
-  // A cut-off key (`head id_rsa`, a tool output cut mid-key): the header and the WHOLE lines of
-  // base64 (or RFC 1421 headers) that follow it. Stored whole through v6.19.0 when no later key
-  // header followed. Whole lines only, so prose naming a header mid-sentence keeps its text
-  // (v6.19.0 round-3 P3-3: ending the block at the next key header erased the prose between two).
-  // A body line starts with 16+ base64 characters, and one shorter whole line may follow the last
-  // of them (a key's last line): a line of one word or number is prose (v6.19.1 pre-tag review F3),
-  // so the body needs a long line, and blank lines count only between long ones. A long line need
-  // not be whole, so a key cut mid-line loses the cut line too. A line break may be JSON-escaped
-  // (`\n` as two characters) and a quote may end the last line (v6.19.1 claims review F1). A header
-  // value may hold a backslash that does not start an escaped break (a Windows path), and it does
-  // not share its whitespace with a second quantifier, which was quadratic (delta review P1).
-  [
-    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):(?:[^\r\n\\]|\\(?![rn]))*(?=\r?\n|\\[rn]|["']|$)))(?:(?:[ \t]*(?:\r?\n|\\r\\n|\\n)(?=[ \t]*(?:\r?\n|\\r\\n|\\n)))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{16,}|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):(?:[^\r\n\\]|\\(?![rn]))*(?=\r?\n|\\[rn]|["']|$))))*(?:[ \t]*(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?=\r?\n|\\[rn]|["']|$))?/g,
-    '***PEM_KEY***',
-  ],
-  // The other end (`tail key.pem`): whole base64 lines ending in a private-key END, the same line
-  // rule as above but with two shorter lines allowed before the END (an armored PGP key's last data
-  // line and its `=XXXX` checksum; delta review P2). A line may start after a quote. A run of lines
-  // that does not end there is consumed and returned unchanged, so no line starts a second scan.
-  [
-    /(?:(?<![^\n])|(?<=\\n|["']))(?:[ \t]*[A-Za-z0-9+/=]{16,}[ \t]*(?:\r?\n|\\r\\n|\\n))+(?:[ \t]*[A-Za-z0-9+/=]{1,15}[ \t]*(?:\r?\n|\\r\\n|\\n)){0,2}(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----)?/g,
-    (m) => (m.endsWith('-----') ? '***PEM_KEY***' : m),
-  ],
+  // A cut-off key (`head id_rsa`, a tool output cut mid-key) and a headerless key tail (`tail
+  // key.pem`). These are line scanners, not patterns (D#145): three rounds of review each found a
+  // line shape the regex versions misread, and each fix to one shape erased prose in another.
+  // See scrubCutOffKeys and scrubKeyTails below for the line rules.
+  [{ [Symbol.replace]: (text) => scrubCutOffKeys(text) }, null],
+  [{ [Symbol.replace]: (text) => scrubKeyTails(text) }, null],
   // Long hex strings in credential assignments (e.g. SECRET_KEY=abc123def456...).
   // `hash` deliberately excluded: `hash: <40hex>` / `hash=<md5>` are git SHAs and
   // checksums (real, preserved data in this hash-heavy repo), not credentials.
@@ -350,6 +333,375 @@ export const SECRET_PATTERNS = [
   // already cover the dangerous *labelled* shapes. If you are tempted to add a
   // bare-token pattern here: don't — anchor it to a provider prefix instead.
 ];
+
+// ─── Cut-off private keys (D#145) ──────────────────────────────────────────
+// A key's text reaches the scrubber in many line shapes: plain LF/CRLF/CR lines, JSON-escaped
+// breaks (`\n` as two characters, or `\\n` when serialised twice), lines carrying a prefix (the
+// Read tool's `     2\t` or `2→`, grep's `id_rsa:`, a `> ` quote, a diff `-`), and lines inside a
+// quoted string. The scanners read the text as lines of ONE shape per key, decided at the key:
+//   - the break after the BEGIN line (or before the END line) says whether breaks are real or
+//     escaped, and at which depth; in real-break text a backslash is never a break, so a Windows
+//     path in a `Comment:` value no longer ends the header (v6.19.1 round-3 P3-E);
+//   - the text before the BEGIN (or END) on its line is the line prefix, and every other line
+//     loses a prefix of the same shape (digits may differ, `:` and `-` swap for grep context)
+//     before it is judged;
+//   - in escaped text an unescaped quote ends the string, so the scan stops there.
+// A body line is WHOLE base64: 16+ characters, or 1-15 for the last line. Prose after a header
+// keeps its text (round-3 P3-A/B/C: a word, a path or an identifier starting the next line was
+// erased), and a body needs one long line, so a header followed by words is not a key (F3). The
+// one exception is a line cut by a truncation mark (`…`, `...`): its base64 goes, the mark stays
+// (delta review P3-2).
+
+const KEY_BEGIN_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g;
+const KEY_END_RE = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g;
+const KEY_END_LINE_RE = /^-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+const B64_LONG_RE = /^[A-Za-z0-9+/=]{16,}$/;
+const B64_SHORT_RE = /^[A-Za-z0-9+/=]{1,15}$/;
+// Space-separated chunks, allowed only on the BEGIN line itself (a key pasted onto one line).
+const B64_CHUNKS_RE = /^[A-Za-z0-9+/=]+(?:[ \t]+[A-Za-z0-9+/=]+)*$/;
+const B64_CUT_RE = /^[A-Za-z0-9+/=]{16,}(?=…|\.\.\.)/;
+const PGP_CRC_RE = /^=[A-Za-z0-9+/]{4}$/;
+// How a key's base64 starts: a DER SEQUENCE (PKCS#1, PKCS#8, SEC1) or OpenSSH's `openssh-key-v1`.
+const KEY_MAGIC_RE = /^(?:MII|MIG|MC4C|MHcC|b3BlbnNzaC1rZXktdjE)/;
+// RFC 1421 / RFC 4880 armor headers (Proc-Type, DEK-Info, Comment, MessageID, …), before the body.
+const ARMOR_HEADER_RE = /^[A-Za-z][A-Za-z0-9-]*[ \t]*:/;
+const MAX_ARMOR_HEADERS = 16;
+// A JS/Python string split across source lines: `…\n" +` then `"…` on the next line. Not a comma:
+// `'…\n',` then `'…'` is the next element of a list, and its first word is not the key's last line.
+const CONCAT_AFTER_RE = /["'][ \t]*\+?[ \t]*(?:\r\n|\n|\r)[ \t]*["']/y;
+const CONCAT_BEFORE_RE = /(?:\\r)?\\n["'][ \t]*\+?[ \t]*(?:\r\n|\n|\r)[ \t]*["']$/;
+const PEM_MARK = '***PEM_KEY***';
+
+const BLANK = 0;
+const LONG = 1;
+const SHORT = 2;
+const END = 3;
+const ARMOR = 4;
+const CUT = 5;
+const OTHER = 6;
+
+function backslashesBefore(text, i, floor) {
+  let j = i;
+  while (j > floor && text[j - 1] === '\\') j--;
+  return i - j;
+}
+
+// Break depth `u`: 0 = real breaks only, 1 = `\n`, 2 = `\\n`, … A run of r backslashes then `n`
+// is a break at depth u when r % 2u === u (the backslashes before it are escaped backslashes).
+const isEscBreak = (r, u) => u > 0 && r % (2 * u) === u;
+// An unescaped quote at depth u ends the string: r % 2u < u.
+const isStringEnd = (r, u) => u > 0 && r % (2 * u) < u;
+
+/** The line starting at s: its end, and where the next line starts (-1 when the text or string ends). */
+function nextLine(text, s, u, quote) {
+  const n = text.length;
+  let i = s;
+  while (i < n) {
+    const ch = text[i];
+    if (ch === '\n') return { end: i, next: i + 1 };
+    if (ch === '\r') return { end: i, next: text[i + 1] === '\n' ? i + 2 : i + 1 };
+    if (u > 0 && ch === '\\') {
+      let j = i;
+      while (j < n && text[j] === '\\') j++;
+      const r = j - i;
+      const c = text[j];
+      if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
+        let next = j + 1;
+        if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
+        if (u === 1) {
+          CONCAT_AFTER_RE.lastIndex = next;
+          const m = CONCAT_AFTER_RE.exec(text);
+          if (m) next += m[0].length;
+        }
+        return { end: j - u, next };
+      }
+      if (c === quote && isStringEnd(r, u)) return { end: j - (r % (2 * u)), next: -1 };
+      i = j + 1;
+      continue;
+    }
+    if (u > 0 && ch === quote) return { end: i, next: -1 };
+    i++;
+  }
+  return { end: n, next: -1 };
+}
+
+/** The line that ends at the break before `ls`, or null when `ls` starts the text or string. */
+function prevLine(text, ls, u, floor) {
+  if (ls - 1 < floor) return null;
+  const c = text[ls - 1];
+  let bs = -1;
+  if (c === '\n') bs = ls - 2 >= floor && text[ls - 2] === '\r' ? ls - 2 : ls - 1;
+  else if (c === '\r') bs = ls - 1;
+  else if ((c === 'n' || c === 'r') && isEscBreak(backslashesBefore(text, ls - 1, floor), u)) {
+    bs = ls - 1 - u;
+    const r2 = bs - 1 >= floor && text[bs - 1] === 'r' ? backslashesBefore(text, bs - 1, floor) : 0;
+    if (c === 'n' && isEscBreak(r2, u)) bs -= u + 1;
+  } else if (u === 1 && (c === '"' || c === "'")) {
+    const m = CONCAT_BEFORE_RE.exec(text.slice(Math.max(floor, ls - 64), ls));
+    if (m) bs = ls - m[0].length;
+  }
+  if (bs === -1) return null;
+  let i = bs - 1;
+  while (i >= floor) {
+    const ch = text[i];
+    if (ch === '\n' || ch === '\r') break;
+    if (u > 0 && (ch === 'n' || ch === 'r') && isEscBreak(backslashesBefore(text, i, floor), u)) break;
+    if (u > 0 && (ch === '"' || ch === "'") && isStringEnd(backslashesBefore(text, i, floor), u)) break;
+    i--;
+  }
+  return { start: i + 1, end: bs };
+}
+
+/** A regex for the line prefix `prefix` has, with digits free and grep's `:`/`-` interchangeable. */
+function prefixShape(prefix) {
+  const body = prefix.replace(/^[ \t]+/, '');
+  if (!body || body.length > 256) return null;
+  if (body === '-' || body === '+') return /^[ \t]*[-+ ]/;
+  const src = body
+    .replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+    .replace(/\d+/g, '\\d+')
+    .replace(/[:-]/g, '[:-]');
+  return new RegExp(`^[ \\t]*${src}`);
+}
+
+/** The judged part of line [s, e): no prefix of the key's shape, no padding, no string quotes. */
+function lineCore(text, s, e, shape) {
+  let line = text.slice(s, e);
+  let off = s;
+  if (shape) {
+    const m = shape.exec(line);
+    if (m) {
+      line = line.slice(m[0].length);
+      off += m[0].length;
+    }
+  }
+  let a = 0;
+  let b = line.length;
+  while (a < b && (line[a] === ' ' || line[a] === '\t')) a++;
+  while (b > a && (line[b - 1] === ' ' || line[b - 1] === '\t')) b--;
+  if (a < b && (line[a] === '"' || line[a] === "'")) a++;
+  // A closing quote with what may follow it (`",`, `" +`, `')`), and escaped breaks before it.
+  // Read from the end: an unanchored `(?:\\+[rn])*["']…$` retried every start in a backslash run.
+  let q = b;
+  while (q > a && /[ \t+,;)\]}]/.test(line[q - 1])) q--;
+  if (q > a && (line[q - 1] === '"' || line[q - 1] === "'")) {
+    q--;
+    for (;;) {
+      if (q - 1 <= a || (line[q - 1] !== 'n' && line[q - 1] !== 'r')) break;
+      let k = q - 1;
+      while (k > a && line[k - 1] === '\\') k--;
+      if (k === q - 1) break;
+      q = k;
+    }
+    b = q;
+  }
+  return { core: line.slice(a, b), start: off + a, end: off + b };
+}
+
+function classify(core) {
+  if (core === '') return BLANK;
+  if (B64_LONG_RE.test(core)) return LONG;
+  if (B64_SHORT_RE.test(core)) return SHORT;
+  if (KEY_END_LINE_RE.test(core)) return END;
+  if (ARMOR_HEADER_RE.test(core)) return ARMOR;
+  if (B64_CUT_RE.test(core)) return CUT;
+  return OTHER;
+}
+
+/**
+ * Where the key that starts with the BEGIN at [b, be) ends, or -1 when no key material follows it.
+ * Header lines and blank lines may come first; then 16+-character base64 lines (blank lines only
+ * between them), one shorter last line (and a PGP `=XXXX` checksum after it), and the END if it
+ * is there. One base64 line alone is a key only when it is 40+ characters, starts the way a key
+ * encoding starts (DER `MII…`, OpenSSH `b3BlbnNzaC1rZXktdjE…`), follows armor headers or reaches
+ * the END: a path or an identifier of 16-39 characters under a header is prose (delta review P3-5).
+ */
+function cutOffKeyEnd(text, b, be) {
+  // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
+  let i = be;
+  while (i < text.length && /[A-Za-z0-9+/= \t]/.test(text[i])) i++;
+  const rest = text.slice(be, i).trim();
+  let u;
+  let next;
+  if (i >= text.length) return -1;
+  if (text[i] === '\n' || text[i] === '\r') {
+    u = 0;
+    next = text[i] === '\r' && text[i + 1] === '\n' ? i + 2 : i + 1;
+  } else if (text[i] === '\\') {
+    let j = i;
+    while (j < text.length && text[j] === '\\') j++;
+    const r = j - i;
+    if (text[j] !== 'n' && text[j] !== 'r') return -1;
+    u = r & -r;
+    if (r !== u) return -1; // a literal backslash on the BEGIN line: not a key line
+    ({ next } = nextLine(text, i, u, '"'));
+  } else return -1;
+  let longs = 0;
+  let longest = 0;
+  let first = '';
+  let end = -1;
+  let sawEnd = false;
+  if (rest) {
+    longest = Math.max(...rest.split(/[ \t]+/).map((t) => t.length));
+    if (!B64_CHUNKS_RE.test(rest) || longest < 16) return -1;
+    longs = 1;
+    first = rest;
+    end = be + text.slice(be, i).trimEnd().length;
+  }
+  // The BEGIN line's prefix and, in escaped text, the quote that opened the string.
+  let ls = b;
+  let quote = '"';
+  while (ls > 0) {
+    const ch = text[ls - 1];
+    if (ch === '\n' || ch === '\r') break;
+    if (u > 0 && (ch === 'n' || ch === 'r') && isEscBreak(backslashesBefore(text, ls - 1, 0), u)) break;
+    if (u > 0 && (ch === '"' || ch === "'") && isStringEnd(backslashesBefore(text, ls - 1, 0), u)) {
+      quote = ch;
+      break;
+    }
+    ls--;
+  }
+  const shape = prefixShape(text.slice(ls, b));
+
+  let armors = 0;
+  let shorts = 0;
+  let pendingBlank = false;
+  while (next !== -1) {
+    const line = nextLine(text, next, u, quote);
+    const { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
+    const kind = classify(core);
+    next = line.next;
+    if (kind === END) {
+      if (longs > 0) end = start + KEY_END_LINE_RE.exec(core)[0].length;
+      sawEnd = true;
+      break;
+    }
+    if (kind === BLANK) {
+      if (shorts > 0) break;
+      pendingBlank = true;
+      continue;
+    }
+    if (longs === 0) {
+      if (kind === ARMOR && ++armors <= MAX_ARMOR_HEADERS) continue;
+      if (kind !== LONG && kind !== CUT) break;
+    }
+    if (kind === LONG && shorts === 0) {
+      if (longs++ === 0) first = core;
+      longest = Math.max(longest, core.length);
+      end = coreEnd;
+      pendingBlank = false;
+      continue;
+    }
+    if (pendingBlank) break;
+    if (kind === SHORT && (shorts === 0 || (shorts === 1 && PGP_CRC_RE.test(core)))) {
+      shorts++;
+      end = coreEnd;
+      continue;
+    }
+    if (kind === CUT && shorts === 0) {
+      const run = B64_CUT_RE.exec(core)[0];
+      if (longs++ === 0) first = run;
+      longest = Math.max(longest, run.length);
+      end = start + run.length;
+    }
+    break;
+  }
+  if (longs === 0) return -1;
+  return longs >= 2 || armors > 0 || sawEnd || longest >= 40 || KEY_MAGIC_RE.test(first) ? end : -1;
+}
+
+function scrubCutOffKeys(text) {
+  if (!text.includes('PRIVATE KEY')) return text;
+  KEY_BEGIN_RE.lastIndex = 0;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = KEY_BEGIN_RE.exec(text))) {
+    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
+    if (end === -1) continue;
+    out += text.slice(last, m.index) + PEM_MARK;
+    last = end;
+    KEY_BEGIN_RE.lastIndex = end;
+  }
+  return last === 0 ? text : out + text.slice(last);
+}
+
+/**
+ * Where the key tail that ends with the END at `e` starts, or -1: whole base64 lines of 16+
+ * characters directly above it, with one shorter line before the END, or two when the one before
+ * the END is a PGP `=XXXX` checksum (delta review P2; two short words above an END are prose,
+ * round-3 P3-D). `floor` is the end of the previous END, so no line is read twice.
+ */
+function keyTailStart(text, e, floor) {
+  let ls = e;
+  let u = 0;
+  while (ls > floor) {
+    const ch = text[ls - 1];
+    if (ch === '\n' || ch === '\r') break;
+    if (ch === 'n' || ch === 'r') {
+      const r = backslashesBefore(text, ls - 1, floor);
+      if (r > 0) {
+        u = r & -r;
+        break;
+      }
+    }
+    ls--;
+  }
+  let longs = 0;
+  let shorts = 0;
+  let crc = false;
+  let top = -1;
+  const take = (core, start) => {
+    const kind = classify(core);
+    if (kind === LONG) {
+      longs++;
+      top = start;
+      return true;
+    }
+    if (longs > 0 || kind !== SHORT) return false;
+    if (shorts === 0) {
+      shorts = 1;
+      crc = PGP_CRC_RE.test(core);
+      return true;
+    }
+    if (shorts === 1 && crc) {
+      shorts = 2;
+      return true;
+    }
+    return false;
+  };
+  // The END line's own prefix is either a line prefix or the key's last base64 run, glued to the END.
+  const prefix = text.slice(ls, e);
+  const trimmed = prefix.trim();
+  let shape = null;
+  if (/^[ \t]*[A-Za-z0-9+/=]+$/.test(prefix)) {
+    if (!take(trimmed, ls + prefix.indexOf(trimmed))) return -1;
+  } else shape = prefixShape(prefix);
+  let cur = ls;
+  for (let line; (line = prevLine(text, cur, u, floor)); cur = line.start) {
+    const { core, start } = lineCore(text, line.start, line.end, shape);
+    if (!take(core, start)) break;
+  }
+  return longs > 0 ? top : -1;
+}
+
+function scrubKeyTails(text) {
+  if (!text.includes('PRIVATE KEY')) return text;
+  KEY_END_RE.lastIndex = 0;
+  let out = '';
+  let last = 0;
+  let floor = 0;
+  let m;
+  while ((m = KEY_END_RE.exec(text))) {
+    const start = keyTailStart(text, m.index, Math.max(floor, last));
+    if (start !== -1) {
+      out += text.slice(last, start) + PEM_MARK;
+      last = m.index + m[0].length;
+    }
+    floor = m.index + m[0].length;
+  }
+  return last === 0 ? text : out + text.slice(last);
+}
 
 /**
  * Scrub known secret patterns (API keys, tokens, credentials) from text.

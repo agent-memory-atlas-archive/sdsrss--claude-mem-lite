@@ -63,6 +63,27 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       CHAIN +
       ' ' +
       ('MIIEabcdefghijklmnop\n'.repeat(20) + 'Ab=\n-----END CERTIFICATE-----\n').repeat(N / 450),
+    // D#145 line scanners. A line of backslashes under a key body: an unanchored suffix pattern
+    // (`(?:\\+[rn])*["']…$`) retried every start in the run (40k chars: 540 ms, x3.8 per doubling).
+    pemBodyThenBackslashLine: '-----BEGIN RSA PRIVATE KEY-----\n' + 'MIIEabcdefghijklmnop\n' + '\\'.repeat(N),
+    // Many ENDs on one line, each walking back to the one before it.
+    pemEndsOneLine: ('x'.repeat(1000) + '-----END RSA PRIVATE KEY-----').repeat(N / 1030),
+    pemEndsAfterBackslashRuns: (
+      '\\'.repeat(60) + 'nMIIEabcdefghijklmnop-----END RSA PRIVATE KEY-----'
+    ).repeat(N / 110),
+    // A long line prefix before every BEGIN, and a prefix shape built from it.
+    pemBeginLongPrefix: (
+      'a'.repeat(5000) + ' -----BEGIN RSA PRIVATE KEY-----\nMIIEabcdefghijklmnop\n'
+    ).repeat(N / 5053),
+    pemBeginDigitPrefix: (
+      '1a'.repeat(120) +
+      '-----BEGIN RSA PRIVATE KEY-----\n' +
+      '1a'.repeat(120) +
+      'MIIEabcdefghijklmnop\n'
+    ).repeat(N / 532),
+    pemBeginChunksOneLine: '-----BEGIN RSA PRIVATE KEY----- ' + 'MIIEabcdefghijklmnop '.repeat(N / 21),
+    pemConcatLines:
+      '"-----BEGIN RSA PRIVATE KEY-----\\n" +\n' + '  "MIIEabcdefghijklmnop\\n" +\n'.repeat(N / 28),
     jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),
     jwtDotChain: ('eyJ' + 'A'.repeat(12) + '.').repeat(N / 16),
   };

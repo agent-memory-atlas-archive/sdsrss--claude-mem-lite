@@ -432,33 +432,39 @@ const isEscBreak = (r, u) => u > 0 && r % (2 * u) === u;
 // An unescaped quote at depth u ends the string: r % 2u < u.
 const isStringEnd = (r, u) => u > 0 && r % (2 * u) < u;
 
+// The characters nextLine acts on; a native scan skips the rest. Read per character in JS, a body
+// line cost twice as much under coverage (pemBodyNoEnd: 0.15x benign, 0.08x with the scan).
+const LINE_STOP_RE = /[\r\n]/g;
+const LINE_STOP_ESC_RE = /[\r\n\\]/g;
+
 /** The line starting at s: its end, and where the next line starts (-1 at the end of the text). */
 function nextLine(text, s, u) {
   const n = text.length;
+  const stop = u > 0 ? LINE_STOP_ESC_RE : LINE_STOP_RE;
   let i = s;
   while (i < n) {
+    stop.lastIndex = i;
+    if (!stop.exec(text)) break;
+    i = stop.lastIndex - 1;
     const ch = text[i];
     if (ch === '\n') return { end: i, next: i + 1 };
     if (ch === '\r') return { end: i, next: text[i + 1] === '\n' ? i + 2 : i + 1 };
-    if (u > 0 && ch === '\\') {
-      let j = i;
-      while (j < n && text[j] === '\\') j++;
-      const r = j - i;
-      const c = text[j];
-      if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
-        let next = j + 1;
-        if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
-        if (u === 1) {
-          CONCAT_AFTER_RE.lastIndex = next;
-          const m = CONCAT_AFTER_RE.exec(text);
-          if (m) next += m[0].length;
-        }
-        return { end: j - u, next };
+    // A backslash run, stopped on only when u > 0.
+    let j = i;
+    while (j < n && text[j] === '\\') j++;
+    const r = j - i;
+    const c = text[j];
+    if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
+      let next = j + 1;
+      if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
+      if (u === 1) {
+        CONCAT_AFTER_RE.lastIndex = next;
+        const m = CONCAT_AFTER_RE.exec(text);
+        if (m) next += m[0].length;
       }
-      i = j + 1;
-      continue;
+      return { end: j - u, next };
     }
-    i++;
+    i = j + 1;
   }
   return { end: n, next: -1 };
 }

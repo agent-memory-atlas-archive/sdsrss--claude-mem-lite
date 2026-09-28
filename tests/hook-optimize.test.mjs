@@ -133,6 +133,42 @@ describe('re-enrich', () => {
     const obs = db.prepare('SELECT title FROM observations LIMIT 1').get();
     expect(obs.title).not.toMatch(/ACCESS_KEY=[A-Za-z0-9]/);
   });
+
+  // D#146, the D#138 class on this path: narrow replaces title and narrative with model text, so
+  // an explicit save it rewrites (one whose save-time enrich failed) is no longer one.
+  const narrowReply = {
+    type: 'bugfix',
+    title: 'Model title',
+    narrative: 'model narrative',
+    concepts: ['c'],
+    facts: [],
+    importance: 2,
+    lesson_learned: 'a lesson with enough signal to persist',
+    search_aliases: [],
+  };
+
+  it('a manual save rewritten by narrow re-enrich is marked machine-written', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    const { isAutoWritten } = await import('../lib/provenance.mjs');
+    insertSession(db, { id: 'manual-test', project: 'test' });
+    insertObs(db, { sessionId: 'manual-test', title: 'Saved by hand', narrative: 'x' });
+    callModelJSONAsync.mockResolvedValue(narrowReply);
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    const obs = db.prepare('SELECT title, memory_session_id FROM observations LIMIT 1').get();
+    expect(obs.title).toBe('Model title');
+    expect(obs.memory_session_id).toBe('enrich-test');
+    expect(isAutoWritten(obs.memory_session_id)).toBe(true);
+  });
+
+  it('a machine-written row keeps its session id through narrow re-enrich', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Hook row', narrative: 'x' });
+    callModelJSONAsync.mockResolvedValue(narrowReply);
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    expect(db.prepare('SELECT memory_session_id FROM observations LIMIT 1').get().memory_session_id).toBe(
+      'sess-1',
+    );
+  });
 });
 
 // P1 alias-backfill (scope='aliases'): a lesson-bearing manual save (mem_save)
@@ -842,6 +878,35 @@ describe('re-enrich --scope wide (R-7)', () => {
     const wide = findReenrichCandidates(db, 10, { scope: 'wide' });
     expect(wide.length).toBe(1);
     expect(wide[0].title).toContain('credit deduction');
+  });
+
+  // D#146 control: wide keeps the stored title and narrative and only adds a lesson, so an
+  // explicit save stays one (narrow's rewrite moves it to `enrich-`).
+  it('a manual save keeps its session id through wide re-enrich', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertSession(db, { id: 'manual-test', project: 'test' });
+    insertObs(db, {
+      sessionId: 'manual-test',
+      type: 'bugfix',
+      title: 'Fix race condition in credit deduction',
+      narrative:
+        'IntegrityError appeared when two concurrent requests deducted credit from the same account. Root cause: balance read-then-write without SELECT FOR UPDATE. Added row-level lock.',
+    });
+    callModelJSONAsync.mockResolvedValue({
+      type: 'bugfix',
+      title: 'Model title',
+      narrative: 'model narrative',
+      concepts: ['credit'],
+      facts: [],
+      importance: 2,
+      lesson_learned: 'lock the balance row before a read-then-write',
+      search_aliases: [],
+    });
+    expect((await executeReenrich(db, 10, { scope: 'wide' })).processed).toBe(1);
+    const obs = db.prepare('SELECT title, lesson_learned, memory_session_id FROM observations LIMIT 1').get();
+    expect(obs.lesson_learned).toContain('lock the balance row');
+    expect(obs.title).toBe('Fix race condition in credit deduction');
+    expect(obs.memory_session_id).toBe('manual-test');
   });
 
   it('wide scope excludes LOW_SIGNAL titles (no source material to extract from)', async () => {

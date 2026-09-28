@@ -583,12 +583,33 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // text over it, wide wrote back the pre-edit narrative it read before the call
       // (tests/verify-reenrich-race.test.mjs). It also stops two overlapping runs rewriting a
       // row twice.
+      //
+      // Narrow replaces title and narrative with model text, so an explicit save it rewrites (one
+      // whose save-time enrich failed) moves to the re-enrich writer's id, as a cluster-merge
+      // keeper does (D#146, D#138). Wide keeps the stored title and narrative and only adds a
+      // lesson, so the row stays an explicit save. The writer's session row is best-effort.
+      let rewriteSessionId = null;
+      if (!isWide) {
+        const cur = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(cand.id);
+        if (cur?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
+          const enrichSessionId = writerSessionId('enrich-', cand.project);
+          try {
+            db.prepare(
+              `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+               VALUES (?, ?, ?, ?, ?, 'active')`,
+            ).run(enrichSessionId, enrichSessionId, cand.project, new Date().toISOString(), Date.now());
+            rewriteSessionId = enrichSessionId;
+          } catch (e) {
+            debugCatch(e, 'reenrich writer session');
+          }
+        }
+      }
       const res = db
         .prepare(
           `
         UPDATE observations SET type=?, title=?, narrative=?, concepts=?, facts=?,
           text=?, importance=?, lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
-          scope=COALESCE(?, scope)
+          scope=COALESCE(?, scope), memory_session_id = COALESCE(?, memory_session_id)
         WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL
       `,
         )
@@ -608,6 +629,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           // scope, or emits an off-enum value, must never blank an existing label —
           // and THIS update stamps optimized_at, so the loss would be permanent.
           normalizeScope(parsed.scope),
+          rewriteSessionId,
           cand.id,
         );
       if (res.changes === 0) {

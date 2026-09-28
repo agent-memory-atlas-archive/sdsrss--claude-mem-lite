@@ -347,8 +347,8 @@ export const SECRET_PATTERNS = [
 //   - the text before the BEGIN (or END) on its line is the line prefix, and every other line
 //     loses a prefix of the same shape (digits may differ, `:` and `-` swap for grep context)
 //     before it is judged;
-//   - in escaped text an unescaped quote ends the string, so the scan stops there, and a header
-//     value no longer runs on into the next JSON fields (round-3 P3-C).
+//   - lines end at breaks only. A header value that runs on into the next JSON fields is still
+//     one header line, so it erases nothing without a base64 line under it (round-3 P3-C).
 // A body line is WHOLE base64: 16+ characters, or 1-15 for the last line. So a word under a key
 // body keeps its text (round-3 P3-A: `Don't` lost `Don`), as does a path or an identifier that
 // starts the next line (P3-B), and a body needs one long line, so a header followed by words is
@@ -366,8 +366,11 @@ const B64_SHORT_RE = /^[A-Za-z0-9+/=]{1,15}$/;
 // Space-separated chunks, allowed only on the BEGIN line itself (a key pasted onto one line).
 const B64_CHUNKS_RE = /^[A-Za-z0-9+/=]+(?:[ \t]+[A-Za-z0-9+/=]+)*$/;
 const B64_RUN_RE = /^[A-Za-z0-9+/=]{16,}/;
-// What may follow a key line that was cut or annotated: a truncation mark or a delimiter.
-const CUT_MARK_RE = /^(?: ?…| ?\.\.\.| ?\[| ?<|`)/;
+// What may follow a key line that was cut or annotated: a truncation mark or a delimiter. A quote
+// ends the string a key sits in (`…', 'rc': 0}`, `…","stderr":…`): the scanners do not track which
+// quote opened a string, since no character before a quote tells an opening quote from prose
+// (`Here's`, `Run 'head id_rsa'`, `b'…'`; v6.19.2 pre-tag reviews, delta F1 and round-3 F1/F2).
+const CUT_MARK_RE = /^(?: ?…| ?\.\.\.| ?\[| ?<|[`"'])/;
 const PGP_CRC_RE = /^=[A-Za-z0-9+/]{4}$/;
 // How a key's base64 starts: a DER SEQUENCE (PKCS#1, PKCS#8, SEC1) or OpenSSH's `openssh-key-v1`;
 // under a PGP header, a secret-key packet in the old or new format (`lQ…`, `xc…`/`xV…`).
@@ -388,7 +391,7 @@ const CONCAT_AFTER_RE = /["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']/y;
 const CONCAT_BEFORE_RE = /(?:\\r)?\\n["'](?:[ \t]*\+)?[ \t]*(?:\r\n|\n|\r)[ \t]*["']$/;
 const PEM_MARK = '***PEM_KEY***';
 // After an END that ends its line: a closing quote or punctuation, then a break or the text end.
-const CLEAN_AFTER_END_RE = /[ \t"'`,;)\]}]*(?:\r|\n|\\+[nr]|$)/y;
+const CLEAN_AFTER_END_RE = /[ \t"'`,;)\]}]*(?:<\/[A-Za-z][\w:.-]{0,40}>[ \t]*)?(?:\r|\n|\\+[nr]|$)/y;
 
 const BLANK = 0;
 const LONG = 1;
@@ -410,8 +413,8 @@ const isEscBreak = (r, u) => u > 0 && r % (2 * u) === u;
 // An unescaped quote at depth u ends the string: r % 2u < u.
 const isStringEnd = (r, u) => u > 0 && r % (2 * u) < u;
 
-/** The line starting at s: its end, and where the next line starts (-1 when the text or string ends). */
-function nextLine(text, s, u, quote) {
+/** The line starting at s: its end, and where the next line starts (-1 at the end of the text). */
+function nextLine(text, s, u) {
   const n = text.length;
   let i = s;
   while (i < n) {
@@ -433,11 +436,9 @@ function nextLine(text, s, u, quote) {
         }
         return { end: j - u, next };
       }
-      if (c === quote && isStringEnd(r, u)) return { end: j - (r % (2 * u)), next: -1 };
       i = j + 1;
       continue;
     }
-    if (u > 0 && ch === quote) return { end: i, next: -1 };
     i++;
   }
   return { end: n, next: -1 };
@@ -550,7 +551,7 @@ function cutRun(core) {
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
  * block never gets here; the block pattern above takes it first.
  */
-function cutOffKeyEnd(text, b, be, seen) {
+function cutOffKeyEnd(text, b, be) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
   let i = be;
   while (i < text.length && /[A-Za-z0-9+/= \t]/.test(text[i])) i++;
@@ -568,7 +569,7 @@ function cutOffKeyEnd(text, b, be, seen) {
     if (text[j] !== 'n' && text[j] !== 'r') return -1;
     u = r & -r;
     if (r !== u) return -1; // a literal backslash on the BEGIN line: not a key line
-    ({ next } = nextLine(text, i, u, '"'));
+    ({ next } = nextLine(text, i, u));
   } else return -1;
   let longs = 0;
   let longest = 0;
@@ -599,42 +600,12 @@ function cutOffKeyEnd(text, b, be, seen) {
     ls--;
   }
   const shape = prefixShape(text.slice(ls, b));
-  // In escaped text, the quote that opened the string, which may sit lines before the BEGIN (a
-  // Python repr `{'stdout': '$ head id_rsa\n-----BEGIN…`, F3). The walk stops where the previous
-  // BEGIN of the same depth started its walk, and takes its answer, so each character is walked
-  // once per depth (one shared entry let alternating depths walk back to the start each time).
-  let quote = '"';
-  if (u > 0) {
-    let k = b;
-    for (;;) {
-      if (k <= 0 || text[k - 1] === '\n' || text[k - 1] === '\r') break;
-      const prev = seen.get(u);
-      if (prev && k <= prev.at) {
-        quote = prev.quote;
-        break;
-      }
-      const ch = text[k - 1];
-      // An opening quote sits where a string can start (after a space, `:`, `,`, `[`, `{`, `(`,
-      // `=` or at a line start). An apostrophe inside a word (`Here's`) is prose: taking it let
-      // the JSON string's closing `"` through (v6.19.2 pre-tag delta review F1).
-      if (
-        (ch === '"' || ch === "'") &&
-        isStringEnd(backslashesBefore(text, k - 1, 0), u) &&
-        (k - 1 === 0 || /[\s:,[{(=]/.test(text[k - 2]))
-      ) {
-        quote = ch;
-        break;
-      }
-      k--;
-    }
-    seen.set(u, { at: b, quote });
-  }
 
   let armors = 0;
   let shorts = 0;
   let pendingBlank = false;
   while (next !== -1) {
-    const line = nextLine(text, next, u, quote);
+    const line = nextLine(text, next, u);
     const { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
     const kind = classify(core);
     next = line.next;
@@ -683,9 +654,8 @@ function scrubCutOffKeys(text) {
   let out = '';
   let last = 0;
   let m;
-  const seen = new Map(); // depth -> { at, quote } of the last BEGIN walked at that depth
   while ((m = KEY_BEGIN_RE.exec(text))) {
-    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, seen);
+    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
     if (end === -1) continue;
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;
@@ -770,9 +740,11 @@ function keyTailSpan(text, e, ee, floor) {
       shape = null;
     }
   }
-  // An END alone on its line (after nothing but a line prefix, before nothing but a quote or
-  // punctuation) is evidence enough for one line over it: `tail -n 2` of a key whose last line
-  // is 16-39 characters (F3). An END in a sentence or in inline code followed by words is not.
+  // An END alone on its line (after nothing but a line prefix, before nothing but a quote,
+  // punctuation or a closing tag) is evidence enough for one line over it that has a digit, a `+`
+  // or `=` padding: `tail -n 2` of a key whose last line is 16-39 characters (delta F3). A 16+
+  // run of random base64 almost always has one; a camelCase identifier or a path has none
+  // (round-3 F3). An END in a sentence or in inline code followed by words is not alone.
   CLEAN_AFTER_END_RE.lastIndex = ee;
   const clean = !sentence && (trimmed === '' || prefixed) && CLEAN_AFTER_END_RE.test(text);
   let cur = ls;
@@ -784,7 +756,8 @@ function keyTailSpan(text, e, ee, floor) {
   // it is 40+ characters, starts like a key encoding or sits over a PGP checksum; an identifier of
   // 16-39 characters over an END named in prose is not (F7).
   if (longs === 0) return null;
-  if (!(longs >= 2 || longest >= 40 || crc || clean || KEY_MAGIC_RE.test(topCore))) return null;
+  const b64ish = /[0-9+]|=$/.test(topCore);
+  if (!(longs >= 2 || longest >= 40 || crc || (clean && b64ish) || KEY_MAGIC_RE.test(topCore))) return null;
   return [top, sentence ? bottom : ee];
 }
 

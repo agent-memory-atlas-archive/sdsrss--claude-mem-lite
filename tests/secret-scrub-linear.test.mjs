@@ -87,8 +87,8 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
     // continuation pattern split the run between two quantifiers (200k: 16-19 s).
     pemEscapedQuoteSpaces: '-----BEGIN RSA PRIVATE KEY-----\\n"' + ' '.repeat(N) + 'x',
     pemEscapedQuoteTabs: '-----BEGIN RSA PRIVATE KEY-----\\n"' + '\t'.repeat(N) + 'x',
-    // The opening-quote walk (F3) is cached per escape depth: with one shared entry, BEGINs at
-    // alternating depths each walked back to the start of the text (200k: 1.6 s, x2.9 per doubling).
+    // BEGINs at alternating escape depths. A since-removed walk back to a string's opening quote,
+    // cached by one shared entry, went back to the start of the text for each (200k: 1.6 s).
     pemAlternatingDepths:
       '-----BEGIN RSA PRIVATE KEY-----\\nAb\\n-----BEGIN RSA PRIVATE KEY-----\\\\nAb\\\\n'.repeat(N / 76),
     pemConcatLines:

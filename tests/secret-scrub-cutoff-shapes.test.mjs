@@ -219,8 +219,10 @@ describe('single-shape rules the matrix does not isolate', () => {
     // BEGIN is on, so a single-quoted string (a Python repr, `echo -e '…'`) ends at its quote.
     [
       'a key in a single-quoted Python repr',
-      `{'stdout': '$ head id_rsa\\n-----BEGIN RSA PRIVATE KEY-----\\n${KL}\\n${KL}\\nZq9Xw2Lk', 'rc': 0}`,
-      'Zq9Xw2Lk',
+      // The last line is 16+: a quote after a base64 run ends a cut line. A last line of 15 or
+      // fewer followed by more fields is a documented limit.
+      `{'stdout': '$ head id_rsa\\n-----BEGIN RSA PRIVATE KEY-----\\n${KL}\\n${KL}\\nZq9Xw2LkPm4Rt7Yb1Nc6', 'rc': 0}`,
+      'Zq9Xw2LkPm4Rt7Yb1Nc6',
     ],
     // F4: text after the key's last line — a closing backtick or tag, a truncation note, words.
     [
@@ -382,6 +384,80 @@ describe('v6.19.2 pre-tag delta review', () => {
     ['an END in a code span on its own line', `readPrivateKeyFromFile\n\`${E}\``, ['readPrivateKeyFromFile']],
     // The F1 repair: a Python repr still ends at its single quote.
     ['a Python repr after the key', `{'stdout': '${H}\\n${B}\\n${B}\\nZq9Xw2Lk', 'rc': 0}`, ["'rc': 0"]],
+  ])('%s keeps its text', (_name, input, keep) => {
+    const out = scrubSecrets(input);
+    expect(keep.filter((k) => !out.includes(k))).toEqual([]);
+  });
+});
+
+describe('v6.19.2 pre-tag round-3 review', () => {
+  const H = '-----BEGIN RSA PRIVATE KEY-----';
+  const PH = '-----BEGIN PGP PRIVATE KEY BLOCK-----';
+  const E = '-----END RSA PRIVATE KEY-----';
+  const B = 'MIIEpAIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun';
+  const X = 'Xq9ZbT2kLp8WvR4nYc7MfH1sJd6GaU3eQo5iKx0wBzNtVy';
+  const X30 = X.slice(0, 30);
+  it.each([
+    // F1: a string opened after a letter (`b'`, `r'`, `$'`). No quote is tracked now: a quote
+    // after a base64 run ends a cut line, and a quote in an armor value ends nothing.
+    ['a communicate() tuple', `(b'${H}\\n${B}\\n${X30}', b'')`, [X30]],
+    [
+      'a communicate() tuple with a quoted Comment',
+      `(b'${PH}\\nComment: "work key"\\n\\nlQdGBF${X}\\n${X}${X}', b'')`,
+      [`lQdGBF${X}`, X.slice(0, 20)],
+    ],
+    ['a raw string', `r'${H}\\n${B}\\n${X30}', 'x'`, [X30]],
+    ['an ANSI-C shell string', `echo $'${H}\\n${B}\\n${X30}' > k`, [X30]],
+    // F2: a quoted word earlier in the string (`'head id_rsa'`, `cat('k')`).
+    [
+      'a JSON string after a quoted word',
+      JSON.stringify({ stdout: `Run 'head id_rsa':\n${H}\n${B}\n${X30}`, stderr: '', interrupted: false }),
+      [X30],
+    ],
+    [
+      'a PGP key with an apostrophe, after a quoted word',
+      JSON.stringify({
+        stdout: `File 'k.asc':\n${PH}\nComment: Alice's key\n\nlQdGBF${X}\n${X}${X}`,
+        stderr: '',
+      }),
+      [`lQdGBF${X}`, X.slice(0, 20)],
+    ],
+    // F6: a tail whose END a closing tag follows.
+    ['a key tail in an XML element', `<key>\n${X30}\n${E}</key>`, [X30]],
+  ])('%s', (_name, input, keyParts) => {
+    const out = scrubSecrets(input);
+    expect(keyParts.filter((k) => out.includes(k))).toEqual([]);
+  });
+
+  it.each([
+    // F3: over an END alone on its line, one line counts as a key's last line only when it has a
+    // digit, a `+` or `=` padding; a camelCase identifier or a path has none.
+    [
+      'an identifier over a lone END',
+      `const name = 'x';\nreadPrivateKeyFromFileSync\n${E}\n`,
+      ['readPrivateKeyFromFileSync'],
+    ],
+    ['a path over a lone END', `src/components/SignInButton\n${E}\n`, ['src/components/SignInButton']],
+    [
+      'an identifier in Read-tool lines',
+      `     1\treadPrivateKeyFromFile\n     2\t${E}\n`,
+      ['readPrivateKeyFromFile'],
+    ],
+    [
+      'an identifier in grep -n lines',
+      `a.js:10:loadPemFileFromDiskNow\na.js:11:${E}`,
+      ['loadPemFileFromDiskNow'],
+    ],
+    [
+      'an identifier in docker logs',
+      `web-1  | loadPemFileFromDiskNow\nweb-1  | ${E}\n`,
+      ['loadPemFileFromDiskNow'],
+    ],
+    [
+      'an identifier in a JSON string',
+      JSON.stringify({ s: `loadPemFileFromDiskNow\n${E}\n` }),
+      ['loadPemFileFromDiskNow'],
+    ],
   ])('%s keeps its text', (_name, input, keep) => {
     const out = scrubSecrets(input);
     expect(keep.filter((k) => !out.includes(k))).toEqual([]);

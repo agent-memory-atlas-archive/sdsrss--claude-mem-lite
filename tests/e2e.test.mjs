@@ -3317,3 +3317,33 @@ describe('Suite: R10-P1-1 — /clear handoff over the real host event sequence',
     expect(clearHandoffRows().length).toBe(0);
   });
 });
+
+// D#156: the hook mints `hook-<project>-<8 hex>` and stores it as both session ids. For a
+// 22-character project with dashes at 3, 8, 13 and 18 that is the uuid shape sdk_sessions refuses,
+// and every hook write in the project failed with nothing on stderr.
+describe('Suite: D#156 — a project name that gives the hook id the uuid shape', () => {
+  it('session-start, user-prompt and stop all write', () => {
+    const dir = join(tmpHome, 'dev', 'abc-efgh-jklm-opq');
+    mkdirSync(dir, { recursive: true });
+    // Premise: this project's unescaped hook id is uuid-shaped.
+    expect('hook-dev--abc-efgh-jklm-opq-1a2b3c4d').toMatch(/^.{8}-.{4}-.{4}-.{4}-.{12}$/);
+    const env = { HOME: tmpHome, CLAUDE_PROJECT_DIR: dir, PWD: dir, MEM_NO_AUTO_ADOPT: '1' };
+    const cc = randomUUID();
+    runHook('session-start', { stdin: JSON.stringify({ source: 'startup', session_id: cc }), env });
+    const id = getSessionIdFromFile(tmpHome);
+    expect(id.startsWith('hook-dev--abc-efgh-jklm-opq-')).toBe(true);
+    runHook('user-prompt', {
+      stdin: JSON.stringify({ prompt: 'rename the config loader', session_id: cc }),
+      env,
+    });
+    runHook('stop', { stdin: JSON.stringify({ session_id: cc }), env });
+    const db = openTestDb(tmpHome);
+    const session = db
+      .prepare('SELECT project, status FROM sdk_sessions WHERE memory_session_id = ?')
+      .get(id);
+    const prompts = db.prepare('SELECT COUNT(*) c FROM user_prompts WHERE content_session_id = ?').get(id).c;
+    db.close();
+    expect(session).toMatchObject({ project: 'dev--abc-efgh-jklm-opq', status: 'completed' });
+    expect(prompts).toBe(1);
+  });
+});

@@ -5,7 +5,7 @@
 // model mock).
 import { describe, it, expect } from 'vitest';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import { writerSessionId, isAutoWritten } from '../lib/provenance.mjs';
+import { writerSessionId, hookSessionId, isAutoWritten } from '../lib/provenance.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
 import { saveEvent, promoteInsightEvents } from '../lib/activity.mjs';
 import { compressGroup } from '../lib/compress-core.mjs';
@@ -57,6 +57,37 @@ describe('writerSessionId', () => {
       expect(id !== raw, `${JSON.stringify(raw)} refused=${refused}`).toBe(refused);
       if (refused) expect(() => insertWriterRow(db, id)).not.toThrow();
     }
+    db.close();
+  });
+});
+
+// D#156: the hook's own id is `hook-<project>-<8 hex>`, the uuid shape for a 22-character project
+// with dashes at 3, 8, 13 and 18. `dev/abc-efgh-jklm-opq` is such a project; the hook e2e case is in
+// tests/e2e.test.mjs.
+describe('hookSessionId', () => {
+  const PROJECT = 'dev--abc-efgh-jklm-opq';
+
+  it('changes exactly the hook ids the sdk_sessions trigger refuses', () => {
+    const db = createTestDb();
+    const cases = [PROJECT, PROJECT.slice(1), `${PROJECT}x`, 'dev--claude-mem-lite'];
+    let refusedSeen = 0;
+    for (const project of cases) {
+      const raw = `hook-${project}-1a2b3c4d`;
+      let refused = false;
+      try {
+        insertWriterRow(db, raw);
+      } catch (e) {
+        expect(e.message).toMatch(/sdk_sessions invariant/);
+        refused = true;
+        refusedSeen++;
+      }
+      const id = hookSessionId(project, '1a2b3c4d');
+      expect(id.startsWith(`hook-${project}-1a2b3c4d`)).toBe(true);
+      expect(id !== raw, `${JSON.stringify(raw)} refused=${refused}`).toBe(refused);
+      if (refused) expect(() => insertWriterRow(db, id)).not.toThrow();
+    }
+    // Premise: the case list reaches the refused shape at all.
+    expect(refusedSeen).toBe(1);
     db.close();
   });
 });

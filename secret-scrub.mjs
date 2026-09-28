@@ -188,11 +188,12 @@ export const SECRET_PATTERNS = [
   // `\b`: `-` is a base64url character, and `\b` let every `-eyJ` inside one dotless run be a
   // fresh start that rescans the run to its end — quadratic, 9.6 s on 200k chars of `eyJ-`
   // (D#130). A `-eyJ` start is the middle of a run, never a JWT's first character.
-  // A JWT glued to one word by a hyphen (`sess-eyJ…`) is a start too, checked by a lookbehind
-  // bounded to 41 characters that needs the word itself to start the token, so a hyphen run
-  // still has one start (v6.19.0 pre-tag review P3-2).
+  // A JWT glued by a hyphen to up to 40 characters of hyphenated words (`my-sess-eyJ…`,
+  // `X-Auth-Token-eyJ…`) is a start too, as `\b` allowed. The lookbehind needs a token
+  // boundary within those 41 characters, so a hyphen run has at most ~10 starts, not one per
+  // `-eyJ` (v6.19.0 pre-tag reviews P3-2, delta P3-1).
   [
-    /(?:(?<![\w-])|(?<=(?:^|[^\w-])\w{1,40}-))eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\b/g,
+    /(?:(?<![\w-])|(?<=(?:^|[^\w-])[\w-]{1,40}-))eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\b/g,
     '***',
   ],
   // PEM private key blocks. `[A-Z0-9 ]*` covers every armor label — RSA/EC/DSA/
@@ -200,10 +201,13 @@ export const SECRET_PATTERNS = [
   // alternation missed; the block delimiters make FP impossible.
   // The body stops at the next `-----BEGIN ` (D#130): with `[\s\S]*?` every header with no END
   // scanned to the end of the text, on each of scrubSecrets' passes — quadratic, 8.3 s on 500k
-  // chars. A block whose END is missing ends where the next BEGIN starts, so a cut-off key's body
-  // is scrubbed too (v6.19.0 pre-tag review P2-1: requiring the END there stored that body).
+  // chars. A block whose END is missing ends where the next private-key BEGIN starts, so a cut-off
+  // key's body is scrubbed too (v6.19.0 pre-tag review P2-1: requiring the END there stored that
+  // body); any other BEGIN (a certificate) does not end it, so a bare header in prose does not
+  // erase the text up to one (delta review P3-2). A header with no END and no later key header
+  // is left as it was in v6.18.0.
   [
-    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN )[\s\S])*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|(?=-----BEGIN ))/g,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN [A-Z0-9 ]*PRIVATE KEY)[\s\S])*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|(?=-----BEGIN [A-Z0-9 ]*PRIVATE KEY))/g,
     '***PEM_KEY***',
   ],
   // Long hex strings in credential assignments (e.g. SECRET_KEY=abc123def456...).

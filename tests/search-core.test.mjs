@@ -367,7 +367,8 @@ describe('search-core', () => {
 
     // v6.19.0 pre-tag review P3-3: FULL_SCORE's multipliers shrink an obs row down to 0.02x,
     // so a demoted row whose IDF is informative (0.18) scored 1.35e-4 and, tested on its
-    // final score, went from last to first. Its raw bm25 is far above the clamp.
+    // final score against 1e-3, went from last to first. This row is ten times weaker, so its
+    // final score is under the 1e-4 scale too and only its raw bm25 (6.8e-4) keeps it banded.
     it('bands a demoted lone obs by its final score when its raw bm25 is not clamped', () => {
       const results = [
         { source: 'event', score: -0.8 },

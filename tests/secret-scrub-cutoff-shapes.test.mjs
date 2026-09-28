@@ -3,8 +3,8 @@
 // shape erased prose in another, so this file judges both directions on one matrix:
 //   - the leak arm: 4 key kinds x 4 cuts x 13 line shapes x 3 followers, no key line may survive;
 //   - the prose arm: the review rounds' prose, code and path fixtures keep their text.
-// Measured 2026-09-28, v6.19.1's scrubber against this matrix: 378 of 624 cases leaked and 13 of
-// 22 prose fixtures lost text.
+// Measured 2026-09-28 with v6.19.1's scrubber: 378 of the 624 matrix cases leaked (12 of the 16
+// kind/cut groups fail), and 13 of the 21 prose fixtures lost text.
 import { describe, it, expect } from 'vitest';
 import { scrubSecrets } from '../secret-scrub.mjs';
 
@@ -184,8 +184,36 @@ describe('prose, code and paths next to a key marker keep their text', () => {
       `sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n${E}`,
       ['sha256: e3b0c442'],
     ],
+    // Only RFC 1421 / 4880 armor header names count: `Note:` is prose, and with it taken for a
+    // header a lone 16+ line counted as a key (v6.19.2 pre-tag claims review M7).
+    [
+      'a Note line and a short path under a header',
+      `${PH}\nNote: see below\n/usr/local/bin/somethinglong`,
+      ['Note: see below', '/usr/local/bin/somethinglong'],
+    ],
+    // After the one short last line, a second short line stays unless it is a PGP checksum.
+    ['a short word after the short last line', `${H}\n${L}\n${L}\nAbc\nok\nmore`, ['\nok\nmore']],
   ])('%s', (_name, input, keep) => {
     const out = scrubSecrets(input);
     expect(keep.filter((k) => !out.includes(k))).toEqual([]);
+  });
+});
+
+describe('single-shape rules the matrix does not isolate', () => {
+  it.each([
+    // Armor headers are key evidence: one base64 line of 16-39 characters after them is a key.
+    [
+      'an encrypted key cut after one short line',
+      `-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,3F2A9C1E\n\nxCzbaDuwW6fHijaPmD0Ema1E8pjlz/\nok`,
+      'xCzbaDuwW6fHijaPmD0Ema1E8pjlz/',
+    ],
+    // grep prints `file:` on a matching line and `file-` on a context line.
+    [
+      'grep context lines under a matching header line',
+      `f.pem:-----BEGIN RSA PRIVATE KEY-----\nf.pem-${b64(64)}\nf.pem-${'MIIj' + b64(60)}`,
+      'MIIj',
+    ],
+  ])('%s', (_name, input, keyPart) => {
+    expect(scrubSecrets(input)).not.toContain(keyPart);
   });
 });

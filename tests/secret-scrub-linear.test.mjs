@@ -63,8 +63,9 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       CHAIN +
       ' ' +
       ('MIIEabcdefghijklmnop\n'.repeat(20) + 'Ab=\n-----END CERTIFICATE-----\n').repeat(N / 450),
-    // D#145 line scanners. A line of backslashes under a key body: an unanchored suffix pattern
-    // (`(?:\\+[rn])*["']…$`) retried every start in the run (40k chars: 540 ms, x3.8 per doubling).
+    // D#145 line scanners. A line of backslashes under a key body: a draft of lineCore stripped the
+    // line's closing quote with an unanchored `(?:\\+[rn])*["']…$`, which retried every start in
+    // the run (40k chars: 540 ms, x3.8 per doubling; never committed).
     pemBodyThenBackslashLine: '-----BEGIN RSA PRIVATE KEY-----\n' + 'MIIEabcdefghijklmnop\n' + '\\'.repeat(N),
     // Many ENDs on one line, each walking back to the one before it.
     pemEndsOneLine: ('x'.repeat(1000) + '-----END RSA PRIVATE KEY-----').repeat(N / 1030),

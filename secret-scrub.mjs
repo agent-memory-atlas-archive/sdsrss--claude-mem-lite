@@ -345,12 +345,13 @@ export const SECRET_PATTERNS = [
 //   - the text before the BEGIN (or END) on its line is the line prefix, and every other line
 //     loses a prefix of the same shape (digits may differ, `:` and `-` swap for grep context)
 //     before it is judged;
-//   - in escaped text an unescaped quote ends the string, so the scan stops there.
-// A body line is WHOLE base64: 16+ characters, or 1-15 for the last line. Prose after a header
-// keeps its text (round-3 P3-A/B/C: a word, a path or an identifier starting the next line was
-// erased), and a body needs one long line, so a header followed by words is not a key (F3). The
-// one exception is a line cut by a truncation mark (`…`, `...`): its base64 goes, the mark stays
-// (delta review P3-2).
+//   - in escaped text an unescaped quote ends the string, so the scan stops there, and a header
+//     value no longer runs on into the next JSON fields (round-3 P3-C).
+// A body line is WHOLE base64: 16+ characters, or 1-15 for the last line. So a word under a key
+// body keeps its text (round-3 P3-A: `Don't` lost `Don`), as does a path or an identifier that
+// starts the next line (P3-B), and a body needs one long line, so a header followed by words is
+// not a key (F3). The one exception is a line cut by a truncation mark (`…`, `...`): its base64
+// goes, the mark stays (delta review P3-2).
 
 const KEY_BEGIN_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g;
 const KEY_END_RE = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g;
@@ -363,8 +364,9 @@ const B64_CUT_RE = /^[A-Za-z0-9+/=]{16,}(?=…|\.\.\.)/;
 const PGP_CRC_RE = /^=[A-Za-z0-9+/]{4}$/;
 // How a key's base64 starts: a DER SEQUENCE (PKCS#1, PKCS#8, SEC1) or OpenSSH's `openssh-key-v1`.
 const KEY_MAGIC_RE = /^(?:MII|MIG|MC4C|MHcC|b3BlbnNzaC1rZXktdjE)/;
-// RFC 1421 / RFC 4880 armor headers (Proc-Type, DEK-Info, Comment, MessageID, …), before the body.
-const ARMOR_HEADER_RE = /^[A-Za-z][A-Za-z0-9-]*[ \t]*:/;
+// RFC 1421 / RFC 4880 armor headers, before the body. Named, not any `Word:`: a `Note:` line is
+// prose, and taking it for a header made the lone base64 line under it a key.
+const ARMOR_HEADER_RE = /^(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset|MessageID)[ \t]*:/i;
 const MAX_ARMOR_HEADERS = 16;
 // A JS/Python string split across source lines: `…\n" +` then `"…` on the next line. Not a comma:
 // `'…\n',` then `'…'` is the next element of a list, and its first word is not the key's last line.
@@ -513,8 +515,9 @@ function classify(core) {
  * Header lines and blank lines may come first; then 16+-character base64 lines (blank lines only
  * between them), one shorter last line (and a PGP `=XXXX` checksum after it), and the END if it
  * is there. One base64 line alone is a key only when it is 40+ characters, starts the way a key
- * encoding starts (DER `MII…`, OpenSSH `b3BlbnNzaC1rZXktdjE…`), follows armor headers or reaches
- * the END: a path or an identifier of 16-39 characters under a header is prose (delta review P3-5).
+ * encoding starts (DER `MII…`, OpenSSH `b3BlbnNzaC1rZXktdjE…`) or follows armor headers: a path
+ * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
+ * block never gets here; the block pattern above takes it first.
  */
 function cutOffKeyEnd(text, b, be) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
@@ -540,7 +543,6 @@ function cutOffKeyEnd(text, b, be) {
   let longest = 0;
   let first = '';
   let end = -1;
-  let sawEnd = false;
   if (rest) {
     longest = Math.max(...rest.split(/[ \t]+/).map((t) => t.length));
     if (!B64_CHUNKS_RE.test(rest) || longest < 16) return -1;
@@ -573,7 +575,6 @@ function cutOffKeyEnd(text, b, be) {
     next = line.next;
     if (kind === END) {
       if (longs > 0) end = start + KEY_END_LINE_RE.exec(core)[0].length;
-      sawEnd = true;
       break;
     }
     if (kind === BLANK) {
@@ -607,7 +608,7 @@ function cutOffKeyEnd(text, b, be) {
     break;
   }
   if (longs === 0) return -1;
-  return longs >= 2 || armors > 0 || sawEnd || longest >= 40 || KEY_MAGIC_RE.test(first) ? end : -1;
+  return longs >= 2 || armors > 0 || longest >= 40 || KEY_MAGIC_RE.test(first) ? end : -1;
 }
 
 function scrubCutOffKeys(text) {

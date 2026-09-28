@@ -880,8 +880,8 @@ describe('re-enrich --scope wide (R-7)', () => {
     expect(wide[0].title).toContain('credit deduction');
   });
 
-  // D#146 control: wide keeps the stored title and narrative and only adds a lesson, so an
-  // explicit save stays one (narrow's rewrite moves it to `enrich-`).
+  // D#146 control: wide keeps the stored title and narrative (it fills the lesson and side
+  // fields), so an explicit save stays one (narrow's rewrite moves it to `enrich-`).
   it('a manual save keeps its session id through wide re-enrich', async () => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
     insertSession(db, { id: 'manual-test', project: 'test' });

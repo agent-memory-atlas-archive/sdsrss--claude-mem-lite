@@ -586,8 +586,9 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       //
       // Narrow replaces title and narrative with model text, so an explicit save it rewrites (one
       // whose save-time enrich failed) moves to the re-enrich writer's id, as a cluster-merge
-      // keeper does (D#146, D#138). Wide keeps the stored title and narrative and only adds a
-      // lesson, so the row stays an explicit save. The writer's session row is best-effort.
+      // keeper does (D#146, D#138). Wide keeps the stored title and narrative (it fills the lesson
+      // and the side fields), so the row stays an explicit save. The writer's session row is
+      // best-effort.
       let rewriteSessionId = null;
       if (!isWide) {
         const cur = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(cand.id);

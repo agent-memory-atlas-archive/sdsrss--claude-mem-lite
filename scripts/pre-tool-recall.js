@@ -430,6 +430,7 @@ try {
   // Parse event
   let filePath;
   let sessionId;
+  let agentId = null;
   let toolName;
   let toolInput;
   // isFullRead: a Read with no offset/limit reads the whole file. The reread
@@ -446,6 +447,7 @@ try {
     // `case 'NotebookEdit'` already knew the shape differs; this leg did not.
     filePath = toolEditPath(event.tool_input);
     sessionId = event.session_id || null;
+    agentId = typeof event.agent_id === 'string' && event.agent_id ? event.agent_id : null;
     toolName = event.tool_name || null;
     bashCwd = typeof event.cwd === 'string' ? event.cwd : null;
     const off = event.tool_input?.offset;
@@ -460,7 +462,7 @@ try {
       recordHookError('pre-recall:json', e, RUNTIME_DIR, { inputLen: input.length, truncated });
       process.exit(0);
     }
-    ({ filePath, sessionId, toolName } = salvaged);
+    ({ filePath, sessionId, toolName, agentId } = salvaged);
     toolInput = {};
     isFullRead = true;
   }
@@ -530,7 +532,12 @@ try {
   // v2.33.1: session-scoped cooldown. Within one session, same file recalls
   // once; cross-session, each session gets fresh nudges. Legacy 5-min global
   // cooldown only applies when no session_id is present.
-  const cooldownPath = cooldownPathFor(sessionId);
+  // D15: one dedup scope per THREAD. A subagent's payload carries the parent's session_id plus
+  // its own agent_id, and the two threads share no context — keyed on session_id alone, the
+  // thread that touched a file first used up the recall (and the UPS-injected ids) for the
+  // other, often the subagent that then edited it. The framing arm below stays per session.
+  const dedupKey = sessionId && agentId ? `${sessionId}-${agentId}` : sessionId;
+  const cooldownPath = cooldownPathFor(dedupKey);
   const isSessionScoped = Boolean(sessionId);
   const cooldown = readCooldown(cooldownPath);
   const now = Date.now();
@@ -679,7 +686,7 @@ try {
     // a cross-hook union over the staleness window and was measured at up to 16 ids on
     // this machine, so with the slack saturated a Read can still fetch fewer rows than
     // the seen-set holds and go silent. See the constant's docblock.
-    const crossHookSeen = readCrossHookInjected(project, sessionId);
+    const crossHookSeen = readCrossHookInjected(project, dedupKey);
     const dedupSlack = Math.min(crossHookSeen.size, CROSS_HOOK_DEDUP_SLACK_MAX);
     const obsLimit = (isRead ? 1 : 2) + dedupSlack;
     // A1.5 (v2.83.2): cite_factor as a tertiary sort key. When multiple file-
@@ -1007,7 +1014,7 @@ try {
     mergeCrossHookInjected(
       project,
       allRows.map((r) => injectedIdKey(r.id, r.src)),
-      sessionId,
+      dedupKey,
     );
   } catch (e) {
     // Silent failure — never block editing, but record for self-observation.

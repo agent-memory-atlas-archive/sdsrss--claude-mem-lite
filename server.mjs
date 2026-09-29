@@ -2041,7 +2041,12 @@ const idleTimer = setInterval(() => {
   try {
     // Type-differentiated cleanup: higher-value types survive longer
     const { marked, compressed } = runIdleCleanup(db);
-    if (marked > 0) debugLog('INFO', 'idle-cleanup', `Marked ${marked} stale observations as pending-purge`);
+    if (marked > 0)
+      debugLog(
+        'INFO',
+        'idle-cleanup',
+        `Hid ${marked} stale observations (queued for purge if still idle 7 days later)`,
+      );
     if (compressed > 0) debugLog('INFO', 'idle-cleanup', `Compressed ${compressed} old observations`);
 
     // FTS5 index optimization (outside transaction — WAL-friendly)

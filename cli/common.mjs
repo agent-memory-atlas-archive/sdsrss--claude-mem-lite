@@ -559,7 +559,7 @@ export function obsFieldLabel(field) {
  * @returns {string} the full indented line, identical on both surfaces.
  */
 export function formatPendingPurgeLine(n) {
-  return `  Pending purge (idle-marked): ${n} (hidden rows still idle 7 days after decay hid them — purge_stale deletes them)`;
+  return `  Pending purge (idle-marked): ${n} (hidden rows still idle 7 days after maintenance hid them — purge_stale deletes them)`;
 }
 
 /**

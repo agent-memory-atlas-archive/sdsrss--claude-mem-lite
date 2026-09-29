@@ -11,7 +11,8 @@ const _cache = new Map();
 
 /**
  * Infer a sanitized project name from CLAUDE_PROJECT_DIR, PWD, or cwd.
- * Format: "parent--basename" with non-alphanumeric chars replaced by hyphens.
+ * Format: "parent--basename"; letters, marks and digits of any script and `_.-` kept, every other
+ * character replaced by a hyphen (projectNameFromDir).
  *
  * Deliberately does NOT anchor on the git work-tree root. That was tried and reverted
  * before it shipped: it fixes `cd src/auth && claude-mem-lite recent` (session rooted at

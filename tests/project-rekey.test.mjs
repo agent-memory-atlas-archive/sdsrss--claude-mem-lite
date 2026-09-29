@@ -179,13 +179,13 @@ describe('at SessionStart', () => {
     db.close();
   });
 
-  const start = () =>
+  const start = (d = dir) =>
     execFileSync(process.execPath, [join(REPO, 'hook.mjs'), 'session-start'], {
-      input: JSON.stringify({ session_id: 'cc-1', source: 'startup', cwd: dir }),
+      input: JSON.stringify({ session_id: 'cc-1', source: 'startup', cwd: d }),
       env: {
         ...process.env,
         HOME: home,
-        CLAUDE_PROJECT_DIR: dir,
+        CLAUDE_PROJECT_DIR: d,
         CLAUDE_MEM_HOOK_RUNNING: '',
         CLAUDE_MEM_SKIP_UPDATE: '1',
         CLAUDE_MEM_SKIP_MAINTAIN: '1',
@@ -233,5 +233,11 @@ describe('at SessionStart', () => {
     expect(left).toEqual([0, 0, 0]);
     expect(out).toContain('projects--博客');
     expect(out).not.toContain(`--project ${OLD}`); // nothing stayed behind to point at
+
+    // A sibling that opens afterwards finds its old id empty: nothing moved, so no notice
+    // (it used to say "Moved everything stored under the old id (0 memories …)").
+    const shop = join(dirname(dir), '商城');
+    mkdirSync(shop, { recursive: true });
+    expect(start(shop)).not.toContain('now has its own id');
   });
 });

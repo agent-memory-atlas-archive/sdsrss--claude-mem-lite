@@ -714,7 +714,9 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
     const firstPromptAt = db
       .prepare('SELECT MIN(created_at_epoch) AS m FROM user_prompts WHERE cc_session_id = ?')
       .get(currentCcSessionId)?.m;
-    // One resume per session: a handoff consumed since this session's first prompt was its.
+    // One resume per session: a handoff consumed in this PROJECT since this session's first
+    // prompt ends this session's resumes — by this session, or by a concurrent one (the table has
+    // no consumed-by column; a known limit, deferred).
     if (
       typeof firstPromptAt === 'number' &&
       db

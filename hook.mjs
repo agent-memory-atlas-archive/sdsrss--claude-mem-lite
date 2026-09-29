@@ -2737,10 +2737,10 @@ function noteLocalSteeringOnce(project) {
 }
 
 /**
- * D9: a project whose directory name is not all ASCII got a new id (project-utils.mjs
- * projectNameFromDir). Once per project, move the rows its old id holds that provably came
- * from this directory, and tell the user where the rest are. No-op for ASCII names, whose id
- * did not change.
+ * D9: a project whose id (`parent--directory`) is not all ASCII got a new one (project-utils.mjs
+ * projectNameFromDir). Once per project, move what its old id holds for it — everything, when no
+ * stored path shows another directory using the old id; otherwise the rows that provably came
+ * from this directory — and tell the user where the rest are. No-op when the id did not change.
  */
 function rekeyProjectOnce(db, project) {
   try {
@@ -2749,28 +2749,34 @@ function rekeyProjectOnce(db, project) {
     if (legacy === project) return;
     const marker = join(RUNTIME_DIR, `${PROJECT_REKEY_MARKER_PREFIX}${project}`);
     if (existsSync(marker)) return;
-    // An old id nothing shows another directory using is this directory's alone: take all of
-    // it — sessions, summaries, handoffs, deferred items — not only the memories a path proves.
+    // When no stored path shows another directory using the old id, take all of it — sessions,
+    // summaries, handoffs, deferred items — not only the memories a path proves. A sibling
+    // whose rows carry no path is invisible to that test (see legacyIdIsExclusive).
     const whole = legacyIdIsExclusive(db, { dir, legacy });
-    const { moved, left } = whole
-      ? { ...moveProjectRows(db, { from: legacy, to: project }), left: 0 }
+    const r = whole
+      ? moveProjectRows(db, { from: legacy, to: project })
       : rekeyLegacyProject(db, { dir, project, legacy });
+    const moved = r.moved;
+    const left = r.left ?? 0;
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
-    if (moved === 0 && left === 0 && !whole) return;
+    // Nothing moved and nothing left behind: the old id was empty (or a sibling took it).
+    if (moved === 0 && left === 0 && !(r.other > 0)) return;
     const movedLine = whole
-      ? `Moved everything stored under the old id (${moved} ${moved === 1 ? 'memory' : 'memories'}, with its sessions and deferred items): nothing there came from another directory.`
+      ? `Moved everything stored under the old id (${moved} ${moved === 1 ? 'memory' : 'memories'}, with its sessions and deferred items): no stored file path showed another directory using it.`
       : `Moved ${moved} ${moved === 1 ? 'memory' : 'memories'} whose files are in this directory.`;
+    // `left` counts every row still under the old id: another directory's, and rows nothing
+    // attributes to anyone.
     const rest =
       left === 0
         ? ''
         : left === 1
-          ? ' 1 other stays under the old id because nothing shows which directory it came from; ' +
+          ? " 1 other stays under the old id (another directory's, or nothing shows whose); " +
             `list it with \`claude-mem-lite recent 50 --project ${legacy}\`.`
-          : ` ${left} others stay under the old id because nothing shows which directory they came from; ` +
+          : ` ${left} others stay under the old id (another directory's, or nothing shows whose); ` +
             `list them with \`claude-mem-lite recent 50 --project ${legacy}\`.`;
     queueHookSystemMessage(
       `claude-mem-lite: this project's memory now has its own id, ${project}. Its old id, ${legacy}, ` +
-        'could be shared with other directories whose names are not in Latin letters. ' +
+        'could be shared with other directories whose names are not plain ASCII. ' +
         `${movedLine}${rest} Shown once.`,
     );
   } catch (e) {

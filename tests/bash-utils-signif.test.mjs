@@ -488,3 +488,35 @@ describe('detectBashSignificance — count-first summaries, one green and one re
     expect(detectBashSignificance({ command: 'bun test --cwd packages' }, out).isError).toBe(true);
   });
 });
+
+// Pre-tag delta review, round 2: mutations B2 (red rule without `failing`) and B6/B7 (red counts
+// limited to one digit, in each summary form) survived the suite.
+describe('detectBashSignificance — every red summary shape outvotes a green one', () => {
+  const sig = (command, out) => detectBashSignificance({ command }, out);
+
+  it('mocha "N failing" after another suite’s green "0 fail" is an error', () => {
+    const out = [
+      ' 5 pass',
+      ' 0 fail',
+      'Ran 5 tests across 1 files. [18.00ms]',
+      '',
+      '  3 passing (12ms)',
+      '  1 failing',
+      '',
+      '  1) split',
+      '       returns parts:',
+      '     expected 2 to equal 3',
+    ].join('\n');
+    expect(sig('bun test && npx mocha', out).isError).toBe(true);
+  });
+
+  it('a two-digit count-first red ("10 fail") after a green "0 fail" is an error', () => {
+    const out = [' 5 pass', ' 0 fail', 'Ran 5 tests', ' 2 pass', ' 10 fail', 'Ran 12 tests'].join('\n');
+    expect(sig('bun test --cwd packages', out).isError).toBe(true);
+  });
+
+  it('a two-digit label-first red ("ℹ cancelled 10") beside "ℹ fail 0" is an error', () => {
+    const out = ['ℹ tests 10', 'ℹ pass 0', 'ℹ fail 0', 'ℹ cancelled 10', 'ℹ duration_ms 545.7'].join('\n');
+    expect(sig('node --test', out).isError).toBe(true);
+  });
+});

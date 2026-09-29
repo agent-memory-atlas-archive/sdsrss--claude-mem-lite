@@ -2029,9 +2029,11 @@ function runSessionStartAutoMaintain(db, project) {
           `healed ${deferredHealed} deferred-work rows with dangling references`,
         );
 
-      const { decayed, idleMarked } = decayAndMarkIdle(db, mctx);
+      const { decayed, idleMarked, idleHidden } = decayAndMarkIdle(db, mctx);
       if (decayed > 0) debugLog('DEBUG', 'auto-maintain', `decayed ${decayed} stale observations`);
-      if (idleMarked > 0) debugLog('DEBUG', 'auto-maintain', `marked ${idleMarked} idle as pending-purge`);
+      if (idleHidden > 0) debugLog('DEBUG', 'auto-maintain', `hid ${idleHidden} idle observations`);
+      if (idleMarked > 0)
+        debugLog('DEBUG', 'auto-maintain', `queued ${idleMarked} hidden past the grace for purge`);
 
       const boosted = boostAccessed(db, mctx);
       if (boosted > 0)

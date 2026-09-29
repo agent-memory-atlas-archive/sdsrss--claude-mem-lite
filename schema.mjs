@@ -201,6 +201,8 @@ const LATEST_MIGRATION_COLUMNS = [
   { table: 'session_handoffs', column: 'consumed_at' },
   // D10, same no-bump reasoning (tests/importance-human-set.test.mjs pins the upgrade).
   { table: 'observations', column: 'importance_set_at' },
+  // D12, same again (tests/maintain-hide-then-purge.test.mjs).
+  { table: 'observations', column: 'hidden_at' },
   { table: 'observations', column: 'last_access_session_id' }, // v48
   { table: 'observations', column: 'decay_seen_at_first_cite' }, // v46
   { table: 'citation_surface_log', column: 'surface' }, // v45
@@ -633,6 +635,12 @@ export function initSchema(db) {
       .map((c) => c.name);
     if (!obsCols.includes('importance_set_at')) {
       db.exec(`ALTER TABLE observations ADD COLUMN importance_set_at INTEGER DEFAULT NULL`);
+    }
+    // D12: when maintenance HID the row (COMPRESSED_AUTO). A hidden row that stays idle for
+    // HIDE_GRACE_MS is queued for purge; before this the idle pass queued live rows directly,
+    // with a grace measured from created_at (one day for anything past 37 days).
+    if (!obsCols.includes('hidden_at')) {
+      db.exec(`ALTER TABLE observations ADD COLUMN hidden_at INTEGER DEFAULT NULL`);
     }
   } catch {
     /* non-critical — migration retries on next open */

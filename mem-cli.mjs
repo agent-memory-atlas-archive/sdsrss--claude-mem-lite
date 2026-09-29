@@ -113,6 +113,7 @@ import {
   formatObsFieldValue,
   obsFieldLabel,
   formatPendingPurgeLine,
+  formatHiddenLine,
 } from './cli/common.mjs';
 import {
   saveObservation,
@@ -2655,6 +2656,7 @@ function cmdMaintain(db, args) {
     out(
       `  Pinned-but-uncited (inj>=${PINNED_INJ_THRESHOLD}, cited=0, above floor): ${stats.pinned} — floored by the default maintain set since v3.76.0, no lesson → 1, lesson → 2 (opt out: CLAUDE_MEM_SKIP_DEMOTE_PINNED=1)`,
     );
+    out(formatHiddenLine(stats.hidden));
     out(formatPendingPurgeLine(stats.pendingPurge));
     if (duplicates.length > 0) {
       const autoMergeable = duplicates.filter((d) => parseFloat(d.similarity) >= AUTO_MERGE_THRESHOLD);

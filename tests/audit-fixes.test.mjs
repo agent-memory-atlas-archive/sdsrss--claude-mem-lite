@@ -786,9 +786,25 @@ describe('T2 CLI fixes', () => {
       .prepare("SELECT compressed_into FROM observations WHERE title = 'MARKED THIS RUN'")
       .get();
     expect(row).toBeDefined(); // SURVIVED (pre-fix: deleted same run)
-    expect(row.compressed_into).toBe(COMPRESSED_PENDING_PURGE); // marked, to be purged on a LATER run
+    // D12: the first run HIDES it; it is queued only once it has stayed idle through the grace.
+    expect(row.compressed_into).toBe(-1);
+    // Age the hide past the grace (as a run a week later would find it), then: the next run
+    // queues it — and purge, running first, does not delete what it queues in the same run —
+    expect(
+      testDb
+        .prepare("UPDATE observations SET hidden_at = ? WHERE title = 'MARKED THIS RUN'")
+        .run(Date.now() - 8 * 86_400_000).changes,
+    ).toBe(1);
+    const queued = await captureStdout(() =>
+      run(['maintain', 'execute', '--ops', 'decay,purge_stale', '--confirm', '--retain-days', '7']),
+    );
+    expect(queued).toMatch(/Purged 0 stale observations/);
+    expect(
+      testDb.prepare("SELECT compressed_into FROM observations WHERE title = 'MARKED THIS RUN'").get()
+        .compressed_into,
+    ).toBe(COMPRESSED_PENDING_PURGE);
 
-    // Next run: the row is now PRE-EXISTING pending → purge deletes it (with the snapshot guard live).
+    // …and the run after that deletes the PRE-EXISTING pending row (with the snapshot guard live).
     const out2 = await captureStdout(() =>
       run(['maintain', 'execute', '--ops', 'decay,purge_stale', '--confirm', '--retain-days', '7']),
     );

@@ -81,7 +81,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
-import { COMPRESSED_PENDING_PURGE } from '../utils.mjs';
+import { COMPRESSED_AUTO } from '../utils.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK_PATH = join(REPO, 'hook.mjs');
@@ -1411,12 +1411,12 @@ describe('hook feature sweep: hook.mjs background workers', () => {
 
     const r = await hookEvent('auto-maintain', { cwd, stdin: '', env: BG, timeout: 60000 });
     expectSilentWorker('hook.mjs auto-maintain', r);
-    // Functional: the idle row is marked pending-purge, and the 24h gate file is stamped so
-    // the next SessionStart does not re-run the sweep.
+    // Functional: the idle row is hidden (D12: queued for purge only after the grace), and the
+    // 24h gate file is stamped so the next SessionStart does not re-run the sweep.
     expect(
       withDb((db) => db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(id))
         .compressed_into,
-    ).toBe(COMPRESSED_PENDING_PURGE);
+    ).toBe(COMPRESSED_AUTO);
     const gate = JSON.parse(readFileSync(join(RUNTIME_DIR, 'last-auto-maintain.json'), 'utf8'));
     expect(Date.now() - gate.epoch).toBeLessThan(120000);
 

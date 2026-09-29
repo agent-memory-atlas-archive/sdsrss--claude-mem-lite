@@ -411,6 +411,7 @@ function formatSearchOutput(
   totalCount,
   orFallbackFired = false,
   isDeepSearch = false,
+  listing = null,
 ) {
   if (paginatedResults.length === 0) {
     const hint = [];
@@ -462,8 +463,17 @@ function formatSearchOutput(
   // query actually matched only a subset of the terms. Suppressed when the caller
   // explicitly requested OR semantics — there's no "fallback" in that path.
   const fallbackHint = orFallbackFired && !args.or ? ' (relaxed AND→OR)' : '';
+  // A LISTING is never headed as matches: `Found 2 result(s) for "segfault"` over two unrelated
+  // bugfixes is how the calling model read the type-list fallback (E2E round 2026-09-29).
+  const what = args.obs_type ? `${args.obs_type} observation(s)` : 'row(s) matching the filters';
+  const header =
+    listing === 'type'
+      ? `No match for "${queryLabel(args.query)}" — the ${countLabel} most recent ${what} instead`
+      : listing === 'dropped'
+        ? `Query "${queryLabel(args.query)}" was filtered (FTS5 keywords/special chars only) — the ${countLabel} most recent ${what} instead`
+        : `Found ${countLabel} result(s)${qLabel}${fallbackHint}`;
   lines.push(
-    `Found ${countLabel} result(s)${qLabel}${fallbackHint}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paginatedResults)}\n`,
+    `${header}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paginatedResults)}\n`,
   );
 
   // `~Nt` = estimated tokens to fetch this row's full body via mem_get (attachBodyTokens).
@@ -644,7 +654,23 @@ async function runSearchPipeline(db, args, { llm, rerankLlm } = {}) {
   if (r.escalated)
     process.stderr.write(`[mem] auto-escalated to deep search (weak results: ${r.escalatedObsCount} hits)\n`);
 
-  const output = formatSearchOutput(r.page, args, ftsQuery, r.total, r.orFallbackFired, r.isDeep);
+  // The literal query sanitized to nothing and deep search did not rewrite it, so the rows are
+  // a recency listing. AUTO mode (the MCP default) skips the early return above because deep
+  // MAY rewrite such a query; it practically never does (a recency listing is never "weak"),
+  // and the listing was then printed as `Found 20 of 57 result(s) for "C"`. With no filter,
+  // answer exactly as normal mode does; under a filter, label the listing as one.
+  const queryDropped = !!args.query && !ftsQuery && !r.isDeep;
+  if (queryDropped && !epochFrom && !epochTo && !args.obs_type && !args.importance) {
+    return {
+      ...appendDeferredTrailer(formatSearchOutput([], args, ftsQuery, 0)),
+      escalated: r.escalated,
+      results: [],
+      total: 0,
+      variants: null,
+    };
+  }
+  const listing = r.typeFallbackFired ? 'type' : queryDropped ? 'dropped' : null;
+  const output = formatSearchOutput(r.page, args, ftsQuery, r.total, r.orFallbackFired, r.isDeep, listing);
   // Surface the rewrite to the calling agent (F13) + the rerank signal (D#43).
   if (r.isDeep && r.variants && output.content?.[0]?.type === 'text') {
     output.content[0].text +=

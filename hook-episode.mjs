@@ -53,6 +53,19 @@ export function episodeFile(host = hostScopeSuffix(), project = inferProject()) 
 }
 
 /**
+ * The file scripts/post-tool-use.sh appends a Read's path to, which the next saving flush
+ * collects into `files_read`. With a host pid it is the process's own and names no project
+ * (the process pins CLAUDE_PROJECT_DIR), which is what lets bash spell it for a project in any
+ * script; without one it is the project's. The bash spelling of the same rule is in
+ * post-tool-use.sh (tests/reads-file-name-cross-language.test.mjs).
+ * @param {string} [project]
+ * @returns {string}
+ */
+export function readsFile(project = inferProject()) {
+  return join(RUNTIME_DIR, `reads-${hostScopeSuffix() || project}.txt`);
+}
+
+/**
  * Episode buffers of this project that no live session will ever flush: the per-project
  * buffer an older version wrote, and the buffer of a Claude Code process that has exited —
  * a host closed mid-turn never reaches Stop. Before D14 the next session in the project

@@ -23,6 +23,7 @@ import { join, resolve as resolvePath } from 'path';
 import {
   readFileSync,
   writeFileSync,
+  appendFileSync,
   unlinkSync,
   readdirSync,
   renameSync,
@@ -70,6 +71,7 @@ import {
   episodeHasSignificantContent,
   explainSignificance,
   orphanEpisodeFiles,
+  readsFile,
 } from './hook-episode.mjs';
 // CODE_DIR, not DB_DIR: the schema-skew notice asks which CODE homes exist, and those are
 // always homedir-rooted even when CLAUDE_MEM_DIR relocates the data.
@@ -89,7 +91,6 @@ import {
   HANDOFF_EXPIRY_CLEAR,
   HANDOFF_EXPIRY_EXIT,
   sessionFile,
-  hostScopeSuffix,
   deadHostFiles,
   getSessionId,
   createSessionId,
@@ -505,13 +506,12 @@ function flushEpisodeWithDb(db, episode, hookEventName, receiverSession = null) 
 
   // Collect Read file paths tracked by post-tool-use.sh
   // Use rename to atomically collect — prevents losing concurrent appends
-  // Per process, like the buffer (D14); scripts/post-tool-use.sh builds the same name.
-  const readsFile = join(RUNTIME_DIR, `reads-${(episode.project || inferProject()) + hostScopeSuffix()}.txt`);
-  const readsCollect = readsFile + `.collect-${Date.now()}`;
+  const readsPath = readsFile(episode.project || inferProject());
+  const readsCollect = readsPath + `.collect-${Date.now()}`;
   let readsHeld = 0;
   if (willPersist) {
     try {
-      renameSync(readsFile, readsCollect);
+      renameSync(readsPath, readsCollect);
       const raw = readFileSync(readsCollect, 'utf8');
       const paths = [...new Set(raw.split('\n').filter(Boolean))];
       episode.filesRead = paths;
@@ -533,7 +533,7 @@ function flushEpisodeWithDb(db, episode, hookEventName, receiverSession = null) 
     // to the final rename. Accepted rather than fixed: the trim only runs above
     // READS_CARRY_MAX_LINES, which no observed session approaches, so the exposure is a
     // path or two in a session that has already read 20000 times.
-    readsHeld = trimReadsFile(readsFile);
+    readsHeld = trimReadsFile(readsPath);
   }
   // planEpisodeFlush now runs BEFORE the collection, so the multi-session branch — the
   // one that builds fresh objects rather than returning [episode] by reference — copied
@@ -728,6 +728,22 @@ async function handlePostToolUse() {
       RUNTIME_DIR,
       { toolNameType: Array.isArray(tool_name) ? 'array' : typeof tool_name },
     );
+    return;
+  }
+
+  // D9: scripts/post-tool-use.sh records a Read itself and never gets here — except when it
+  // cannot spell the reads file: no host pid and a project directory with non-ASCII
+  // characters, whose name needs Unicode classes bash does not have. Then it hands the Read
+  // on, and it is recorded here under the same name. Owner-only, like the bash writer.
+  if (tool_name === 'Read') {
+    const fp = hookData.tool_input?.file_path;
+    if (typeof fp === 'string' && fp && !/[\r\n]/.test(fp)) {
+      try {
+        appendFileSync(readsFile(), `${fp}\n`, { mode: 0o600 });
+      } catch {
+        /* best-effort, like the bash writer */
+      }
+    }
     return;
   }
 

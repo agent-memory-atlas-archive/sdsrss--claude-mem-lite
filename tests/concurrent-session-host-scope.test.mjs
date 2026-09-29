@@ -293,7 +293,7 @@ describe('adoption and clean-up', () => {
     });
     expect(read.status).toBe(0);
     const reads = () => readdirSync(runtime).filter((f) => f.startsWith('reads-'));
-    expect(reads()).toEqual([`reads-work--todo-app@h${HOST_A}.txt`]);
+    expect(reads()).toEqual([`reads-@h${HOST_A}.txt`]);
     start('cc-A', HOST_A);
     prompt('cc-A', HOST_A, 'Add ALPHA_ERR validation');
     edit('cc-A', HOST_A, 'src/server.js', 'ALPHA_ERR');

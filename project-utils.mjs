@@ -67,9 +67,28 @@ export function projectNameFromDir(p) {
   const base = basename(p);
   const parent = basename(dirname(p));
   const raw = parent && parent !== '.' && parent !== '/' ? `${parent}--${base}` : base;
-  // Sanitize to prevent path traversal when used in filenames (ep-<project>.json)
-  // Truncate to 100 chars to avoid exceeding filesystem name limits (255 bytes)
-  return raw.replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 100);
+  // Sanitize to prevent path traversal when used in filenames (ep-<project>.json).
+  //
+  // D9: letters, combining marks and digits of ANY script survive. The rule used to keep
+  // ASCII alone, so ~/projects/博客 and ~/projects/商城 were both `projects----` and shared
+  // one memory. ASCII input comes out byte for byte as before (\p{L}/\p{N} restricted to
+  // ASCII are exactly a-zA-Z/0-9, and ASCII has no marks), so no ASCII project moves. NFC
+  // first: macOS can hand the same directory over decomposed. Separators, punctuation,
+  // symbols, emoji and invisible format characters (bidi overrides) are still replaced.
+  // scripts/post-tool-use.sh does not reimplement this for non-ASCII names; it hands them
+  // to Node.
+  const safe = raw.normalize('NFC').replace(/[^\p{L}\p{M}\p{N}_.-]/gu, '-');
+  // At most 100 UTF-8 BYTES, cut at a character boundary: filesystem name limits count
+  // bytes (255), and 100 CJK characters are 300. For ASCII this is the old 100-char cut.
+  if (Buffer.byteLength(safe) <= 100) return safe;
+  let out = '';
+  let bytes = 0;
+  for (const ch of safe) {
+    bytes += Buffer.byteLength(ch);
+    if (bytes > 100) break;
+    out += ch;
+  }
+  return out;
 }
 
 /** Escape LIKE metacharacters so a caller-supplied value is matched literally.

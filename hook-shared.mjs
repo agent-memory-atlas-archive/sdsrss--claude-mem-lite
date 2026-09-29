@@ -392,8 +392,9 @@ try {
  * concurrent sessions each saw their own host's pid, and it is inherited by spawnBackground
  * workers). It is not in the documented hook contract, so absent or malformed it degrades to ''
  * — the per-project names this replaced, byte for byte. `@` cannot occur in a project id
- * (inferProject keeps `[a-zA-Z0-9_.-]`), so a suffixed name never collides with another
- * project's plain one. scripts/post-tool-use.sh mirrors this rule for the reads file.
+ * (projectNameFromDir keeps only letters, marks, digits and `_.-`), so a suffixed name never
+ * collides with another project's plain one. scripts/post-tool-use.sh mirrors this rule for
+ * the reads file.
  *
  * @param {Record<string, string|undefined>} [env]
  * @returns {string}

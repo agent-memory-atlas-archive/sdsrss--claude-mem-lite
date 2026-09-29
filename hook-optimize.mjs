@@ -488,7 +488,17 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       const isKeeper = !!db
         .prepare('SELECT 1 FROM observations WHERE compressed_into = ? LIMIT 1')
         .get(cand.id);
-      if ((parsed.importance === 0 || parsed.importance === '0') && scope !== 'wide' && !isKeeper) {
+      // D10: an importance a person set (importance_set_at) is theirs — neither hidden on a
+      // model's 0 nor re-scored below.
+      const humanSet =
+        (db.prepare('SELECT importance_set_at FROM observations WHERE id = ?').get(cand.id)
+          ?.importance_set_at ?? null) !== null;
+      if (
+        (parsed.importance === 0 || parsed.importance === '0') &&
+        scope !== 'wide' &&
+        !isKeeper &&
+        !humanSet
+      ) {
         // D#12, and this one is not a stale-write guard — it is a POINTER guard.
         // `compressed_into` is the child -> keeper link, and COMPRESSED_AUTO is -1. If a
         // concurrent cluster-merge or smart-compress adopts this row during the 45 s Haiku
@@ -559,8 +569,10 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           : cand.narrative || '';
       // Floor at the stored importance: re-enrich adds a lesson, it must never silently downgrade
       // a user-set/promoted importance (the UPDATE also sets optimized_at → the loss is permanent).
-      // Upgrades are still honored.
-      const importance = Math.max(clampImportance(parsed.importance), cand.importance || 1);
+      // Upgrades are still honored — except over an importance a person set (D10), which stays.
+      const importance = humanSet
+        ? cand.importance
+        : Math.max(clampImportance(parsed.importance), cand.importance || 1);
 
       const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
       const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');

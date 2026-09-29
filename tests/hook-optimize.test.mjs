@@ -1151,6 +1151,46 @@ describe('re-enrich --scope wide (R-7)', () => {
     expect(obs.compressed_into).toBe(-1); // COMPRESSED_AUTO — narrow auto-hide preserved
   });
 
+  // D10: an importance a person set (importance_set_at) is theirs. The two access promotions
+  // skipped it, but re-enrich rewrote it from the model's reply, and on importance:0 its
+  // narrow pass HID the row (v6.21.0 pre-tag claims review).
+  it('re-enrich keeps an importance a person set, in either direction', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    for (const [set, reply] of [
+      [3, 1],
+      [1, 3], // a person demoted it on purpose; the model must not undo that either
+    ]) {
+      db.prepare('DELETE FROM observations').run();
+      insertObs(db, { title: `set ${set} reply ${reply}`, narrative: 'body text for the row' });
+      const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+      db.prepare('UPDATE observations SET importance = ?, importance_set_at = ? WHERE id = ?').run(
+        set,
+        Date.now(),
+        id,
+      );
+      callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'x', narrative: 'x', importance: reply });
+      expect((await executeReenrich(db, 10)).processed).toBe(1);
+      expect(
+        db.prepare('SELECT importance FROM observations WHERE id = ?').get(id).importance,
+        `set ${set}`,
+      ).toBe(set);
+    }
+  });
+
+  it('narrow re-enrich never hides a row whose importance a person set (model reply 0)', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'keep me visible', narrative: 'body text for the row' });
+    const id = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    db.prepare('UPDATE observations SET importance = 2, importance_set_at = ? WHERE id = ?').run(
+      Date.now(),
+      id,
+    );
+    callModelJSONAsync.mockResolvedValue({ type: 'change', title: 'y', narrative: 'y', importance: 0 });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    const row = db.prepare('SELECT importance, compressed_into FROM observations WHERE id = ?').get(id);
+    expect([row.importance, row.compressed_into ?? 0]).toEqual([2, 0]);
+  });
+
   // v6.21.0 pre-tag claims review: hiding a compression group's KEEPER hides every member
   // compressed into it (2eb44d1 guarded the five maintenance writers, not this one). A weekly
   // summary is exactly the thin row the narrow pool picks, and `optimize`'s default is narrow.

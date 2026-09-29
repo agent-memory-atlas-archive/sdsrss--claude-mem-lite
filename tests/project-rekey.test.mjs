@@ -80,6 +80,24 @@ describe('rekeyLegacyProject', () => {
     expect(projectOf(db, other)).toBe(OLD);
   });
 
+  it('does not take a directory whose path differs only in ASCII case (SQLite LIKE would)', () => {
+    const upper = obs(db, 'upper-case sibling', ['/home/A/projects/博客/x.js']);
+    const mine = obs(db, 'mine', ['/home/a/projects/博客/y.js']);
+    rekeyLegacyProject(db, { dir: '/home/a/projects/博客', project: 'projects--博客', legacy: OLD });
+    expect(projectOf(db, mine)).toBe('projects--博客');
+    expect(projectOf(db, upper)).toBe(OLD);
+  });
+
+  it('matches Windows paths stored with backslashes against a forward-slash directory', () => {
+    const win = obs(db, 'win', ['C:\\Users\\u\\projects\\博客\\x.js']);
+    const other = obs(db, 'shop', ['C:\\Users\\u\\projects\\商城\\y.js']);
+    const dir = 'C:/Users/u/projects/博客';
+    expect(legacyIdIsExclusive(db, { dir, legacy: OLD })).toBe(false); // the 商城 row is a sibling
+    rekeyLegacyProject(db, { dir, project: 'projects--博客', legacy: OLD });
+    expect(projectOf(db, win)).toBe('projects--博客');
+    expect(projectOf(db, other)).toBe(OLD);
+  });
+
   it('matches a path the OS spelled decomposed', () => {
     const nfd = '/w/cafe\u0301';
     const id = obs(db, 'cafe', [`${nfd}/x.js`], { project: 'w--caf--' });
@@ -110,6 +128,12 @@ describe('an old id only this directory used', () => {
     expect(legacyIdIsExclusive(db, { dir: BLOG, legacy: OLD })).toBe(true);
     obs(db, 'shop', [`${SHOP}/src/cart.js`]); // a sibling with the same old id
     expect(legacyIdIsExclusive(db, { dir: BLOG, legacy: OLD })).toBe(false);
+  });
+
+  it('reads backslash paths as Windows paths', () => {
+    obs(db, 'win blog', ['C:\\Users\\u\\projects\\博客\\x.js']);
+    expect(legacyIdIsExclusive(db, { dir: 'C:/Users/u/projects/博客', legacy: OLD })).toBe(true);
+    expect(legacyIdIsExclusive(db, { dir: 'C:\\Users\\u\\projects\\博客', legacy: OLD })).toBe(true);
   });
 
   it('then moves everything stored under it: sessions, summaries, deferred items, not only memories', () => {

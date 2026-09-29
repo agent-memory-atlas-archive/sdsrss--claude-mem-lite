@@ -391,6 +391,8 @@ export function makeEntryDesc(toolName, input, resp, opts) {
       const isErr =
         opts?.isError ??
         (/\berror\b|\bfail(ed|ure)?\b|\bexception\b|\bpanic\b/i.test(resp) && resp.length > 30);
+      // A silent command (a `sed -i`, a heredoc write) has no output to show.
+      if (!resp) return cmd;
       const snippet = scrubTruncateEnds(resp, 100);
       return isErr ? `${cmd} → ERROR: ${snippet}` : `${cmd} → ${snippet}`;
     }

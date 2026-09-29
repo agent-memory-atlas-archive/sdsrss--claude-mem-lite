@@ -280,6 +280,38 @@ describe('Suite 1: Full Session Lifecycle', () => {
     expect(episode.files).not.toContain('/work/proj');
   });
 
+  // The host's real payload for a silent command: every stream empty. It used to survive the
+  // 10-char floor only because normalizeToolResponse fell back to JSON.stringify of the whole
+  // object — so the desc stored and replayed in the handoff read
+  // `cmd → {"stdout":"","stderr":"","interrupted":false,…}` (sandbox evaluation 2026-09-29).
+  it('post-tool-use (silent Bash write) is an edit with no response blob in its desc', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'cd /work/proj && sed -i "s/a/b/" lib/fast-summary.mjs' },
+      tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+      cwd: '/elsewhere',
+    });
+    const { exitCode } = runHook('post-tool-use', { stdin, env: { HOME: tmpHome } });
+    expect(exitCode).toBe(0);
+    const e = JSON.parse(readFileSync(getEpisodeFile(tmpHome), 'utf8')).entries[0];
+    expect(e.bashWrites).toEqual(['/work/proj/lib/fast-summary.mjs']);
+    expect(e.desc).not.toMatch(/stdout|interrupted|\{/);
+    expect(e.desc).toMatch(/^cd \/work\/proj && sed -i/);
+  });
+
+  it('post-tool-use (silent Bash read) records nothing — there is no output and no edit', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const stdin = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'grep -n nothing-matches lib/fast-summary.mjs' },
+      tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+      cwd: '/work/proj',
+    });
+    runHook('post-tool-use', { stdin, env: { HOME: tmpHome } });
+    expect(getEpisodeFile(tmpHome)).toBeNull();
+  });
+
   it('post-tool-use (Bash read) keeps the file as an edge but not as an edit', () => {
     runHook('session-start', { env: { HOME: tmpHome } });
     const stdin = JSON.stringify({

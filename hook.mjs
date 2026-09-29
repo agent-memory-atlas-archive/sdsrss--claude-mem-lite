@@ -712,7 +712,6 @@ async function handlePostToolUse() {
   if (SKIP_PREFIXES.some((p) => tool_name.startsWith(p))) return;
 
   const resp = normalizeToolResponse(tool_response);
-  if (!resp || resp.length < 10) return;
 
   const toolInput = typeof tool_input === 'string' ? tryParseJson(tool_input) : tool_input || {};
   // The hook's cwd resolves relative Bash paths (`sed -i … lib/x.mjs`); `bashWrites` is
@@ -721,6 +720,10 @@ async function handlePostToolUse() {
     cwd: typeof hookData.cwd === 'string' ? hookData.cwd : null,
     projectDir: inferProjectDir(),
   });
+  // A silent write (`sed -i`, `cat > f <<EOF`, a heredoc script) prints nothing and is still
+  // an edit. It used to clear this floor only by accident: an empty Bash response became the
+  // JSON of the whole response object, which is what the handoff then replayed.
+  if ((!resp || resp.length < 10) && !(tool_name === 'Bash' && bashWrites.length > 0)) return;
 
   // Tier 1 B: Detect significant Bash commands
   const bashSig = tool_name === 'Bash' ? detectBashSignificance(toolInput, resp) : null;
@@ -3481,20 +3484,22 @@ function extractStdio(obj) {
   return null;
 }
 function normalizeToolResponse(toolResponse) {
+  // `!== null`, not truthiness: a command that printed nothing extracts to '', and that is
+  // its output. Treating '' as "not a stdio object" fell through to JSON.stringify.
   if (typeof toolResponse === 'string') {
     // Try to parse JSON strings like '{"stdout":"...","stderr":"..."}'
     if (toolResponse.startsWith('{"stdout"') || toolResponse.startsWith('{"stderr"')) {
       try {
         const parsed = JSON.parse(toolResponse);
         const extracted = extractStdio(parsed);
-        if (extracted) return extracted.replace(ANSI_RE, '');
+        if (extracted !== null) return extracted.replace(ANSI_RE, '');
       } catch {}
     }
     return toolResponse.replace(ANSI_RE, '');
   }
   if (toolResponse && typeof toolResponse === 'object') {
     const extracted = extractStdio(toolResponse);
-    if (extracted) return extracted.replace(ANSI_RE, '');
+    if (extracted !== null) return extracted.replace(ANSI_RE, '');
     return JSON.stringify(toolResponse).replace(ANSI_RE, '');
   }
   return '';

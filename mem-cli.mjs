@@ -2491,6 +2491,10 @@ function cmdRestore(db, argv) {
       `, ${skipped} duplicate(s) ${dryRun ? 'would be skipped' : 'skipped'}${tombstoneNote}` +
       `, ${totalMalformed} malformed/failed from ${totalLines} row(s).`,
   );
+  // Nothing restorable, and not because it was all already here: the same verdict the
+  // all-lines-unparseable JSONL case gives. A JSON array of malformed rows exited 0, so
+  // `restore backup.json && …` read a restore of nothing as success.
+  if (restored === 0 && totalMalformed > 0) process.exitCode = 1;
   // Name the lossiness where the user meets it. Export omits related_ids and drops
   // superseded rows, and restore re-inserts under fresh AUTOINCREMENT ids — so no
   // cross-link can survive the round-trip. That is a deliberate format tradeoff (stored

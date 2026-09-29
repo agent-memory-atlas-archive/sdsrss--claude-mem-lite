@@ -345,3 +345,45 @@ describe('D#157 restore keeps whether a row was an explicit save', () => {
     expect(hookSessions).toBe(0);
   });
 });
+
+// E2E round 2026-09-29: a JSONL file whose every line fails to parse exits 1, but a JSON
+// array whose every row is malformed printed "0 restored … 1 malformed/failed" and exited 0 —
+// so `restore backup.json && echo restored` reported success with nothing restored.
+describe('restore exits non-zero when nothing in the file could be restored', () => {
+  let dir;
+  beforeEach(() => {
+    dir = makeTmpDir();
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('every row malformed → exit 1', () => {
+    const file = join(dir, 'bad.json');
+    writeFileSync(file, JSON.stringify([{ foo: 1 }, { title: 'no type' }]));
+    const r = runCli(['restore', file], join(dir, 'data'));
+    expect(r.stdout + r.stderr).toMatch(/0 restored/);
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('a partial restore still exits 0', () => {
+    const file = join(dir, 'mixed.json');
+    writeFileSync(
+      file,
+      JSON.stringify([{ foo: 1 }, { type: 'discovery', title: 'a good row', narrative: 'body' }]),
+    );
+    const r = runCli(['restore', file], join(dir, 'data'));
+    expect(r.stdout).toMatch(/1 restored/);
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('an all-duplicate re-run is not a failure', () => {
+    const file = join(dir, 'ok.json');
+    writeFileSync(
+      file,
+      JSON.stringify([{ type: 'discovery', title: 'a good row', narrative: 'body', created_at_epoch: 1 }]),
+    );
+    expect(runCli(['restore', file], join(dir, 'data')).exitCode).toBe(0);
+    const again = runCli(['restore', file], join(dir, 'data'));
+    expect(again.stdout).toMatch(/0 restored, 1 duplicate/);
+    expect(again.exitCode).toBe(0);
+  });
+});

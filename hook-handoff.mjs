@@ -11,6 +11,7 @@ import {
   scrubSecrets,
   LOW_SIGNAL_TITLE,
   isEditEntry,
+  splitEpisodeFiles,
   isMetaTriggerPrompt,
   notLowSignalTitleClause,
   safeText,
@@ -401,7 +402,15 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
     !f.startsWith('/dev/') &&
     !f.startsWith('/proc/') &&
     !f.startsWith('/tmp/');
-  if (episodeSnapshot?.files) episodeSnapshot.files.filter(isValidFile).forEach((f) => fileSet.add(f));
+  // The files the episode EDITED when it edited any (splitEpisodeFiles), everything it
+  // touched only when it edited nothing — the rule the episode's lesson edges follow. A
+  // `cat package.json` is not a key file of the session (docs/audits/20260929-sandbox-usage-eval.md).
+  if (episodeSnapshot?.files) {
+    const { modified } = splitEpisodeFiles(episodeSnapshot);
+    (modified.length > 0 ? modified : episodeSnapshot.files)
+      .filter(isValidFile)
+      .forEach((f) => fileSet.add(f));
+  }
   // Same namespace widening as `completed` above — see the reasoning there. Measured
   // 2026-09-21: 8 of the 17 live handoff rows stored key_files as the empty array.
   //
@@ -1049,7 +1058,8 @@ function renderHandoffFromRow(handoff, db, project) {
       // (Linux allows almost any char but '/'), and this is the one field in this block
       // that was rendered raw while working_on/unfinished/key_decisions all neutralize.
       if (files.length > 0)
-        lines.push('## Key Files', safeText(files.map((f) => basename(f)).join(', ')), '');
+        // One name once: an absolute and a relative spelling of the same file both render as it.
+        lines.push('## Key Files', safeText([...new Set(files.map((f) => basename(f)))].join(', ')), '');
     } catch {}
   }
   // Next steps, from the project's newest paused note. Placed after Key Files and before

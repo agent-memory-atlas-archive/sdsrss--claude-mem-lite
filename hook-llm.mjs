@@ -15,7 +15,7 @@ import {
   estimateJaccardFromMinHash,
   cjkBigrams,
   isEditEntry,
-  entryEditedFiles,
+  splitEpisodeFiles,
   LOW_SIGNAL_TITLE,
   debugCatch,
   debugLog,
@@ -829,33 +829,6 @@ export function buildImmediateObservation(episode) {
     filesRead: read,
     importance,
   };
-}
-
-/**
- * The files an episode EDITED, and everything else it touched. `episode.files` is every
- * path any entry mentioned — `cat package.json`, `ls src`, a README it skimmed — and it is
- * not the right edge set for a lesson: `files` becomes `files_modified` and the
- * observation_files / events.file_paths recall keys. In the sandbox usage evaluation
- * (docs/audits/20260929-sandbox-usage-eval.md) the episode summarizer stored that whole
- * list, so 21 of 79 PreToolUse lesson injections fired on `package.json` and none of the
- * 21 concerned it.
- * @param {{entries?: object[], files?: string[], filesRead?: string[]}} episode
- * @returns {{modified: string[], read: string[]}}
- */
-export function splitEpisodeFiles(episode) {
-  const modified = new Set();
-  const searched = new Set();
-  for (const entry of episode?.entries || []) {
-    if (!entry?.files) continue;
-    // A Bash entry can do both: `cp a b` reads a and writes b.
-    const edited = new Set(entryEditedFiles(entry));
-    for (const f of entry.files) (edited.has(f) ? modified : searched).add(f);
-  }
-  // Merge bash-tracked reads and search tool files into filesRead
-  const read = new Set([...(episode?.filesRead || []), ...searched]);
-  // Remove files that were both searched AND modified — they're modified
-  for (const f of modified) read.delete(f);
-  return { modified: [...modified], read: [...read] };
 }
 
 // ─── Haiku extraction recovery helpers ──────────────────────────────────────

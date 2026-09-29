@@ -38,8 +38,8 @@ import {
   unwrapObservationEnvelope,
   isLowSignalLesson,
   hasEnrichmentContent,
-  splitEpisodeFiles,
 } from '../hook-llm.mjs';
+import { splitEpisodeFiles } from '../utils.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
 import { acquireLLMSlot } from '../hook-semaphore.mjs';
 import { recordMetric } from '../lib/metrics.mjs';

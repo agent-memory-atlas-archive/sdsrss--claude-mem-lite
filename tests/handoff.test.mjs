@@ -1523,3 +1523,51 @@ describe('working_on keeps the task statement', () => {
     expect(row.match_keywords).not.toMatch(/logo:1:1200/i);
   });
 });
+
+// Sandbox usage evaluation 2026-09-29: Key Files listed what the session merely read
+// (`cat package.json`) and rendered one file twice when it was recorded under two spellings.
+describe('Key Files are the files the session edited', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('an editing episode keys on its edits, not its reads; each name renders once', () => {
+    seedSession(db, 's1', 'test-proj');
+    seedPrompt(db, 's1', 'fix allocate rounding', 1);
+    const snapshot = {
+      entries: [
+        { tool: 'Bash', desc: 'cat package.json', files: ['/w/app/package.json'] },
+        {
+          tool: 'Bash',
+          desc: "python3 - <<'EOF' …",
+          files: ['/w/app/src/money.mjs'],
+          bashWrites: ['/w/app/src/money.mjs'],
+        },
+        { tool: 'Edit', desc: 'money.test.mjs: add cases', files: ['/w/app/test/money.test.mjs'] },
+      ],
+      files: ['/w/app/package.json', '/w/app/src/money.mjs', '/w/app/test/money.test.mjs'],
+    };
+    buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', snapshot);
+    const row = db.prepare(`SELECT key_files FROM session_handoffs WHERE project = 'test-proj'`).get();
+    expect(JSON.parse(row.key_files).sort()).toEqual(['/w/app/src/money.mjs', '/w/app/test/money.test.mjs']);
+
+    db.prepare(`UPDATE session_handoffs SET key_files = ? WHERE project = 'test-proj'`).run(
+      JSON.stringify(['/w/app/src/money.mjs', 'src/money.mjs', '/w/app/test/money.test.mjs']),
+    );
+    const out = renderHandoffInjection(db, 'test-proj');
+    expect(out).toMatch(/## Key Files\nmoney\.mjs, money\.test\.mjs\n/);
+  });
+
+  it('a read-only episode still lists what it read', () => {
+    seedSession(db, 's1', 'test-proj');
+    seedPrompt(db, 's1', 'how does allocate work', 1);
+    buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', {
+      entries: [{ tool: 'Bash', desc: 'cat src/money.mjs', files: ['/w/app/src/money.mjs'] }],
+      files: ['/w/app/src/money.mjs'],
+    });
+    const row = db.prepare(`SELECT key_files FROM session_handoffs WHERE project = 'test-proj'`).get();
+    expect(JSON.parse(row.key_files)).toEqual(['/w/app/src/money.mjs']);
+  });
+});

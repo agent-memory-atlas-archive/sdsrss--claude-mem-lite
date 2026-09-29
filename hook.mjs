@@ -22,7 +22,6 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { readFileSync, writeFileSync, unlinkSync, readdirSync, renameSync, statSync, existsSync } from 'fs';
 import { homedir } from 'os';
-import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import {
   inferProject,
   detectBashSignificance,
@@ -2630,17 +2629,9 @@ async function emitDbUnusableNotice() {
  */
 async function buildInjectedSteering() {
   try {
-    const { buildClaudeMdBlock, getDetailDoc } = await import('./adopt-content.mjs');
-    const docPath = join(DB_DIR, 'plugin_claude_mem_lite.md');
-    const doc = getDetailDoc();
-    let current = null;
-    try {
-      current = readFileSync(docPath, 'utf8');
-    } catch {
-      /* first run */
-    }
-    if (current !== doc) atomicWriteFileSync(docPath, doc);
-    return buildClaudeMdBlock({ detailDocRef: docPath });
+    const { buildClaudeMdBlock } = await import('./adopt-content.mjs');
+    const { ensureSteeringDetailDoc } = await import('./lib/local-steering.mjs');
+    return buildClaudeMdBlock({ detailDocRef: ensureSteeringDetailDoc() });
   } catch (e) {
     debugCatch(e, 'session-start-steering');
     return '';
@@ -2666,6 +2657,26 @@ function offerAdoptOnce(project) {
     );
   } catch (e) {
     debugCatch(e, 'session-start-adopt-offer');
+  }
+}
+
+// r3 (tasks/specs/sandbox-eval-l3.md): inside a git work tree auto-adopt writes the block into
+// CLAUDE.local.md. A file appearing in the user's tree unannounced is the surprise 9-A set
+// out to remove, so the human is told once per project what it is, that git will not see it,
+// and how to undo it. Same channel, marker family and switch as the /adopt offer above.
+const LOCAL_NOTE_MARKER_PREFIX = '.local-steering-noted-';
+function noteLocalSteeringOnce(project) {
+  if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  try {
+    const marker = join(RUNTIME_DIR, `${LOCAL_NOTE_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    queueHookSystemMessage(
+      "claude-mem-lite: memory guidance for this project is in CLAUDE.local.md at the repository root. It is listed in the repository's .git/info/exclude, so git never sees or commits it. " +
+        '`claude-mem-lite unadopt` removes it; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
+    );
+  } catch (e) {
+    debugCatch(e, 'session-start-local-note');
   }
 }
 
@@ -2917,6 +2928,8 @@ async function handleSessionStart() {
       const steering = await buildInjectedSteering();
       if (steering) stdoutParts.push(steering);
       offerAdoptOnce(project);
+    } else if (adoptAction === 'local') {
+      noteLocalSteeringOnce(project);
     }
 
     // Auto-update banner (audit P3d): NON-BLOCKING — read from cached state

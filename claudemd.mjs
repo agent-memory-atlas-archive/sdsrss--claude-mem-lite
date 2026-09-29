@@ -150,7 +150,18 @@ function clearState(cwd, slug) {
  * @returns {{ exists: boolean, version: string|null, body: string|null, raw: string }}
  */
 export function readBlock(cwd, slug) {
-  const p = claudeMdPath(cwd);
+  return readBlockAt(claudeMdPath(cwd), slug);
+}
+
+/**
+ * readBlock for any instructions file — CLAUDE.md, or the CLAUDE.local.md that auto-adopt
+ * writes (lib/local-steering.mjs). One parser, so both files get the same CRLF, orphan and
+ * duplicate handling.
+ * @param {string} p absolute path of the file
+ * @param {string} slug
+ * @returns {{ exists: boolean, version: string|null, body: string|null, raw: string }}
+ */
+export function readBlockAt(p, slug) {
   if (!existsSync(p)) return { exists: false, version: null, body: null, raw: '' };
   const raw = readFileSync(p, 'utf8');
   const m = raw.match(blockRegex(slug));
@@ -178,8 +189,8 @@ export function readBlock(cwd, slug) {
 export function isOwnAdoptionArtifact(cwd, relPath, slug) {
   try {
     const rel = String(relPath).replace(/\/+$/, '');
-    if (rel === 'CLAUDE.md') {
-      const blk = readBlock(cwd, slug);
+    if (rel === 'CLAUDE.md' || rel === 'CLAUDE.local.md') {
+      const blk = readBlockAt(join(cwd, rel), slug);
       return blk.body !== null && blk.raw.replace(blockRegexG(slug), '').trim() === '';
     }
     const docName = basename(detailDocPath(cwd, slug));
@@ -271,7 +282,34 @@ export function needsRefresh(cwd, { slug, version, block, doc }) {
  * @returns {{action: 'created'|'updated'|'unchanged'}} (block disposition)
  */
 export function writeManaged(cwd, { slug, version, block, doc }) {
-  const p = claudeMdPath(cwd);
+  const { action } = writeBlockAt(claudeMdPath(cwd), { slug, version, block });
+
+  // Detail doc (marker on first line so unadopt/refresh can tell it apart from a
+  // user's same-named file).
+  const docContent = `${managedByMarker(slug)}\n${doc}`;
+  const dp = detailDocPath(cwd, slug);
+  const dir = dotClaudeDir(cwd);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const existingDoc = existsSync(dp) ? readFileSync(dp, 'utf8') : null;
+  if (existingDoc !== docContent) atomicWrite(dp, docContent);
+
+  writeState(cwd, slug, {
+    version,
+    blockHash: sha256(block),
+    docHash: sha256(doc),
+    writtenAt: new Date().toISOString(),
+  });
+  return { action };
+}
+
+/**
+ * Insert-or-replace our block in one instructions file (created if absent), preserving
+ * everything outside the slug-scoped sentinels. The CLAUDE.md half of writeManaged, and all
+ * of what lib/local-steering.mjs writes into CLAUDE.local.md.
+ * @param {string} p absolute path of the file
+ * @returns {{action: 'created'|'updated'|'unchanged'}}
+ */
+export function writeBlockAt(p, { slug, version, block }) {
   const raw = existsSync(p) ? readFileSync(p, 'utf8') : '';
   const section = renderBlock(slug, version, block);
   const m = raw.match(blockRegex(slug));
@@ -300,22 +338,6 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
     if (action === 'unchanged') action = 'updated';
   }
   if (next !== raw) atomicWrite(p, next);
-
-  // Detail doc (marker on first line so unadopt/refresh can tell it apart from a
-  // user's same-named file).
-  const docContent = `${managedByMarker(slug)}\n${doc}`;
-  const dp = detailDocPath(cwd, slug);
-  const dir = dotClaudeDir(cwd);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const existingDoc = existsSync(dp) ? readFileSync(dp, 'utf8') : null;
-  if (existingDoc !== docContent) atomicWrite(dp, docContent);
-
-  writeState(cwd, slug, {
-    version,
-    blockHash: sha256(block),
-    docHash: sha256(doc),
-    writtenAt: new Date().toISOString(),
-  });
   return { action };
 }
 
@@ -339,7 +361,58 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
  * @returns {{action: 'removed'|'partial'|'absent', residue?: string}}
  */
 export function removeManaged(cwd, slug) {
-  const p = claudeMdPath(cwd);
+  const { action, orphans } = removeBlockAt(claudeMdPath(cwd), slug);
+  // Captured BEFORE the deletions below, because they are what it asks about: is there any
+  // evidence the plugin ever wrote in this project? An unpaired sentinel is NOT such
+  // evidence — it is text, and a project that merely documents the marker in prose has one
+  // (pre-ship review P2-3). Reporting residue there means telling a stranger to delete their
+  // own paragraph, on a project this tool has never touched.
+  const dp = detailDocPath(cwd, slug);
+  const wasOurs = action === 'removed' || existsSync(dp) || existsSync(stateFilePath(cwd, slug));
+  if (existsSync(dp))
+    try {
+      unlinkSync(dp);
+    } catch {
+      /* best-effort */
+    }
+  clearState(cwd, slug);
+  // Drop an emptied .claude/ so unadopt leaves no trace (skips if it holds
+  // anything else — e.g. settings.local.json).
+  try {
+    const dir = dotClaudeDir(cwd);
+    if (existsSync(dir) && readdirSync(dir).length === 0) rmdirSync(dir);
+  } catch {
+    /* best-effort */
+  }
+  // `action` answers ONE question — what happened to the block — and `residue` is an
+  // independent fact that rides alongside it. A first cut let an orphan override 'removed'
+  // too, on the reasoning that both are "unfinished". Pre-ship review P2-1: unadoptAll's
+  // else-branch prints "cleaned partial residue (detail doc/state, no block)" and counts
+  // `partial++`, so a sweep that DID remove a block reported "no block" and tallied zero
+  // removals. Two facts, two fields.
+  const residue = orphans > 0 && wasOurs ? orphanResidueNote(orphans, slug, claudeMdPath(cwd)) : null;
+  if (action === 'removed') return residue ? { action, residue } : { action };
+  if (residue) return { action: 'partial', residue };
+  return { action };
+}
+
+/**
+ * The residue line for unpaired sentinels left in `p` after a removal.
+ * @returns {string}
+ */
+export function orphanResidueNote(orphans, slug, p) {
+  return `${orphans} unpaired \`${slug}\` sentinel line(s) remain in ${p} — the block they opened has no matching end marker, so its extent cannot be determined safely. Remove those lines and the text they wrap by hand.`;
+}
+
+/**
+ * Remove every well-formed block of `slug` from one instructions file, keeping all other
+ * text; a file left holding only whitespace is deleted (a symlink is emptied through the
+ * link instead). The CLAUDE.md half of removeManaged, and what lib/local-steering.mjs uses
+ * for CLAUDE.local.md.
+ * @param {string} p absolute path of the file
+ * @returns {{action: 'removed'|'absent', orphans: number}}
+ */
+export function removeBlockAt(p, slug) {
   let action = 'absent';
   let orphans = 0;
   if (existsSync(p)) {
@@ -392,41 +465,7 @@ export function removeManaged(cwd, slug) {
     // a matched pair) reports zero and only a genuinely unpaired line survives the count.
     orphans = orphanSentinelCount(raw, slug);
   }
-  // Captured BEFORE the deletions below, because they are what it asks about: is there any
-  // evidence the plugin ever wrote in this project? An unpaired sentinel is NOT such
-  // evidence — it is text, and a project that merely documents the marker in prose has one
-  // (pre-ship review P2-3). Reporting residue there means telling a stranger to delete their
-  // own paragraph, on a project this tool has never touched.
-  const dp = detailDocPath(cwd, slug);
-  const wasOurs = action === 'removed' || existsSync(dp) || existsSync(stateFilePath(cwd, slug));
-  if (existsSync(dp))
-    try {
-      unlinkSync(dp);
-    } catch {
-      /* best-effort */
-    }
-  clearState(cwd, slug);
-  // Drop an emptied .claude/ so unadopt leaves no trace (skips if it holds
-  // anything else — e.g. settings.local.json).
-  try {
-    const dir = dotClaudeDir(cwd);
-    if (existsSync(dir) && readdirSync(dir).length === 0) rmdirSync(dir);
-  } catch {
-    /* best-effort */
-  }
-  // `action` answers ONE question — what happened to the block — and `residue` is an
-  // independent fact that rides alongside it. A first cut let an orphan override 'removed'
-  // too, on the reasoning that both are "unfinished". Pre-ship review P2-1: unadoptAll's
-  // else-branch prints "cleaned partial residue (detail doc/state, no block)" and counts
-  // `partial++`, so a sweep that DID remove a block reported "no block" and tallied zero
-  // removals. Two facts, two fields.
-  const residue =
-    orphans > 0 && wasOurs
-      ? `${orphans} unpaired \`${slug}\` sentinel line(s) remain in ${claudeMdPath(cwd)} — the block they opened has no matching end marker, so its extent cannot be determined safely. Remove those lines and the text they wrap by hand.`
-      : null;
-  if (action === 'removed') return residue ? { action, residue } : { action };
-  if (residue) return { action: 'partial', residue };
-  return { action };
+  return { action, orphans };
 }
 
 // ─── Legacy migration ────────────────────────────────────────────────────────

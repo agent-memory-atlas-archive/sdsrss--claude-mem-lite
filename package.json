@@ -70,6 +70,7 @@
     "lib/bash-file-targets.mjs",
     "lib/cli-flags.mjs",
     "lib/git-state.mjs",
+    "lib/local-steering.mjs",
     "lib/task-reader.mjs",
     "lib/paused-reader.mjs",
     "lib/plan-reader.mjs",

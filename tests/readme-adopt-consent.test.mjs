@@ -28,19 +28,38 @@ const CLAUDEMD = read('../claudemd.mjs');
 // the README assertions below are restated for that; the sentence that has to be right is
 // still "which of the user's files get written".
 describe('README auto-adopt description matches silentAutoAdopt', () => {
-  it('premise: a project without the block is injected, not written into', () => {
-    expect(ADOPT_CLI).toMatch(/action: 'inject'/);
-    expect(ADOPT_CLI, 'the no-block branch must return before any writer').toMatch(
-      /if \(!hasBlock\) \{[^}]*return \{ ok: true, action: 'inject' \}/,
-    );
+  // r3 (tasks/specs/sandbox-eval-l3.md): injection lost most of the steering's effect, so inside
+  // a git work tree the no-block branch now writes CLAUDE.local.md — excluded from git via
+  // info/exclude — and injects only where that is not possible. It still never writes CLAUDE.md.
+  it('premise: without the block, CLAUDE.local.md inside git, injection elsewhere — never CLAUDE.md', () => {
+    const noBlock = /if \(!hasBlock\) \{([\s\S]*?)\n {4}\}\n {4}dropLocalSteering/.exec(ADOPT_CLI)?.[1];
+    expect(noBlock, 'premise: the no-block branch is found').toBeTruthy();
+    expect(noBlock).toMatch(/writeLocalSteering\(/);
+    expect(noBlock).toMatch(/action: 'inject'/);
+    expect(noBlock, 'the no-block branch must not reach the CLAUDE.md writer').not.toMatch(/writeManaged\(/);
   });
 
-  for (const [name, src, notWritten] of [
-    ['README.md', () => EN, /Auto-adopt does not write into your project/],
-    ['README.zh-CN.md', () => ZH, /自动 adopt 不再写进你的项目/],
+  for (const [name, src, notClaudeMd, local, exclude] of [
+    [
+      'README.md',
+      () => EN,
+      /Auto-adopt does not write your project's `CLAUDE\.md`/,
+      /`CLAUDE\.local\.md`/,
+      /\.git\/info\/exclude/,
+    ],
+    [
+      'README.zh-CN.md',
+      () => ZH,
+      /自动 adopt 不写你项目的 `CLAUDE\.md`/,
+      /`CLAUDE\.local\.md`/,
+      /\.git\/info\/exclude/,
+    ],
   ]) {
-    it(`${name} says auto-adopt writes nothing into the project`, () => {
-      expect(src(), `${name} must say auto-adopt does not write into the project`).toMatch(notWritten);
+    it(`${name} says where auto-adopt writes, and that git never sees it`, () => {
+      const text = src();
+      expect(text, `${name} must say auto-adopt leaves CLAUDE.md alone`).toMatch(notClaudeMd);
+      expect(text, `${name} must name CLAUDE.local.md`).toMatch(local);
+      expect(text, `${name} must say the file is excluded from git`).toMatch(exclude);
     });
   }
 

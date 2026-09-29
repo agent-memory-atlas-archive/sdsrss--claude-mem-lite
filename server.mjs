@@ -1937,9 +1937,11 @@ server.registerTool(
     }
 
     if (grandTotal === 0) {
-      return {
-        content: [{ type: 'text', text: 'No observations found. Start a coding session to build memory.' }],
-      };
+      // Under a tier filter grandTotal counts that tier alone: an empty tier is not an empty store.
+      const text = tierFilter
+        ? `No observations in the ${tierFilter} tier.`
+        : 'No observations found. Start a coding session to build memory.';
+      return { content: [{ type: 'text', text }] };
     }
 
     if (!tierFilter) {

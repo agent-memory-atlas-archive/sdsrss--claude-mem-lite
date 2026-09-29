@@ -446,3 +446,12 @@ describe('mem_defer refuses a whitespace-only title', () => {
     expect(after).toBe(before);
   });
 });
+
+// ─── mem_browse on an empty tier (E2E round 2026-09-29) — see tests/browse-empty-tier ───
+describe('mem_browse names an empty tier', () => {
+  it('does not call a non-empty store empty', async () => {
+    const res = await client.callTool({ name: 'mem_browse', arguments: { tier: 'archive' } });
+    expect(textOf(res)).not.toMatch(/Start a coding session/);
+    expect(textOf(res)).toMatch(/No observations in the archive tier/);
+  });
+});

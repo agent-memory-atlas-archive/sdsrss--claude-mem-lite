@@ -1926,7 +1926,12 @@ function cmdBrowse(db, args) {
   }
 
   if (grandTotal === 0) {
-    out('No observations found. Start a coding session to build memory.');
+    // Under a tier filter grandTotal counts that tier alone: an empty tier is not an empty store.
+    out(
+      tierFilter
+        ? `No observations in the ${tierFilter} tier.`
+        : 'No observations found. Start a coding session to build memory.',
+    );
     return;
   }
 

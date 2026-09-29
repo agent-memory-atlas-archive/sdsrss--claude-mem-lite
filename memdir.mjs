@@ -60,6 +60,24 @@ export function encodeProjectPath(absPath) {
 /**
  * Absolute path to the project's memdir. Caller runs mkdir-p as needed.
  */
+// `<memdir>/.mem-no-auto-adopt` is the durable, project-scoped escape hatch.
+// Survives marker deletion, sentinel removal, and plugin reinstalls — that's
+// the point: "user said no for this project" should not be reversible by
+// `rm ~/.claude-mem-lite/runtime/.auto-adopt-*`. Managed via
+// `claude-mem-lite adopt --disable` / `--enable`. silentAutoAdopt checks it
+// at entry and skips WITHOUT writing the runtime marker, so toggling
+// `--enable` re-arms auto-adopt on the next SessionStart. Kept in the memdir
+// (not the project tree) so it survives `unadopt` cleaning out .claude/.
+const DISABLE_SENTINEL_BASENAME = '.mem-no-auto-adopt';
+
+export function disableSentinelPath(memdir) {
+  return join(memdir, DISABLE_SENTINEL_BASENAME);
+}
+
+export function isAutoAdoptDisabled(memdir) {
+  return existsSync(disableSentinelPath(memdir));
+}
+
 export function memdirPath(projectCwd) {
   return join(homedir(), '.claude', 'projects', encodeProjectPath(projectCwd), 'memory');
 }

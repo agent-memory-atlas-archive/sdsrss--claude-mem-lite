@@ -18,6 +18,8 @@ import { homedir } from 'os';
 import { join, isAbsolute } from 'path';
 import {
   memdirPath,
+  disableSentinelPath,
+  isAutoAdoptDisabled,
   removePluginSection,
   removePluginDoc,
   isAdopted as memdirIsAdopted,
@@ -29,6 +31,7 @@ import {
   isAdopted as claudeMdIsAdopted,
   hasResidue as claudeMdHasResidue,
   needsRefresh,
+  readBlock,
   migrateLegacyMemoryDir,
   hasLegacyMemdirSentinel,
   claudeMdPath,
@@ -93,23 +96,9 @@ function hasFlag(args, flag) {
 }
 
 // ─── Per-project auto-adopt opt-out sentinel ─────────────────────────────────
-// `<memdir>/.mem-no-auto-adopt` is the durable, project-scoped escape hatch.
-// Survives marker deletion, sentinel removal, and plugin reinstalls — that's
-// the point: "user said no for this project" should not be reversible by
-// `rm ~/.claude-mem-lite/runtime/.auto-adopt-*`. Managed via
-// `claude-mem-lite adopt --disable` / `--enable`. silentAutoAdopt checks it
-// at entry and skips WITHOUT writing the runtime marker, so toggling
-// `--enable` re-arms auto-adopt on the next SessionStart. Kept in the memdir
-// (not the project tree) so it survives `unadopt` cleaning out .claude/.
-const DISABLE_SENTINEL_BASENAME = '.mem-no-auto-adopt';
-
-export function disableSentinelPath(memdir) {
-  return join(memdir, DISABLE_SENTINEL_BASENAME);
-}
-
-export function isAutoAdoptDisabled(memdir) {
-  return existsSync(disableSentinelPath(memdir));
-}
+// The `.mem-no-auto-adopt` escape hatch lives in memdir.mjs since report §9-A: lib/quiet-scope.mjs
+// has to ask it too (injected steering counts as adopted), and lib/ may not import this face.
+export { disableSentinelPath, isAutoAdoptDisabled };
 
 /**
  * cmdAdopt — write the CLAUDE.md managed block + detail doc for the current
@@ -215,8 +204,9 @@ function migrateAll(args) {
  * existing users whose marker predates v3.13 still migrate). Order:
  *   1. respect per-project `.mem-no-auto-adopt` opt-out → skip.
  *   2. migrate legacy memory-dir sentinel away (idempotent; no-op once gone).
- *   3. adopt the CLAUDE.md scheme if absent; else refresh if shipped content
- *      drifted (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1).
+ *   3. no managed block in CLAUDE.md → write nothing, return 'inject' (the caller puts
+ *      the steering into SessionStart context); a block present → keep it in sync,
+ *      refreshing if shipped content drifted (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1).
  * Silent: never logs, never throws. Returns { ok, action, reason } for debugLog.
  */
 export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
@@ -231,6 +221,19 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
     const doc = getDetailDoc();
     const version = CURRENT_SENTINEL_VERSION;
 
+    // Report §9-A (docs/audits/20260929-sandbox-usage-eval.md): a project with NO managed
+    // block is no longer written into. The first SessionStart used to add CLAUDE.md and
+    // .claude/plugin_claude_mem_lite.md to every repository the user opened — 4 of 4 sandbox
+    // repos, swept into the next `git add -A` — and the startup dashboard then reported them
+    // as the user's uncommitted work. The same text now rides SessionStart context
+    // ('inject'); only an explicit `adopt` writes files. A project that already carries the
+    // block (adopted explicitly, or by an older version) is kept in sync exactly as before,
+    // including a half state whose detail doc went missing.
+    const hasBlock = readBlock(cwd, PLUGIN_SLUG).body !== null;
+    if (!hasBlock) {
+      if (markerDir && markerKey) writeMarker(markerDir, markerKey);
+      return { ok: true, action: 'inject' };
+    }
     let action = 'already-adopted';
     if (!claudeMdIsAdopted(cwd, PLUGIN_SLUG)) {
       writeManaged(cwd, { slug: PLUGIN_SLUG, version, block, doc });

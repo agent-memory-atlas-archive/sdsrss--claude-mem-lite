@@ -39,7 +39,7 @@ const CLI = 'claude-mem-lite';
  * per-project-type variation. Keep it tight (cheap always-loaded context); the
  * full tables + rules live in the detail doc this block points to.
  */
-export function buildClaudeMdBlock() {
+export function buildClaudeMdBlock({ detailDocRef = '.claude/plugin_claude_mem_lite.md' } = {}) {
   // Intentionally machine-stable: MCP tool names only, NO CLI_INVOKE (that
   // resolves to an absolute path that differs per install — it would make this
   // committed/refreshed block churn across machines). The detail doc holds the
@@ -58,7 +58,7 @@ PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Wr
 
 Path cost is round-trips, not milliseconds: the PreToolUse hook above already recalls (0 calls) — prefer it. For an explicit query, if these \`mem_*\` tools are deferred behind ToolSearch this session, the Bash CLI \`${CLI}\` is one call vs two (ToolSearch + call); the MCP server instructions carry the absolute path to use when it is not on PATH.
 
-Full tool + CLI tables, citation/decay rules, and save discipline → \`.claude/plugin_claude_mem_lite.md\``;
+Full tool + CLI tables, citation/decay rules, and save discipline → \`${detailDocRef}\``;
 }
 
 /**
@@ -71,7 +71,7 @@ export function getDetailDoc() {
   return `# claude-mem-lite 插件契约（完整）
 
 > 由 \`${CLI} adopt\` 生成、随版本自动刷新；卸载用 \`${CLI} unadopt\`。
-> 精炼触发表在项目 \`CLAUDE.md\` 的 \`claude-mem-lite\` 托管块里；本文件是其展开。
+> 精炼触发表由 SessionStart 注入会话上下文（显式 \`${CLI} adopt\` 过的项目则写在 \`CLAUDE.md\` 的 \`claude-mem-lite\` 托管块里）；本文件是其展开。
 > 设计背景见 docs/CLAUDE-MD-STEERING-PLAN.md。
 
 > **本文下方所有命令写作 \`${CLI} <cmd>\`。** 该名字只在全局装过

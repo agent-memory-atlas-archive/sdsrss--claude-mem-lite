@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { readFileSync, writeFileSync, unlinkSync, readdirSync, renameSync, statSync, existsSync } from 'fs';
 import { homedir } from 'os';
+import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import {
   inferProject,
   detectBashSignificance,
@@ -2619,6 +2620,33 @@ async function emitDbUnusableNotice() {
   }
 }
 
+/**
+ * Report §9-A: the managed-block steering for a project that carries no block, delivered as
+ * SessionStart context instead of a file in the user's repository. The detail doc it points at
+ * is written into the plugin's own data dir (refreshed only when its text changed), because a
+ * reference to `.claude/plugin_claude_mem_lite.md` would name a file that no longer exists.
+ * Never throws: a failure here costs the steering, not the session start.
+ * @returns {Promise<string>}
+ */
+async function buildInjectedSteering() {
+  try {
+    const { buildClaudeMdBlock, getDetailDoc } = await import('./adopt-content.mjs');
+    const docPath = join(DB_DIR, 'plugin_claude_mem_lite.md');
+    const doc = getDetailDoc();
+    let current = null;
+    try {
+      current = readFileSync(docPath, 'utf8');
+    } catch {
+      /* first run */
+    }
+    if (current !== doc) atomicWriteFileSync(docPath, doc);
+    return buildClaudeMdBlock({ detailDocRef: docPath });
+  } catch (e) {
+    debugCatch(e, 'session-start-steering');
+    return '';
+  }
+}
+
 async function handleSessionStart() {
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
@@ -2689,12 +2717,16 @@ async function handleSessionStart() {
   // noise; it must NOT also disable side-effect work (PostToolUse writes the
   // DB unconditionally — auto-adopt follows the same rule). Failures are
   // swallowed; the marker is still written for telemetry/back-compat.
+  // Report §9-A: 'inject' means the project carries no managed block and nothing was written;
+  // the steering text then joins this SessionStart's context (injectSteeringPart below).
+  let adoptAction = null;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
       const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
       const { silentAutoAdopt } = await import('./adopt-cli.mjs');
       const r = silentAutoAdopt({ cwd, markerDir: RUNTIME_DIR, markerKey: project });
+      adoptAction = r.action;
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
       } else {
@@ -2858,6 +2890,10 @@ async function handleSessionStart() {
     if (dashboardText) stdoutParts.push(dashboardText);
     if (fullContext.trim()) {
       stdoutParts.push(`<claude-mem-context>\n${fullContext}\n</claude-mem-context>`);
+    }
+    if (adoptAction === 'inject') {
+      const steering = await buildInjectedSteering();
+      if (steering) stdoutParts.push(steering);
     }
 
     // Auto-update banner (audit P3d): NON-BLOCKING — read from cached state

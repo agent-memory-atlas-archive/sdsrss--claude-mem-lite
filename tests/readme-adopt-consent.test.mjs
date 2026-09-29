@@ -22,7 +22,28 @@ const ZH = read('../README.zh-CN.md');
 const ADOPT_CLI = read('../adopt-cli.mjs');
 const CLAUDEMD = read('../claudemd.mjs');
 
+// Report §9-A (docs/audits/20260929-sandbox-usage-eval.md) changed the answer again: auto-adopt
+// no longer writes into the project at all — it injects the steering — and only an explicit
+// `adopt` (or a block an older version already wrote) touches <cwd>/CLAUDE.md. The premise and
+// the README assertions below are restated for that; the sentence that has to be right is
+// still "which of the user's files get written".
 describe('README auto-adopt description matches silentAutoAdopt', () => {
+  it('premise: a project without the block is injected, not written into', () => {
+    expect(ADOPT_CLI).toMatch(/action: 'inject'/);
+    expect(ADOPT_CLI, 'the no-block branch must return before any writer').toMatch(
+      /if \(!hasBlock\) \{[^}]*return \{ ok: true, action: 'inject' \}/,
+    );
+  });
+
+  for (const [name, src, notWritten] of [
+    ['README.md', () => EN, /Auto-adopt does not write into your project/],
+    ['README.zh-CN.md', () => ZH, /自动 adopt 不再写进你的项目/],
+  ]) {
+    it(`${name} says auto-adopt writes nothing into the project`, () => {
+      expect(src(), `${name} must say auto-adopt does not write into the project`).toMatch(notWritten);
+    });
+  }
+
   it('the implementation still writes CLAUDE.md on every session, not a memdir sentinel once', () => {
     // Assert the premise before asserting the docs against it. If the code moved back to
     // a memdir sentinel, the docs below would be wrong in the other direction and this

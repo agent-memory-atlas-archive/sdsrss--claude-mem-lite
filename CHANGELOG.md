@@ -2,21 +2,26 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## v6.21.0 — projects and concurrent sessions stop sharing memory
+## v6.21.0 — non-ASCII project names and concurrent sessions stop sharing memory
 
-**Upgrade note: projects named in a non-Latin script get a new id, and what they stored moves once.** No schema-version
+**Upgrade note: projects whose names are not plain ASCII get a new id, and what they stored moves once.** No schema-version
 change: 6.20.0 still opens the database after this release has (the two columns it adds are
 listed under Changed).
 
 - **Which projects.** A project's id is `<parent>--<directory>`, and every character outside
-  ASCII letters, digits and `_.-` used to become `-`, so `~/projects/博客` and `~/projects/商城`
-  were both `projects----`: two projects' memories, handoffs, startup context and file recall
-  were one pool. Letters, marks and digits of every script are now kept (`projects--博客`);
-  punctuation, symbols, emoji and invisible format characters are still replaced. An all-ASCII
-  name keeps its id byte for byte.
+  ASCII letters, digits and `_.-` used to become `-` (a character outside the Basic Multilingual
+  Plane, such as an emoji, became two), so `~/projects/博客` and `~/projects/商城` were both
+  `projects----`: two projects' memories, handoffs, startup context and file recall were one
+  pool. Letters, marks and digits of every script are now kept (`projects--博客`,
+  `Projekte--Übung`); punctuation, symbols, emoji and invisible format characters still become
+  one `-` each. An id whose parent and directory names are both plain ASCII keeps its id byte
+  for byte. Any other id changes, including one whose only non-ASCII character is an emoji
+  (`projects----` becomes `projects---`).
 - **What moves, once per project, at its first session start.**
   - When no stored file path shows another directory using the old id, the project takes
-    everything under it: memories, sessions, summaries, handoffs, events and deferred items.
+    everything under it: memories, sessions, summaries, handoffs, events and deferred items. A
+    sibling whose memories carry no file path is invisible to that check, so the first of two
+    such directories to start a session takes both.
   - Otherwise only the memories whose recorded file paths lie inside the directory move, with
     the rest of their compression groups. Memories with no path, or only relative ones, stay
     under the old id.
@@ -43,34 +48,41 @@ listed under Changed).
   session's handoff. A session now resumes at most one handoff, and after it has finished a turn
   only a prompt that names a past session (`上次`, `resume`, `where we left off`,
   `last session`) resumes one; a bare `继续` / `continue` then means "go on". A session's first
-  prompt and the hand-back after `/clear` work as before.
+  prompt and the hand-back after `/clear` work as before. The one-resume limit is per project:
+  once any session in the project has resumed a handoff, a session already running there does
+  not resume another.
 - **Maintenance hides idle memories before it deletes them, in every project.** Only the project
   that started the session had its old idle memories hidden (kept, and reachable by id); every
   other project's identical ones were queued for deletion directly. Every project's are now
   hidden first, stamped in a new nullable `hidden_at` column, and queued for deletion only if 7
   days later they are still idle, have no lesson, are not superseded and do not hold a
-  compression group. Memories hidden before this release are never queued. `maintain scan`
-  reports how many maintenance has hidden.
-- **An importance you set stays.** `update --importance` and `mem_update` were undone by the next
-  read (a memory read twice at importance 1 is raised to 2) and by maintenance's access boost.
-  Both now skip a memory whose importance was set, stamped in a new nullable
-  `importance_set_at` column; decay is unchanged. export / restore and `verify-apply --undo`
-  carry the stamp.
+  compression group. Memories hidden before this release are never queued; memories an earlier
+  version had already queued for deletion stay queued. `maintain scan` reports how many
+  maintenance has hidden.
+- **An importance you set is no longer changed by reads, the access boost or re-enrich.**
+  `update --importance` and `mem_update` were undone by the next read (a memory read twice at
+  importance 1 is raised to 2), by maintenance's access boost, and by re-enrich, which raised a
+  lowered importance to the model's score and hid the row when the model scored it 0. All three
+  now leave a memory whose importance was set alone, stamped in a new nullable
+  `importance_set_at` column. Decay and the demotion of often-injected, never-cited memories
+  still apply. export / restore and `verify-apply --undo` carry the stamp.
 - **`recall` and `mem_recall` rank the current project and the exact path first**, then
   importance and recency. They matched a file by its name in every project, so another
   package's or project's `index.mjs` could lead. `--project` (CLI) and a new optional `project`
   argument (MCP) keep one project.
 - **`<private>` fails closed.** An unclosed `<private>` now hides everything after it, nested
-  blocks pair by depth, and `<private reason="…">` is recognised. Text in those shapes used to be
-  stored, sent to the background model and injected later.
+  blocks pair by depth, and `<private reason="…">` is recognised, also when a long command
+  output is stored as a head and a tail. Text in those shapes used to be stored, sent to the
+  background model and injected later.
 - **A subagent and its parent each get a file's recorded lesson once.** Claude Code gives a
   subagent's hooks the parent's session id, and the "already shown" record was per session, so
   whichever thread touched a file first used the lesson up for the other — usually the subagent
-  that then edited it. The record is now per thread.
+  that then edited it. The record is now per thread, and the check after an edit (under
+  `CLAUDE_MEM_SALIENCE=bind`) reads the same per-thread record.
 - **The `<memory-context>` search on each prompt skips prompts with no topic** (continuations,
-  confirmations, slash commands, pure git / npm operations), as the other prompt search has
-  since v2.43, and its events half gets the minimum length its memory half already had
-  (issue #39).
+  confirmations, slash commands, `git commit` / `push` / `merge`, `npm publish` / `deploy`), as
+  the other prompt search already does, and its events half gets the minimum length its memory
+  half already had (issue #39).
 
 **Fixed**
 
@@ -79,21 +91,24 @@ listed under Changed).
   --dry-run` removed hooks); an unknown flag on a writing command now exits 1 without acting.
   install / uninstall / cleanup-hooks keep hooks you wrote that mention claude-mem-lite, and
   hooks you added under the plugin's matchers. A user-scope MCP server named `mem` is removed
-  only when it runs this plugin's server. `cleanup` no longer deletes other programs' `mem-*`,
+  (by install, uninstall, the plugin's first session start or a plugin update) only when it runs
+  this plugin's server. `cleanup` no longer deletes other programs' `mem-*`,
   `cite-*` and `adopt-*` temp directories. An unparseable `settings.json` is refused before
-  install or uninstall changes anything. An inaccessible data directory is reported as such
-  (doctor ✗, install exit 1 with a chmod / chown remedy) instead of "no database yet" or
-  "another install is in progress". A failed `repair` removes its staging directory.
+  install or uninstall changes anything. An inaccessible data directory is reported as such:
+  install exits 1 with a chmod / chown remedy instead of "another install is in progress", and
+  doctor leads with a ✗ Data directory line carrying the remedy (the checks below it still read
+  the directory as missing). A failed `repair` removes its staging directory.
   `cleanup-hooks` warns when it leaves an enabled plugin with no hooks. The unadopt advice
   printed by uninstall names a command that still runs. With no API key set, doctor checks
   that the `claude` CLI the background worker spawns resolves.
 - Data: `restore` restores every distinct row of a backup (25 rows had come back as 1) and exits
-  1 when nothing could be restored. Deleting a correction brings back the memory it had
-  superseded, and the delete preview lists the rows a delete brings back. `fts-check` and doctor
+  1 when it restores nothing because rows were malformed or failed (an all-duplicate re-run
+  still exits 0). Deleting a correction brings back the memory it had superseded, and the delete
+  preview says how many rows a delete brings back. `fts-check` and doctor
   compare each full-text index with its content, so a stale index is no longer reported
-  healthy. Maintenance never hides a compression group's keeper (which hid the whole group),
-  fuzzy auto-dedup never merges across projects, and `maintain --ops dedup` says why a pair did
-  not merge. A cluster merge keeps the keeper's title when the model's reply has none, and
+  healthy. Maintenance and re-enrich never hide a compression group's keeper (which hid the
+  whole group), fuzzy auto-dedup never merges across projects, and `maintain --ops dedup` names
+  the reason for a missing row, a self-merge or a cross-project pair. A cluster merge keeps the keeper's title when the model's reply has none, and
   session summaries keep only text lessons and decisions.
 - Output: `mem_search` no longer heads a recency listing as matches (an `obs_type` with no match;
   a query that sanitizes to nothing). `mem_timeline` says when its query anchored nothing.

@@ -239,7 +239,7 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 
 ## Upgrading to 6.21.0
 
-**Projects named in a non-Latin script get a new id, and what they stored moves once.** No
+**Projects whose names are not plain ASCII get a new id, and what they stored moves once.** No
 schema-version change: 6.20.0 still opens the database after this release has. Pin
 `claude-mem-lite@6.20.0` before upgrading to avoid the move; after it, 6.20.0 names these
 directories by their old ids again, so their moved rows are listed only with
@@ -247,8 +247,8 @@ directories by their old ids again, so their moved rows are listed only with
 
 - **Which projects.** Every character outside ASCII letters, digits and `_.-` used to become `-`,
   so `~/projects/博客` and `~/projects/商城` were both `projects----` and shared one memory.
-  Letters, marks and digits of every script are now kept (`projects--博客`). An all-ASCII name
-  keeps its id byte for byte.
+  Letters, marks and digits of every script are now kept (`projects--博客`). An id whose parent
+  and directory names are both plain ASCII keeps its id byte for byte; any other id changes.
 - **At a project's first session start its data moves.** When no stored file path shows another
   directory using the old id, the project takes everything under it, deferred items and session
   history included. Otherwise only the memories whose file paths lie inside the directory move;
@@ -257,10 +257,10 @@ directories by their old ids again, so their moved rows are listed only with
 - **Also changed:** two sessions open in one project keep separate memory sessions (handoffs,
   summaries and unsaved tool activity no longer mix); a session's follow-up prompts no longer
   resume another session; maintenance hides idle memories for 7 days before queuing them for
-  deletion, in every project; an importance you set is no longer raised by later reads;
-  `recall` / `mem_recall` rank the current project and the exact path first (`--project` /
-  `project` keep one project); `<private>` fails closed on an unclosed, nested or attributed tag.
-  Full list: CHANGELOG.md.
+  deletion, in every project; an importance you set is no longer changed by reads, the access
+  boost or re-enrich; `recall` / `mem_recall` rank the current project and the exact path first
+  (`--project` / `project` keep one project); `<private>` fails closed on an unclosed, nested or
+  attributed tag. Full list: CHANGELOG.md.
 
 ## Upgrading to 6.19.0
 
@@ -735,7 +735,7 @@ Episodes are batched related operations (edits to the same file group) that get 
 Episode buffer -> Flush to JSON -> claude -p --model haiku -> Structured observation -> SQLite
 ```
 
-Each observation includes type, title, narrative, concepts, facts, importance (1-3), and is automatically deduplicated via two tiers: Jaccard similarity (>70% within 5 minutes) and MinHash signatures (>80% within 7 days across sessions). If the LLM call fails, a degraded observation is saved with inferred metadata (zero data loss). Related observations are linked via `related_ids` based on FTS5 title similarity and file overlap.
+Each observation includes type, title, narrative, concepts, facts, importance (1-3), and is automatically deduplicated via two tiers: Jaccard similarity (>70% within 5 minutes) and MinHash signatures (>80% within 7 days across sessions). If the LLM call fails, an episode the rules rate notable is saved with inferred metadata; a routine edit the rules rate as noise is dropped. Related observations are linked via `related_ids` based on FTS5 title similarity and file overlap.
 
 ## Management Commands
 

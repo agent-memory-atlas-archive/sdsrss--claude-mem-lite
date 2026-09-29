@@ -106,6 +106,8 @@ import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook
 import {
   legacyProjectNameFromDir,
   rekeyLegacyProject,
+  legacyIdIsExclusive,
+  moveProjectRows,
   PROJECT_REKEY_MARKER_PREFIX,
 } from './lib/project-rekey.mjs';
 import {
@@ -2778,13 +2780,24 @@ function rekeyProjectOnce(db, project) {
     if (existsSync(marker)) return;
     let moved = 0;
     let left = 0;
+    let whole = false;
     for (const legacy of sources) {
+      // An old id nothing shows another directory using is this directory's alone: take all of
+      // it — sessions, summaries, handoffs, deferred items — not only the memories a path proves.
+      // Never for the plain id of a directory that does not own it (D16): the owner is alive.
+      if (legacy !== plain && project === plain && legacyIdIsExclusive(db, { dir, legacy })) {
+        moved += moveProjectRows(db, { from: legacy, to: project }).moved;
+        whole = true;
+        continue;
+      }
       const r = rekeyLegacyProject(db, { dir, project, legacy });
       moved += r.moved;
       if (legacy !== plain) left += r.left;
     }
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
-    const movedLine = `Moved ${moved} ${moved === 1 ? 'memory' : 'memories'} whose files are in this directory.`;
+    const movedLine = whole
+      ? `Moved everything stored under the old id (${moved} ${moved === 1 ? 'memory' : 'memories'}, with its sessions and deferred items): nothing there came from another directory.`
+      : `Moved ${moved} ${moved === 1 ? 'memory' : 'memories'} whose files are in this directory.`;
     if (project !== plain) {
       // D16: another directory owns the plain id; what could not be attributed stays with it.
       queueHookSystemMessage(
@@ -2794,7 +2807,7 @@ function rekeyProjectOnce(db, project) {
       );
       return;
     }
-    if (moved === 0 && left === 0) return;
+    if (moved === 0 && left === 0 && !whole) return;
     const legacy = sources[0];
     const rest =
       left === 0

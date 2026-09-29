@@ -14,7 +14,12 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import { createTestDb, insertObs, insertSession, makeFixtureTracker } from './test-helpers.mjs';
-import { legacyProjectNameFromDir, rekeyLegacyProject } from '../lib/project-rekey.mjs';
+import {
+  legacyProjectNameFromDir,
+  rekeyLegacyProject,
+  legacyIdIsExclusive,
+  moveProjectRows,
+} from '../lib/project-rekey.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = makeFixtureTracker();
@@ -83,6 +88,50 @@ describe('rekeyLegacyProject', () => {
   });
 });
 
+describe('an old id only this directory used', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: OLD });
+  });
+  afterEach(() => db.close());
+  const defer = (title) =>
+    db
+      .prepare(
+        `INSERT INTO deferred_work (project, title, priority, status, created_at_epoch)
+         VALUES (?, ?, 2, 'open', ?)`,
+      )
+      .run(OLD, title, Date.now());
+
+  it('is exclusive when no stored path belongs to another directory with the same old id', () => {
+    obs(db, 'blog', [`${BLOG}/src/post.js`]);
+    obs(db, 'outside every project', ['/etc/hosts', '/home/u/.bashrc']);
+    obs(db, 'no path', []);
+    expect(legacyIdIsExclusive(db, { dir: BLOG, legacy: OLD })).toBe(true);
+    obs(db, 'shop', [`${SHOP}/src/cart.js`]); // a sibling with the same old id
+    expect(legacyIdIsExclusive(db, { dir: BLOG, legacy: OLD })).toBe(false);
+  });
+
+  it('then moves everything stored under it: sessions, summaries, deferred items, not only memories', () => {
+    obs(db, 'blog', [`${BLOG}/src/post.js`]);
+    obs(db, 'no path', []);
+    defer('finish the archive page');
+    db.prepare(
+      `INSERT INTO session_summaries (memory_session_id, project, request, created_at, created_at_epoch)
+       VALUES ('sess-1', ?, 'last request', datetime('now'), ?)`,
+    ).run(OLD, Date.now());
+    const r = moveProjectRows(db, { from: OLD, to: 'projects--博客' });
+    expect(r.moved).toBe(2);
+    for (const t of ['observations', 'sdk_sessions', 'session_summaries', 'deferred_work']) {
+      expect(db.prepare(`SELECT COUNT(*) n FROM ${t} WHERE project = ?`).get(OLD).n, t).toBe(0);
+      expect(
+        db.prepare(`SELECT COUNT(*) n FROM ${t} WHERE project = ?`).get('projects--博客').n,
+        t,
+      ).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('at SessionStart', () => {
   let home, dir;
   beforeEach(() => {
@@ -97,6 +146,12 @@ describe('at SessionStart', () => {
     const id = Number(insertObs(db, { project: OLD, title: 'blog layout lesson' }).lastInsertRowid);
     db.prepare('INSERT INTO observation_files (obs_id, filename) VALUES (?, ?)').run(id, `${dir}/post.js`);
     insertObs(db, { project: OLD, title: 'unattributable' });
+    // A sibling that shared the old id (商城 → projects---- too): the old id is not this one's alone.
+    const shop = Number(insertObs(db, { project: OLD, title: 'shop cart lesson' }).lastInsertRowid);
+    db.prepare('INSERT INTO observation_files (obs_id, filename) VALUES (?, ?)').run(
+      shop,
+      join(dirname(dir), '商城', 'cart.js'),
+    );
     db.close();
   });
 
@@ -127,6 +182,7 @@ describe('at SessionStart', () => {
     expect(rows).toEqual([
       { title: 'blog layout lesson', project: 'projects--博客' },
       { title: 'unattributable', project: OLD },
+      { title: 'shop cart lesson', project: OLD },
     ]);
     expect(first).toContain('projects--博客');
     expect(first).toContain(`--project ${OLD}`);
@@ -134,5 +190,24 @@ describe('at SessionStart', () => {
       readdirSync(join(home, '.claude-mem-lite', 'runtime')).some((f) => f.startsWith('.project-rekeyed-')),
     ).toBe(true);
     expect(start()).not.toContain(`--project ${OLD}`);
+  });
+
+  it('takes everything, deferred items included, when the old id was this directory alone', () => {
+    const db = new Database(join(home, '.claude-mem-lite', 'claude-mem-lite.db'));
+    db.prepare("DELETE FROM observations WHERE title = 'shop cart lesson'").run();
+    db.prepare(
+      `INSERT INTO deferred_work (project, title, priority, status, created_at_epoch)
+       VALUES (?, 'finish the archive page', 2, 'open', ?)`,
+    ).run(OLD, Date.now());
+    db.close();
+    const out = start();
+    const ro = new Database(join(home, '.claude-mem-lite', 'claude-mem-lite.db'), { readonly: true });
+    const left = ['observations', 'deferred_work', 'sdk_sessions'].map(
+      (t) => ro.prepare(`SELECT COUNT(*) n FROM ${t} WHERE project = ?`).get(OLD).n,
+    );
+    ro.close();
+    expect(left).toEqual([0, 0, 0]);
+    expect(out).toContain('projects--博客');
+    expect(out).not.toContain(`--project ${OLD}`); // nothing stayed behind to point at
   });
 });

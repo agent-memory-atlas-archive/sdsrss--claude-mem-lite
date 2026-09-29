@@ -17,6 +17,7 @@ import { initSchema } from '../schema.mjs';
 import { createTestDb, insertObs, insertSession, makeFixtureTracker } from './test-helpers.mjs';
 import { projectIdForDir, projectNameFromDir, PROJECT_OWNER_PREFIX } from '../project-utils.mjs';
 import { electProjectOwner, claimProjectOwner } from '../lib/project-owner.mjs';
+import { legacyProjectNameFromDir } from '../lib/project-rekey.mjs';
 import { resolveCliProject, _resetCliProjectCache } from '../lib/cli-project.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -243,6 +244,26 @@ describe('through the hooks', () => {
     );
     expect(rows['alpha 1']).toBe(plain);
     expect(rows['bravo 1']).toMatch(new RegExp(`^${plain}~[0-9a-f]{8}$`));
+  });
+
+  it("a non-owner never takes the whole pre-D9 id: the owner's pathless rows stay put", () => {
+    const a = join(root, 'a', '项目', '博客');
+    const b = join(root, 'b', '项目', '博客');
+    for (const d of [a, b]) mkdirSync(d, { recursive: true });
+    const plain = projectNameFromDir(a);
+    const legacy = legacyProjectNameFromDir(a);
+    const db = new Database(join(home, '.claude-mem-lite', 'claude-mem-lite.db'));
+    insertSession(db, { id: 'old', project: plain });
+    for (const f of ['x.js', 'y.js']) {
+      const id = Number(insertObs(db, { sessionId: 'old', project: plain, title: f }).lastInsertRowid);
+      db.prepare('INSERT INTO observation_files (obs_id, filename) VALUES (?, ?)').run(id, `${a}/${f}`);
+    }
+    db.prepare(
+      `INSERT INTO deferred_work (project, title, priority, status, created_at_epoch) VALUES (?, 'A todo', 2, 'open', ?)`,
+    ).run(legacy, Date.now());
+    db.close();
+    hook('session-start', b, { session_id: 'cc-b', source: 'startup' }); // B opens first, A owns
+    expect(q('SELECT project FROM deferred_work')).toEqual([{ project: legacy }]);
   });
 
   it('the bash Read tracker without a host pid records under the directory’s own id', () => {

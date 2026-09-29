@@ -5,8 +5,8 @@
 // here and consumed. Now the directory that owns an id keeps it, and any other directory that
 // maps to the same id gets `<id>~<hash of its path>`. Which directory owns a contested id is
 // decided by the data the first time it is claimed, not by who happens to open first.
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,7 @@ import { initSchema } from '../schema.mjs';
 import { createTestDb, insertObs, insertSession, makeFixtureTracker } from './test-helpers.mjs';
 import { projectIdForDir, projectNameFromDir, PROJECT_OWNER_PREFIX } from '../project-utils.mjs';
 import { electProjectOwner, claimProjectOwner } from '../lib/project-owner.mjs';
+import { resolveCliProject, _resetCliProjectCache } from '../lib/cli-project.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = makeFixtureTracker();
@@ -107,6 +108,31 @@ describe('claimProjectOwner', () => {
   it('replaces an owner whose directory is gone', () => {
     writeFileSync(ownerFile('packages--api'), join(root, 'gone'));
     expect(claimProjectOwner(runtime, 'packages--api', B)).toBe(B);
+  });
+});
+
+describe('the CLI', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetCliProjectCache();
+  });
+
+  it("walks up to the repository root under the root's own id, not the owner's", () => {
+    vi.stubEnv('CLAUDE_MEM_RUNTIME_DIR', runtime);
+    writeFileSync(ownerFile('packages--api'), A);
+    mkdirSync(join(B, '.git'));
+    const db = createTestDb();
+    try {
+      const bId = projectIdForDir(B, runtime);
+      insertSession(db, { id: 's', project: bId });
+      insertObs(db, { sessionId: 's', project: bId, title: 'bravo row' });
+      insertSession(db, { id: 's2', project: 'packages--api' });
+      insertObs(db, { sessionId: 's2', project: 'packages--api', title: 'alpha row' });
+      // Standing in B/src, which holds nothing: the fallback must land on B, not on A.
+      expect(resolveCliProject(db, { dir: join(B, 'src') })).toBe(bId);
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -217,6 +243,26 @@ describe('through the hooks', () => {
     );
     expect(rows['alpha 1']).toBe(plain);
     expect(rows['bravo 1']).toMatch(new RegExp(`^${plain}~[0-9a-f]{8}$`));
+  });
+
+  it('the bash Read tracker without a host pid records under the directory’s own id', () => {
+    hook('session-start', A, { session_id: 'cc-a', source: 'startup' });
+    hook('session-start', B, { session_id: 'cc-b', source: 'startup' });
+    const r = spawnSync('bash', [join(REPO, 'scripts/post-tool-use.sh')], {
+      input: JSON.stringify({
+        session_id: 'cc-b',
+        tool_name: 'Read',
+        tool_input: { file_path: `${B}/src/h.js` },
+      }),
+      env: env(B, { CLAUDE_PLUGIN_ROOT: REPO, CLAUDE_MEM_DIR: '' }),
+      encoding: 'utf8',
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const reads = readdirSync(join(home, '.claude-mem-lite', 'runtime')).filter((f) =>
+      f.startsWith('reads-'),
+    );
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatch(/^reads-packages--api~[0-9a-f]{8}\.txt$/);
   });
 
   it('an owner record for a directory that is gone is swept at SessionStart', () => {

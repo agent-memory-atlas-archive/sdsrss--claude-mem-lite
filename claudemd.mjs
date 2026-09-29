@@ -18,7 +18,7 @@
 
 import { readFileSync, existsSync, unlinkSync, mkdirSync, rmdirSync, readdirSync, lstatSync } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { createHash } from 'crypto';
 import { memdirPath, removePluginSection, removePluginDoc, isAdopted as memdirIsAdopted } from './memdir.mjs';
 
@@ -159,6 +159,44 @@ export function readBlock(cwd, slug) {
   // line-ending-agnostic — a CRLF-saved file matching the shipped LF content
   // must NOT be seen as drifted and rewritten every session.
   return { exists: true, version: m[1], body: m[2].replace(/\r\n/g, '\n'), raw };
+}
+
+/**
+ * Is `relPath` — an UNTRACKED path as `git status --porcelain` prints it, relative to `cwd` —
+ * nothing but this plugin's own adoption output? True for a CLAUDE.md that holds only our
+ * managed block, for our detail doc (checked by its managed-by marker, so a user's file of
+ * the same name is not ours) or state sidecar, and for a `.claude/` directory holding only
+ * those. The startup dashboard and the handoff's tree state count uncommitted files to
+ * describe the USER's work; counting what the first SessionStart itself wrote told the model
+ * "2 uncommitted file(s)" on a clean repo (docs/audits/20260929-sandbox-usage-eval.md).
+ * Any read failure answers false: counting a file is the safe mistake.
+ * @param {string} cwd
+ * @param {string} relPath
+ * @param {string} slug
+ * @returns {boolean}
+ */
+export function isOwnAdoptionArtifact(cwd, relPath, slug) {
+  try {
+    const rel = String(relPath).replace(/\/+$/, '');
+    if (rel === 'CLAUDE.md') {
+      const blk = readBlock(cwd, slug);
+      return blk.body !== null && blk.raw.replace(blockRegexG(slug), '').trim() === '';
+    }
+    const docName = basename(detailDocPath(cwd, slug));
+    const stateName = basename(stateFilePath(cwd, slug));
+    const ownFile = (name) =>
+      name === stateName ||
+      (name === docName &&
+        readFileSync(join(dotClaudeDir(cwd), name), 'utf8').startsWith(managedByMarker(slug)));
+    if (rel === '.claude') {
+      const names = readdirSync(dotClaudeDir(cwd));
+      return names.length > 0 && names.every(ownFile);
+    }
+    if (rel.startsWith('.claude/') && !rel.slice(8).includes('/')) return ownFile(rel.slice(8));
+  } catch {
+    /* unreadable → not provably ours */
+  }
+  return false;
 }
 
 /**

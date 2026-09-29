@@ -3278,7 +3278,10 @@ async function repair() {
     console.log('');
     console.log(`  ${MANUAL_TARBALL_FALLBACK}`);
     console.log('');
-    process.exit(1);
+    // exitCode, not process.exit(1): exiting here skipped the finally below, so every failed
+    // repair — hook-launcher runs one unattended after ERR_MODULE_NOT_FOUND — left its
+    // staging dir (and any downloaded tarball) in the temp dir.
+    process.exitCode = 1;
   } finally {
     try {
       rmSync(stagingDir, { recursive: true, force: true });

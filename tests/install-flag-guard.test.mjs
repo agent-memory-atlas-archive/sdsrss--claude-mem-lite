@@ -179,3 +179,32 @@ describe('an inaccessible data dir is named as a permission problem', () => {
     }
   });
 });
+
+// A failed `repair` left its staging dir behind: the catch ended in process.exit(1), which
+// skips the finally that removes it. repair is also what hook-launcher runs on its own after
+// an ERR_MODULE_NOT_FOUND, so an offline machine gained a `claude-mem-lite-repair-*` dir per
+// attempt. Network stubbed out with a preloaded fetch that rejects.
+describe('a failed repair cleans up its staging dir', () => {
+  it('exits 1 and leaves no claude-mem-lite-repair-* dir', async () => {
+    const { readdirSync } = await import('node:fs');
+    const s = sandbox();
+    const offline = 'data:text/javascript,globalThis.fetch=()=>Promise.reject(new Error("offline"))';
+    const r = spawnSync(process.execPath, ['--import', offline, join(REPO, 'install.mjs'), 'repair'], {
+      cwd: s.root,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        HOME: s.home,
+        TMPDIR: s.root,
+        PATH: `${s.bin}:${process.env.PATH}`,
+        CLAUDE_MEM_DIR: join(s.root, 'data'),
+        CLAUDE_MEM_SKIP_UPDATE: '1',
+        MEM_NO_AUTO_ADOPT: '1',
+      },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout + r.stderr).toMatch(/Repair failed/);
+    expect(readdirSync(s.root).filter((n) => n.startsWith('claude-mem-lite-repair-'))).toEqual([]);
+  });
+});

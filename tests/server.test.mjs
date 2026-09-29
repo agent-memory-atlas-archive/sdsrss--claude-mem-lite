@@ -2391,6 +2391,33 @@ describe('mem_fts_check', () => {
     expect(result.details.some((d) => d.startsWith('events_fts'))).toBe(true);
   });
 
+  // E2E round 2026-09-29: every FTS table here is EXTERNAL-content, and FTS5's
+  // integrity-check compares the index against that content only when rank = 1. With the
+  // default rank the index was checked against itself, so an index gone stale behind its
+  // content — the case `fts-check` is documented for ("when search results seem wrong") —
+  // read "healthy" while search kept returning a row for a word it no longer holds.
+  it('reports an index that drifted from its content table', async () => {
+    const { checkFTSIntegrity, rebuildFTS } = await import('../schema.mjs');
+    insertSession(db, { id: 'sess-drift', project: 'test' });
+    const id = Number(
+      insertObs(db, { sessionId: 'sess-drift', title: 'race condition in writer' }).lastInsertRowid,
+    );
+    const triggers = db
+      .prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='observations'")
+      .all();
+    expect(triggers.length).toBeGreaterThan(0); // premise: the drift below bypasses real triggers
+    for (const t of triggers) db.exec(`DROP TRIGGER ${t.name}`);
+    db.prepare(
+      "UPDATE observations SET title = 'zzz', text = 'nothing', narrative = 'nothing' WHERE id = ?",
+    ).run(id);
+    for (const t of triggers) db.exec(t.sql);
+    const drifted = checkFTSIntegrity(db);
+    expect(drifted.healthy).toBe(false);
+    expect(drifted.details.find((d) => d.startsWith('observations_fts'))).toMatch(/CORRUPT/);
+    rebuildFTS(db);
+    expect(checkFTSIntegrity(db).healthy).toBe(true);
+  });
+
   it('should rebuild FTS indexes', async () => {
     const { rebuildFTS } = await import('../schema.mjs');
     insertSession(db, { id: 'sess-fts', project: 'test' });

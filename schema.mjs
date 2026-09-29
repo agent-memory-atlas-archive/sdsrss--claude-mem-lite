@@ -1467,7 +1467,11 @@ export function checkFTSIntegrity(db) {
         healthy = false;
         continue;
       }
-      db.exec(`INSERT INTO ${fts}(${fts}) VALUES('integrity-check')`);
+      // rank = 1: all four tables are EXTERNAL-content, and FTS5 compares the index with
+      // its content table only when asked to. Without it an index gone stale behind its
+      // content — what `fts-check` exists for — passed. Measured on a 5.3k-event DB copy:
+      // 46 ms for all four tables vs 28 ms without (2026-09-29).
+      db.exec(`INSERT INTO ${fts}(${fts}, rank) VALUES('integrity-check', 1)`);
       details.push(`${fts}: ok`);
     } catch (e) {
       details.push(`${fts}: CORRUPT (${e.message})`);

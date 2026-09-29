@@ -68,6 +68,9 @@ never searched slash commands either.
 - **Sample size.** n = 28 removed slash pairs. The Wilson upper bound of r_s (0.226) is above
   0.180, so the point estimate decided this, not the interval.
 - **Judge B's reasons** mostly restate the rubric ("bears on the request's task or procedure").
-  Judge A's are item-specific. B's labels agree with A's at kappa 0.73, and the decision holds on
-  A alone.
+  Judge A's are item-specific. Asked afterwards, B said it read and labelled all 145 items itself.
+  Its script only wrote the labels out, marking every item not on its relevant or partial lists
+  as irrelevant and attaching one fixed reason per label; no keyword or similarity rule assigned
+  a label. That is the judge's own account. B's labels agree with A's at kappa 0.73, and the
+  decision holds on A alone.
 - **Relevance is not use.** It is a judged proxy, on a corpus from one maintainer's machine.

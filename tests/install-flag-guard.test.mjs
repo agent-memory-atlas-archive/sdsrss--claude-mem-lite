@@ -208,3 +208,16 @@ describe('a failed repair cleans up its staging dir', () => {
     expect(readdirSync(s.root).filter((n) => n.startsWith('claude-mem-lite-repair-'))).toEqual([]);
   });
 });
+
+// uninstall printed "run `claude-mem-lite unadopt --all` — best done BEFORE uninstall, while
+// the CLI is still on PATH" right after it had removed that CLI link: advice the reader could
+// no longer follow. It now names a command that still runs.
+describe('uninstall names an unadopt command that still works afterwards', () => {
+  it('points at the kept cli.mjs, or at npx when the code is gone', () => {
+    const s = sandbox();
+    const r = run(s, ['uninstall']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toMatch(/while the CLI is still on PATH/);
+    expect(r.stdout).toMatch(/npx claude-mem-lite unadopt --all|cli\.mjs"? unadopt --all/);
+  });
+});

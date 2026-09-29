@@ -1318,13 +1318,20 @@ async function uninstall() {
   // 2b. Uninstall does NOT auto-unadopt — an adopted project may be in active use
   // in other Claude Code sessions, and adoption lives in EACH project's own
   // CLAUDE.md. `unadopt --all` now strips every block across the projects Claude
-  // Code knows about (~/.claude.json), so point at it — but note the timing: a
-  // --purge run removes the CLI symlink, so this is best done BEFORE uninstall.
+  // Code knows about (~/.claude.json), so point at it — with a command that still RUNS: this
+  // line prints after step 1b removed the CLI link, and it used to say "best done BEFORE
+  // uninstall, while the CLI is still on PATH". A non-purge uninstall keeps the code, so
+  // name its cli.mjs; with --purge (or no copy install) only npx is left.
+  const keptCli = join(INSTALL_DIR, 'cli.mjs');
+  const unadoptCmd =
+    !flags.has('--purge') && existsSync(keptCli)
+      ? `node ${shellWord(keptCli)} unadopt --all`
+      : 'npx claude-mem-lite unadopt --all';
   log('Invited-memory: project adoption left in place (each adopted project keeps its');
   log('  CLAUDE.md managed block + .claude/plugin_claude_mem_lite.md). To remove it from');
-  log('  every known project, run `claude-mem-lite unadopt --all` — best done BEFORE');
-  log('  uninstall, while the CLI is still on PATH. A project Claude Code never opened');
-  log('  is not in the known list — run `claude-mem-lite unadopt` from inside it.');
+  log(`  every known project: ${unadoptCmd}`);
+  log('  A project Claude Code never opened is not in the known list — run unadopt from');
+  log('  inside it.');
 
   // 3. Clean plugin registry entries conservatively (avoid deleting other plugins
   // from the same marketplace publisher)

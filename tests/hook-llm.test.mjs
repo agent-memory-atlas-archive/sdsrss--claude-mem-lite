@@ -2656,6 +2656,35 @@ describe('handleLLMSummary', () => {
     expect(row.key_decisions).toBe(JSON.stringify(['Chose SQLite over Postgres for zero-config deploys']));
   });
 
+  // E2E round 2026-09-29: only Array.isArray was checked, so a reply of
+  // lessons: [123, null, {…}, "real lesson"] was stored as-is and SessionStart then injected
+  // "Lessons: 123; ; [object Object]" — the one real lesson pushed out of the 3-item window.
+  it('keeps only non-empty string items in lessons / key_decisions', async () => {
+    insertSession(db, { id: 'test-session', project: 'test-proj' });
+    db.prepare(
+      `
+      INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts, files_read, files_modified, importance, created_at, created_at_epoch)
+      VALUES (?, ?, '', 'feature', 'Auth work', '', 'Narrative', '', '', '[]', '[]', 1, ?, ?)
+    `,
+    ).run('test-session', 'test-proj', new Date().toISOString(), Date.now());
+    callLLM.mockReturnValue(
+      JSON.stringify({
+        request: 'r',
+        completed: 'c',
+        lessons: [123, null, { evil: 'obj' }, '  ', 'real lesson here'],
+        key_decisions: [false, ['nested'], 'a real decision'],
+      }),
+    );
+    await handleLLMSummary();
+    const row = db.prepare('SELECT * FROM session_summaries WHERE memory_session_id = ?').get('test-session');
+    expect(row.lessons).toBe(JSON.stringify(['real lesson here']));
+    expect(row.key_decisions).toBe(JSON.stringify(['a real decision']));
+    // …and a row written before the filter still renders only its strings.
+    const { buildSummaryLines } = await import('../hook-context.mjs');
+    const lines = buildSummaryLines({ lessons: JSON.stringify([123, null, { a: 1 }, 'kept']) });
+    expect(lines).toContain('Lessons: kept');
+  });
+
   it('coerces an array-valued completed/remaining_items to a string instead of throwing (R3)', async () => {
     insertSession(db, { id: 'test-session', project: 'test-proj' });
     db.prepare(

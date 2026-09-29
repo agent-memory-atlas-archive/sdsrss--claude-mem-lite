@@ -1601,24 +1601,25 @@ ${obsList}`;
     // empty request: INSERT writes '' and the UPDATE keeps the row's own request (or an older row's)
     // when the reply's is empty. Use asText in the gate so a non-string / empty-array field can't falsely
     // trigger it.
+    // Items are kept only when they are non-empty strings. Array.isArray alone stored a reply of
+    // [123, null, {…}, "real lesson"] as-is, and SessionStart then injected
+    // "Lessons: 123; ; [object Object]", pushing the real lesson out of its 3-item window.
+    const textItems = (v) =>
+      Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()) : [];
+    const lessons = llmParsed ? textItems(llmParsed.lessons) : [];
+    const keyDecisions = llmParsed ? textItems(llmParsed.key_decisions) : [];
     const hasSummaryContent =
       llmParsed &&
       (asText(llmParsed.request) ||
         asText(llmParsed.completed) ||
         asText(llmParsed.remaining_items) ||
         asText(llmParsed.next_steps) ||
-        (Array.isArray(llmParsed.lessons) && llmParsed.lessons.length > 0) ||
-        (Array.isArray(llmParsed.key_decisions) && llmParsed.key_decisions.length > 0));
+        lessons.length > 0 ||
+        keyDecisions.length > 0);
     if (hasSummaryContent) {
       const now = new Date();
-      const lessonsJson =
-        Array.isArray(llmParsed.lessons) && llmParsed.lessons.length > 0
-          ? JSON.stringify(llmParsed.lessons)
-          : null;
-      const decisionsJson =
-        Array.isArray(llmParsed.key_decisions) && llmParsed.key_decisions.length > 0
-          ? JSON.stringify(llmParsed.key_decisions)
-          : null;
+      const lessonsJson = lessons.length > 0 ? JSON.stringify(lessons) : null;
+      const decisionsJson = keyDecisions.length > 0 ? JSON.stringify(keyDecisions) : null;
 
       // Upgrade the session's summary row instead of creating another. This worker runs after
       // EVERY Stop (one per assistant turn) and again from SessionStart's /clear path; selecting

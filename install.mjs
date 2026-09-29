@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // claude-mem-lite Installer — Smart install/uninstall/status/doctor
 
+import { OUR_MCP_SERVER_RE, isOurMcpRegistration } from './lib/mcp-ownership.mjs';
 import { execSync, execFileSync } from 'child_process';
 import {
   readFileSync,
@@ -623,21 +624,9 @@ function createCliSymlink() {
   }
 }
 
-/**
- * `mem` is the pre-v2.78 name of our server — and a generic one: the MCP reference memory
- * server is commonly registered under it. install, uninstall and the plugin's setup.sh removed
- * a user-scope `mem` without looking at what it ran, so a user's own `mem` server vanished.
- * A registration under that name is ours only when it runs our server; `mem-lite` always is.
- * scripts/setup.sh carries this pattern inline (tests/mcp-legacy-name-ownership.test.mjs).
- */
-export const OUR_MCP_SERVER_RE = /claude-mem-lite[\w.-]*[\\/]+(?:scripts[\\/]+launch|server)\.mjs/;
-
-export function isOurMcpRegistration(name, entry) {
-  if (name === 'mem-lite') return true;
-  if (!entry || typeof entry !== 'object') return false;
-  const args = Array.isArray(entry.args) ? entry.args : [];
-  return OUR_MCP_SERVER_RE.test([entry.command, ...args].join(' '));
-}
+// Ownership of a user-scope `mem` registration lives in lib/mcp-ownership.mjs (shared with
+// hook-update.mjs); re-exported here for the callers and tests that import it from install.mjs.
+export { OUR_MCP_SERVER_RE, isOurMcpRegistration };
 
 /**
  * User-scope names install/uninstall may remove: `mem-lite`, plus `mem` when its entry in

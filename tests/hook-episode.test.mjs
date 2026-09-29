@@ -431,6 +431,37 @@ describe('hook-episode.mjs', () => {
       expect(remaining.length).toBe(1);
     });
 
+    // D14: buffers are per Claude Code process, and so is a lock-contention spill. Another
+    // session's entry must wait for that session's buffer, not join this one's.
+    it("skips pending entries of another Claude Code process, merges this one's and legacy ones", () => {
+      const prev = process.env.CLAUDE_PID;
+      try {
+        const entry = { tool: 'Edit', desc: 'edit', files: [], ts: Date.now() };
+        process.env.CLAUDE_PID = '4102';
+        writePendingEntry(entry, 'sess-b', 'proj');
+        process.env.CLAUDE_PID = '4101';
+        writePendingEntry(entry, 'sess-a', 'proj');
+        const ts = Date.now();
+        // Written before `host` existed: merges as it always did.
+        writeFileSync(
+          join(RUNTIME_DIR, `pending-${ts}-lgcy.json`),
+          JSON.stringify({ entry, sessionId: 's', project: 'proj', ts }),
+        );
+
+        const ep = createEpisode('sess-a', 'proj');
+        mergePendingEntries(ep);
+
+        expect(ep.entries.length).toBe(2);
+        const left = readdirSync(RUNTIME_DIR).filter((f) => f.startsWith('pending-'));
+        expect(left.map((f) => JSON.parse(readFileSync(join(RUNTIME_DIR, f), 'utf8')).host)).toEqual([
+          '@h4102',
+        ]);
+      } finally {
+        if (prev === undefined) delete process.env.CLAUDE_PID;
+        else process.env.CLAUDE_PID = prev;
+      }
+    });
+
     it('skips expired pending entries (>1 hour)', () => {
       // Write a pending file with old timestamp
       const ts = Date.now() - 2 * 3600000; // 2 hours ago

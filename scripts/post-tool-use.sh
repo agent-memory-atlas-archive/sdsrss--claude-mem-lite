@@ -99,6 +99,12 @@ if [[ "$tool" == "Read" ]]; then
     project="${project//[^a-zA-Z0-9_.-]/-}"
     project="${project:0:100}"
     project="${project:-unknown}"
+    # D14: one reads file per Claude Code process, like the episode buffer it feeds
+    # (hook-shared.mjs hostScopeSuffix): `@h<CLAUDE_PID>` when the host set a pid, else nothing.
+    _reads_key="$project"
+    if [[ "${CLAUDE_PID:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+      _reads_key="${project}@h${CLAUDE_PID}"
+    fi
     # Honor CLAUDE_MEM_DIR relocation (mirrors schema.mjs DB_DIR → hook-shared RUNTIME_DIR).
     # hook.mjs flushEpisode reads reads-<project>.txt from CLAUDE_MEM_DIR/runtime; if this
     # bash fast-path wrote to $HOME unconditionally, a relocated install would drop all
@@ -161,7 +167,7 @@ if [[ "$tool" == "Read" ]]; then
     umask 077
     mkdir -p "$runtime_dir" 2>/dev/null
     # Use printf to avoid shell interpretation of special characters in file paths
-    printf '%s\n' "$file_path" >> "${runtime_dir}/reads-${project}.txt"
+    printf '%s\n' "$file_path" >> "${runtime_dir}/reads-${_reads_key}.txt"
   fi
   exit 0
 fi

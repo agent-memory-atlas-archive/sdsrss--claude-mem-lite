@@ -69,6 +69,7 @@ import {
   mergePendingEntries,
   episodeHasSignificantContent,
   explainSignificance,
+  orphanEpisodeFiles,
 } from './hook-episode.mjs';
 // CODE_DIR, not DB_DIR: the schema-skew notice asks which CODE homes exist, and those are
 // always homedir-rooted even when CLAUDE_MEM_DIR relocates the data.
@@ -88,6 +89,8 @@ import {
   HANDOFF_EXPIRY_CLEAR,
   HANDOFF_EXPIRY_EXIT,
   sessionFile,
+  hostScopeSuffix,
+  deadHostFiles,
   getSessionId,
   createSessionId,
   openDb,
@@ -367,8 +370,10 @@ if (!event) process.exit(0);
 // Regression chain: v2.33.1 introduced the receipt; v2.33.3 misdiagnosed the
 // Stop rejection as event-name mismatch; v2.33.4 is the root-cause fix.
 const RECEIPT_EVENTS = new Set(['PostToolUse', 'SessionStart', 'UserPromptSubmit']);
+// Returns false when the buffer was left for a retry (no openable DB, or the flush file could
+// not be written) — adoptOrphanEpisodes puts a claimed buffer back on false.
 function flushEpisode(episode, hookEventName = 'PostToolUse', receiverSession = null) {
-  if (!episode || episode.entries.length === 0) return;
+  if (!episode || episode.entries.length === 0) return true;
 
   // Acquire the DB ONCE, up front, and bail before touching anything destructive when it
   // will not open. Every persistence step below is a no-op without it (saveObservation
@@ -380,9 +385,9 @@ function flushEpisode(episode, hookEventName = 'PostToolUse', receiverSession = 
   // under `hook-shared:db-open`. Reusing the handle for the immediate saves also drops
   // this path from one open per sub-episode to one per flush.
   const db = openDb();
-  if (!db) return;
+  if (!db) return false;
   try {
-    flushEpisodeWithDb(db, episode, hookEventName, receiverSession);
+    return flushEpisodeWithDb(db, episode, hookEventName, receiverSession);
   } finally {
     try {
       db.close();
@@ -500,7 +505,8 @@ function flushEpisodeWithDb(db, episode, hookEventName, receiverSession = null) 
 
   // Collect Read file paths tracked by post-tool-use.sh
   // Use rename to atomically collect — prevents losing concurrent appends
-  const readsFile = join(RUNTIME_DIR, `reads-${episode.project || inferProject()}.txt`);
+  // Per process, like the buffer (D14); scripts/post-tool-use.sh builds the same name.
+  const readsFile = join(RUNTIME_DIR, `reads-${(episode.project || inferProject()) + hostScopeSuffix()}.txt`);
   const readsCollect = readsFile + `.collect-${Date.now()}`;
   let readsHeld = 0;
   if (willPersist) {
@@ -581,7 +587,7 @@ function flushEpisodeWithDb(db, episode, hookEventName, receiverSession = null) 
     subs: subs.length,
     writefail,
   });
-  if (writefail) return;
+  if (writefail) return false;
 
   // Flush-time hints, gated exactly as before (isSignificant → anySignificant). v2.33.4:
   // Stop rejects hookSpecificOutput.
@@ -624,6 +630,7 @@ function flushEpisodeWithDb(db, episode, hookEventName, receiverSession = null) 
   try {
     unlinkSync(episodeFile());
   } catch {}
+  return true;
 }
 
 // Save one episode-shaped object: immediate rule-based observation (if
@@ -2705,6 +2712,74 @@ function noteLocalSteeringOnce(project) {
   }
 }
 
+/**
+ * Flush (or, past STALE_EPISODE_BUFFER_AGE_MS, discard) a buffer a previous session left at
+ * `file`. `episode` is its parsed content, or null when there is none.
+ */
+function flushLeftoverEpisode(file, episode, ccSessionId) {
+  // false only when a flush was attempted and left the buffer for a retry.
+  let stale = false;
+  try {
+    stale = Date.now() - statSync(file).mtimeMs > STALE_EPISODE_BUFFER_AGE_MS;
+  } catch {
+    /* no buffer file — nothing below runs on a null episode */
+  }
+  if (stale) {
+    debugLog(
+      'INFO',
+      'session-start',
+      `discarding stale episode buffer (>${STALE_EPISODE_BUFFER_AGE_MS}ms): ${file}`,
+    );
+    try {
+      unlinkSync(file);
+    } catch {
+      /* best-effort */
+    }
+  } else if (episode && episode.entries && episode.entries.length > 0) {
+    return flushEpisode(episode, 'SessionStart', ccSessionId);
+  }
+  return true;
+}
+
+/**
+ * D14: buffers are per Claude Code process, so the buffer of a process that exited mid-turn
+ * (no Stop) — or the per-project one an older version wrote — is read by nobody. Before D14
+ * the next session in the project flushed it here, and it still does: each is claimed by an
+ * atomic rename (two SessionStarts cannot both take one), flushed under the session id it
+ * carries, and removed. Skipped when this process's own buffer survived its flush above (no
+ * openable DB): an orphan flushed now would fail the same way. Called under the episode lock.
+ */
+function adoptOrphanEpisodes(ccSessionId) {
+  if (existsSync(episodeFile())) return;
+  for (const orphan of orphanEpisodeFiles()) {
+    const claim = `${orphan}.claim-${process.pid}`;
+    try {
+      renameSync(orphan, claim);
+    } catch {
+      continue; // another session claimed it first
+    }
+    let episode = null;
+    try {
+      episode = JSON.parse(readFileSync(claim, 'utf8'));
+    } catch {
+      /* unreadable — dropped with the claim below, as the sweep would */
+    }
+    if (!flushLeftoverEpisode(claim, episode, ccSessionId)) {
+      try {
+        renameSync(claim, orphan); // not flushed: back where the next SessionStart looks
+      } catch {
+        /* left as crash residue for the 1h sweep */
+      }
+      return;
+    }
+    try {
+      unlinkSync(claim);
+    } catch {
+      /* the stale branch already removed it */
+    }
+  }
+}
+
 async function handleSessionStart() {
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
@@ -2716,6 +2791,16 @@ async function handleSessionStart() {
     sweepStaleProjectMarkers(RUNTIME_DIR);
   } catch {
     /* best-effort */
+  }
+  // D14: one session file per Claude Code process. Only that process's /clear or /compact ever
+  // reads it, so once the process is gone the file is dead weight — reap this project's now
+  // instead of letting one per launch pile up for the 30-day marker GC.
+  for (const f of deadHostFiles(`session-${inferProject()}`)) {
+    try {
+      unlinkSync(f);
+    } catch {
+      /* best-effort */
+    }
   }
   // Bound the opt-in metrics sink, which lives under DB_DIR. Runs even when
   // metrics are disabled, so shards left by a since-toggled-off run still get pruned.
@@ -2832,29 +2917,8 @@ async function handleSessionStart() {
   // an order of magnitude?"), asked at the other end.
   if (acquireLock()) {
     try {
-      let stale = false;
-      try {
-        stale = Date.now() - statSync(episodeFile()).mtimeMs > STALE_EPISODE_BUFFER_AGE_MS;
-      } catch {
-        /* no buffer file — readEpisode() returns null below */
-      }
-      if (stale) {
-        debugLog(
-          'INFO',
-          'session-start',
-          `discarding stale episode buffer (>${STALE_EPISODE_BUFFER_AGE_MS}ms): ${episodeFile()}`,
-        );
-        try {
-          unlinkSync(episodeFile());
-        } catch {
-          /* best-effort */
-        }
-      } else {
-        const prevEpisode = readEpisode();
-        if (prevEpisode && prevEpisode.entries && prevEpisode.entries.length > 0) {
-          flushEpisode(prevEpisode, 'SessionStart', ccSessionId);
-        }
-      }
+      flushLeftoverEpisode(episodeFile(), readEpisode(), ccSessionId);
+      adoptOrphanEpisodes(ccSessionId);
     } finally {
       releaseLock();
     }

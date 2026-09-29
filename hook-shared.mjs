@@ -376,8 +376,75 @@ try {
 
 // ─── Session ID Management ───────────────────────────────────────────────────
 
+/**
+ * The Claude Code process this hook runs under, as a file-name suffix: `@h<pid>`, or '' when
+ * the host did not say.
+ *
+ * D14: the session file and the episode buffer were keyed by PROJECT, so a second session opened
+ * in the same project overwrote the first one's session file, and every later hook of the first
+ * session ran under the second one's id — its handoff "Working On" was the other session's
+ * prompt, one summary row stood for two sessions, and one session's Stop flushed the other's
+ * work in progress. The host PROCESS is the key, not the host session_id, because /clear rotates
+ * session_id inside the same process and SessionStart's /clear branch has to find the session
+ * that was just cleared: that is this process's file.
+ *
+ * `CLAUDE_PID` is set by Claude Code on hook subprocesses (observed 2026-09-29: the hooks of two
+ * concurrent sessions each saw their own host's pid, and it is inherited by spawnBackground
+ * workers). It is not in the documented hook contract, so absent or malformed it degrades to ''
+ * — the per-project names this replaced, byte for byte. `@` cannot occur in a project id
+ * (inferProject keeps `[a-zA-Z0-9_.-]`), so a suffixed name never collides with another
+ * project's plain one. scripts/post-tool-use.sh mirrors this rule for the reads file.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string}
+ */
+export function hostScopeSuffix(env = process.env) {
+  const pid = env.CLAUDE_PID;
+  return typeof pid === 'string' && /^[1-9]\d{0,9}$/.test(pid) ? `@h${pid}` : '';
+}
+
 export function sessionFile() {
-  return join(RUNTIME_DIR, `session-${inferProject()}`);
+  return join(RUNTIME_DIR, `session-${inferProject()}${hostScopeSuffix()}`);
+}
+
+/** True unless `pid` is certainly gone (ESRCH); EPERM means it exists under another user. */
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code !== 'ESRCH';
+  }
+}
+
+/**
+ * Runtime files `<stem>@h<pid><ext>` left by a Claude Code process that has exited — files no
+ * live session will read again (D14). Never this process's own, and none at all when this
+ * process has no host pid. A recycled pid reads as alive, so such a file waits for the
+ * age-based sweeps instead: the error is towards keeping.
+ *
+ * @param {string} stem e.g. `ep-<project>`
+ * @param {string} [ext] e.g. `.json`
+ * @returns {string[]} absolute paths
+ */
+export function deadHostFiles(stem, ext = '') {
+  const own = hostScopeSuffix();
+  if (!own) return [];
+  let names;
+  try {
+    names = readdirSync(RUNTIME_DIR);
+  } catch {
+    return [];
+  }
+  const prefix = `${stem}@h`;
+  const out = [];
+  for (const f of names) {
+    if (!f.startsWith(prefix) || !f.endsWith(ext)) continue;
+    const pid = f.slice(prefix.length, f.length - ext.length);
+    if (!/^[1-9]\d{0,9}$/.test(pid) || `@h${pid}` === own || processAlive(Number(pid))) continue;
+    out.push(join(RUNTIME_DIR, f));
+  }
+  return out;
 }
 
 export function getSessionId() {

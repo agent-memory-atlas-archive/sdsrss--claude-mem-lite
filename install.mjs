@@ -1525,6 +1525,25 @@ async function cleanupHooks() {
     ok('No claude-mem-lite hooks found in settings.json');
   }
 
+  // With the plugin enabled, a direct `install` empties the plugin's hooks.json (the dedup in
+  // dedupePluginCacheAndHooks), so the settings.json entries just removed were the only
+  // registration: capture stopped with "Removed N" as the last word. Same check and repair
+  // status/doctor print; this is the moment it happens.
+  if (removed > 0 && settings.enabledPlugins?.[PLUGIN_KEY] === true) {
+    const shape = detectInstallShape({ home: homedir(), projectDir: PROJECT_DIR, installDir: INSTALL_DIR });
+    const root = shape.activePluginVersion?.root;
+    if (root && !pluginCacheHookEvents(root).ok) {
+      warn(
+        `The enabled plugin's hooks/hooks.json registers none — every hook is now unregistered (an earlier ` +
+          `direct install emptied it to avoid duplicates). Repair: ` +
+          hookManifestRepairHint(
+            root,
+            join(homedir(), '.claude', 'plugins', 'marketplaces', MARKETPLACE_KEY),
+          ),
+      );
+    }
+  }
+
   console.log('');
 }
 

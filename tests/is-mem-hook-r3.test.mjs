@@ -128,3 +128,55 @@ describe('cleanup-hooks keeps user hooks in and around our groups', () => {
     }
   });
 });
+
+// E2E round 2026-09-29 (install P1-8): with the plugin installed AND a direct install, the
+// direct `install` empties the plugin's hooks.json so hooks do not fire twice. A later
+// `cleanup-hooks` then removed the settings.json copy too, printed "Removed N …", and left
+// the enabled plugin with no hooks at all — capture silently stopped. It now says so.
+describe('cleanup-hooks warns when it leaves an enabled plugin with no hooks', () => {
+  function pluginHome({ manifestHooks }) {
+    const root = mkdtempSync(join(tmpdir(), 'cml-hookprune-plugin-'));
+    const home = join(root, 'home');
+    const cache = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '6.20.0');
+    mkdirSync(join(cache, 'hooks'), { recursive: true });
+    mkdirSync(join(cache, 'scripts'), { recursive: true });
+    writeFileSync(join(cache, 'scripts', 'launch.mjs'), '// stub'); // what marks a cache dir startable
+    writeFileSync(join(cache, 'package.json'), '{"name":"claude-mem-lite","version":"6.20.0"}');
+    writeFileSync(join(cache, 'hooks', 'hooks.json'), JSON.stringify({ hooks: manifestHooks }));
+    writeFileSync(
+      join(home, '.claude', 'plugins', 'installed_plugins.json'),
+      JSON.stringify({
+        version: 2,
+        plugins: { 'claude-mem-lite@sdsrss': [{ installPath: cache, version: '6.20.0' }] },
+      }),
+    );
+    const ours = 'node "/h/.claude-mem-lite/scripts/hook-launcher.mjs" hook.mjs stop';
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({
+        enabledPlugins: { 'claude-mem-lite@sdsrss': true },
+        hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: ours }] }] },
+      }),
+    );
+    const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'cleanup-hooks'], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, CLAUDE_MEM_DIR: join(root, 'data'), MEM_NO_AUTO_ADOPT: '1' },
+    });
+    rmSync(root, { recursive: true, force: true });
+    return r;
+  }
+
+  it('an emptied plugin manifest gets a warning and the repair', () => {
+    const r = pluginHome({ manifestHooks: {} });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/Removed 1 claude-mem-lite hook configuration/);
+    expect(r.stdout).toMatch(/plugin's hooks\/hooks\.json registers none — every hook is now unregistered/);
+    expect(r.stdout).toMatch(/reinstall the plugin|cp /);
+  });
+
+  it('a working plugin manifest needs no warning', () => {
+    const r = pluginHome({ manifestHooks: { Stop: [{ hooks: [{ type: 'command', command: 'x' }] }] } });
+    expect(r.stdout).toMatch(/Removed 1/);
+    expect(r.stdout).not.toMatch(/every hook is now unregistered/);
+  });
+});

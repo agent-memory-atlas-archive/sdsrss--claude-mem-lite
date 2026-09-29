@@ -20,7 +20,16 @@
 
 import { randomUUID } from 'crypto';
 import { join, resolve as resolvePath } from 'path';
-import { readFileSync, writeFileSync, unlinkSync, readdirSync, renameSync, statSync, existsSync } from 'fs';
+import {
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  existsSync,
+  realpathSync,
+} from 'fs';
 import { homedir } from 'os';
 import {
   inferProject,
@@ -2644,12 +2653,20 @@ async function buildInjectedSteering() {
 // block ONCE per project on the human systemMessage channel. A preserved runtime marker keeps
 // it to once; MEM_NO_ADOPT_HINT=1 (the existing adopt-hint switch) silences it.
 const ADOPT_OFFER_MARKER_PREFIX = '.adopt-offered-';
+function realOrResolved(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolvePath(p);
+  }
+}
 function offerAdoptOnce(project) {
   if (process.env.MEM_NO_ADOPT_HINT === '1') return;
   // /adopt at $HOME would write ~/CLAUDE.md, an ancestor of every project below it — the case
   // lib/local-steering.mjs refuses (pre-tag claims review, P3). Do not suggest it there.
   const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  if (resolvePath(cwd) === resolvePath(homedir())) return;
+  // Real paths: the host passes the real one, and $HOME may be a symlink to it (delta review P3-14).
+  if (realOrResolved(cwd) === realOrResolved(homedir())) return;
   try {
     const marker = join(RUNTIME_DIR, `${ADOPT_OFFER_MARKER_PREFIX}${project}`);
     if (existsSync(marker)) return;

@@ -19,6 +19,7 @@ import {
   rmSync,
   readdirSync,
   symlinkSync,
+  appendFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -299,7 +300,8 @@ describe('a removed or opted-out local block stays removed', () => {
     mkdirSync(sub);
     mkdirSync(memdirPath(app()), { recursive: true });
     writeFileSync(disableSentinelPath(memdirPath(app())), '{}');
-    expect(silentAutoAdopt({ cwd: sub }).action).toBe('inject');
+    // Off means off: no file, and no injected copy or /adopt offer either (delta review P2-2).
+    expect(silentAutoAdopt({ cwd: sub })).toMatchObject({ action: 'disabled', reason: 'root-disabled' });
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
   });
 
@@ -399,6 +401,10 @@ describe('SessionStart end to end', () => {
     expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
     expect(status(app)).toBe('');
     expect(first.systemMessage).toMatch(/CLAUDE\.local\.md/);
+    // The undo it names is the one that holds (a removed file stays removed).
+    expect(first.systemMessage).toMatch(
+      /Delete it or run `claude-mem-lite unadopt` and it is not written again/,
+    );
     // The block points at a detail doc that exists, in the plugin's data dir, named under ~.
     const ref = /→ `([^`]+plugin_claude_mem_lite\.md)`/.exec(readFileSync(join(app, LOCAL_MD), 'utf8'))?.[1];
     const abs = ref?.replace(/^~/, home);
@@ -412,6 +418,30 @@ describe('SessionStart end to end', () => {
     const out = sessionStart(home);
     expect(out.hookSpecificOutput.additionalContext).toContain(HEADING);
     expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
+  });
+
+  // Claude Code hands the hook the real path; $HOME may be a symlink to it (delta review P3-14).
+  it('at a symlinked $HOME entered by its real path, /adopt is not suggested either', () => {
+    const real = join(home, 'realhome');
+    const link = join(home, 'linkhome');
+    mkdirSync(real);
+    symlinkSync(real, link);
+    const out = sessionStart(real, { HOME: link });
+    expect(out.hookSpecificOutput.additionalContext).toContain(HEADING);
+    expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
+  });
+
+  // Delta review P2-2: `adopt --disable` at the root said it covered subdirectory sessions, and
+  // those still had the steering injected plus the /adopt offer.
+  it('a subdirectory session of a repository opted out at its root gets no steering and no offer', () => {
+    mkdirSync(memdirPath(app), { recursive: true });
+    writeFileSync(disableSentinelPath(memdirPath(app)), '{}');
+    const sub = join(app, 'packages', 'web');
+    mkdirSync(sub, { recursive: true });
+    const out = sessionStart(sub);
+    expect(out.hookSpecificOutput?.additionalContext ?? '').not.toContain(HEADING);
+    expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
+    expect(existsSync(join(app, LOCAL_MD))).toBe(false);
   });
 
   it('outside git the steering is still injected', () => {
@@ -623,5 +653,298 @@ describe('pre-tag defect review: local steering edges', () => {
       /local: +✓ .*CLAUDE\.local\.md/,
     );
     expect(existsSync(join(app(), LOCAL_MD))).toBe(true);
+  });
+});
+
+// Pre-tag delta review, round 2 (v6.20.0, against 067a423): P1-1 a root that became an npm
+// package after the file was written, P2-1 `files` globs, P2-3 a symlinked $HOME, P2-4 removal
+// through a symlink, P2-5 notes left in a plugin-created file, and the mutations the suite could
+// not catch (M4-M7 the `files` matcher, M9 an unparseable package.json, M12 the rollback of an
+// exclude file it created, M18 a corrupt state file, A9/A10 --enable, Q1 quiet-scope's legacy
+// sentinel).
+describe('pre-tag delta review: local steering edges, round 2', () => {
+  const app = () => join(home, 'work', 'app');
+  const withCwd = (dir, fn) => {
+    const before = process.cwd();
+    process.chdir(dir);
+    process.env.CLAUDE_PROJECT_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  };
+  const pkg = (dir, obj) => writeFileSync(join(dir, 'package.json'), JSON.stringify(obj));
+  const commitAll = (dir, msg) => git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', msg);
+  const legacyOptOut = () => {
+    const legacy = join(home, '.claude', 'projects', app().replace(/[^a-zA-Z0-9]/g, '-'), 'memory');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(disableSentinelPath(legacy), '{}');
+  };
+  beforeEach(() => initRepo(app()));
+
+  it('a root that becomes a publishable package loses the block written before, and gets it back once private', () => {
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+    pkg(app(), { name: 'lib', version: '1.0.0' });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-npm-publishable',
+    });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+    // The plugin took it out, not the user, so it is not remembered as a removal.
+    pkg(app(), { name: 'lib', version: '1.0.0', private: true });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  it('with template refresh frozen, a root that became a package loses the block too', () => {
+    silentAutoAdopt({ cwd: app() });
+    pkg(app(), { name: 'lib', version: '1.0.0' });
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    try {
+      expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+    } finally {
+      delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
+    }
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('taking the block out of a package root keeps the user’s own notes in the file', () => {
+    silentAutoAdopt({ cwd: app() });
+    appendFileSync(join(app(), LOCAL_MD), '\nmy notes\n');
+    pkg(app(), { name: 'lib', version: '1.0.0' });
+    silentAutoAdopt({ cwd: app() });
+    const text = readFileSync(join(app(), LOCAL_MD), 'utf8');
+    expect(text).toContain('my notes');
+    expect(text).not.toContain(HEADING);
+  });
+
+  // Ground truth: `npm pack --dry-run --json` (npm 11.19.0), 2026-09-29, each list in its own
+  // package with a CLAUDE.local.md at the root: every list below shipped it.
+  it.each([
+    ['**/*.md'],
+    ['*.*'],
+    ['/'],
+    ['/*'],
+    ['./'],
+    ['*'],
+    ['*.md'],
+    ['*.local.md'],
+    ['C*'],
+    ['[A-Z]*'],
+    ['{lib,*.md}'],
+    ['CLAUDE.local.md'],
+    ['./CLAUDE.local.md'],
+    ['lib/../CLAUDE.local.md'],
+    ['lib/../*.md'],
+    ['?LAUDE.local.md'],
+  ])('a `files` entry npm ships the root file under (%s) gets no file', (entry) => {
+    pkg(app(), { name: 'lib', version: '1.0.0', files: [entry] });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-npm-publishable',
+    });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  // Same run: none of these shipped it.
+  it.each([
+    [[]],
+    [['index.js']],
+    [['lib/']],
+    [['dist/**/*.js']],
+    [['lib/*.md']],
+    [['index.js', '!CLAUDE.local.md']],
+  ])('a `files` list that leaves the root file out (%j) keeps the local file', (files) => {
+    pkg(app(), { name: 'lib', version: '1.0.0', files });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', written: 'created' });
+  });
+
+  // npm 11 does not ship the file under `.`; the matcher refuses it anyway, on purpose: a
+  // missing file costs injection, a shipped one leaks.
+  it('a `files` entry of `.` is refused (the conservative reading)', () => {
+    pkg(app(), { name: 'lib', version: '1.0.0', files: ['.'] });
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ reason: 'local-npm-publishable' });
+  });
+
+  it('a root .npmignore does not override `files`, so naming the file there does not keep it out', () => {
+    pkg(app(), { name: 'lib', version: '1.0.0', files: ['*.md'] });
+    writeFileSync(join(app(), '.npmignore'), 'CLAUDE.local.md\n');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ reason: 'local-npm-publishable' });
+  });
+
+  it('an unparseable package.json counts as publishable', () => {
+    writeFileSync(join(app(), 'package.json'), '{ "name": ');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ reason: 'local-npm-publishable' });
+  });
+
+  it('a $HOME reached through a symlink is still never a steering root', () => {
+    const real = join(home, 'realhome');
+    const link = join(home, 'linkhome');
+    mkdirSync(join(real, 'code', 'scratch'), { recursive: true });
+    symlinkSync(real, link);
+    git(real, 'init', '-q');
+    process.env.HOME = link;
+    expect(isSharedAncestor(real)).toBe(true);
+    expect(silentAutoAdopt({ cwd: join(link, 'code', 'scratch') }).action).not.toBe('local');
+    expect(existsSync(join(real, LOCAL_MD))).toBe(false);
+  });
+
+  it('a symlinked CLAUDE.local.md is never edited through the link: not by a session, unadopt or --disable', () => {
+    const other = join(home, 'work', 'other');
+    initRepo(other);
+    silentAutoAdopt({ cwd: other });
+    const before = readFileSync(join(other, LOCAL_MD), 'utf8');
+    expect(before).toContain(HEADING);
+    symlinkSync(join(other, LOCAL_MD), join(app(), LOCAL_MD));
+    writeManaged(app(), { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    silentAutoAdopt({ cwd: app() });
+    expect(readFileSync(join(other, LOCAL_MD), 'utf8')).toBe(before);
+    withCwd(app(), () => cmdUnadopt([]));
+    expect(readFileSync(join(other, LOCAL_MD), 'utf8')).toBe(before);
+    withCwd(app(), () => cmdAdopt(['--disable']));
+    expect(readFileSync(join(other, LOCAL_MD), 'utf8')).toBe(before);
+    const lines = [];
+    const orig = console.log;
+    console.log = (m) => lines.push(String(m));
+    try {
+      withCwd(app(), () => cmdAdopt([]));
+    } finally {
+      console.log = orig;
+    }
+    expect(readFileSync(join(other, LOCAL_MD), 'utf8')).toBe(before);
+    expect(lines.join('\n')).toMatch(/left .*CLAUDE\.local\.md alone: it is a symlink/);
+  });
+
+  // The host loads the file whatever the plugin may write, so a block already in it is not
+  // injected a second time.
+  it('a symlink to a file that carries the block is not injected on top of it', () => {
+    const other = join(home, 'work', 'other');
+    initRepo(other);
+    silentAutoAdopt({ cwd: other });
+    symlinkSync(join(other, LOCAL_MD), join(app(), LOCAL_MD));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'local-symlink',
+    });
+  });
+
+  it('a tracked CLAUDE.local.md that carries the block is not injected on top of it', () => {
+    silentAutoAdopt({ cwd: app() });
+    git(app(), 'add', '-f', LOCAL_MD);
+    commitAll(app(), 'commit the local file');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'already-adopted',
+      reason: 'local-tracked',
+    });
+  });
+
+  it('unadopt, adopt and adopt --disable keep a plugin-created file with the user’s notes out of `git status`', () => {
+    for (const [i, run] of [
+      () => cmdUnadopt([]),
+      () => cmdAdopt([]),
+      () => cmdAdopt(['--disable']),
+    ].entries()) {
+      const dir = join(home, 'work', `notes${i}`);
+      initRepo(dir);
+      silentAutoAdopt({ cwd: dir });
+      appendFileSync(join(dir, LOCAL_MD), '\nmy notes\n');
+      withCwd(dir, run);
+      expect(readFileSync(join(dir, LOCAL_MD), 'utf8'), `verb ${i}`).toContain('my notes');
+      expect(status(dir), `verb ${i}`).not.toMatch(/CLAUDE\.local\.md/);
+    }
+  });
+
+  it('a CLAUDE.local.md the user had before goes back to how git saw it when the block is removed', () => {
+    writeFileSync(join(app(), LOCAL_MD), 'mine\n');
+    expect(status(app())).toBe('?? CLAUDE.local.md');
+    silentAutoAdopt({ cwd: app() });
+    expect(status(app())).toBe('');
+    withCwd(app(), () => cmdUnadopt([]));
+    expect(status(app())).toBe('?? CLAUDE.local.md');
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toBe('mine\n');
+  });
+
+  it('rolling back a useless exclude entry removes an exclude file it had to create', () => {
+    rmSync(join(app(), '.git', 'info', 'exclude'));
+    writeFileSync(join(app(), '.gitignore'), '!CLAUDE.local.md\n');
+    git(app(), 'add', '.gitignore');
+    commitAll(app(), 'negate');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ reason: 'local-exclude-failed' });
+    expect(existsSync(join(app(), '.git', 'info', 'exclude'))).toBe(false);
+  });
+
+  it('a corrupt state file still reads as "created here": a deleted file stays deleted', () => {
+    silentAutoAdopt({ cwd: app() });
+    rmSync(join(app(), LOCAL_MD));
+    writeFileSync(join(app(), '.git', 'claude-mem-lite-local-steering.json'), 'not json');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-removed' });
+  });
+
+  it('with CLAUDE_CONFIG_DIR, adopt --enable removes an opt-out left under ~/.claude', () => {
+    const cfg = join(home, 'cfg');
+    mkdirSync(cfg);
+    legacyOptOut();
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    try {
+      expect(silentAutoAdopt({ cwd: app() }).action).toBe('disabled');
+      withCwd(app(), () => cmdAdopt(['--enable']));
+      expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
+  });
+
+  it('adopt --enable --all re-arms every known project', () => {
+    const other = join(home, 'work', 'other');
+    initRepo(other);
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [app()]: {}, [other]: {} } }));
+    for (const d of [app(), other]) {
+      silentAutoAdopt({ cwd: d });
+      rmSync(join(d, LOCAL_MD));
+      expect(silentAutoAdopt({ cwd: d }).action).toBe('inject');
+    }
+    withCwd(home, () => cmdAdopt(['--enable', '--all']));
+    for (const d of [app(), other]) expect(silentAutoAdopt({ cwd: d }).action, d).toBe('local');
+  });
+
+  it('quiet-scope honours an opt-out left under ~/.claude when CLAUDE_CONFIG_DIR is set', () => {
+    const cfg = join(home, 'cfg');
+    mkdirSync(cfg);
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    try {
+      expect(isAdoptedHere(app())).toBe(true);
+      legacyOptOut();
+      expect(isAdoptedHere(app())).toBe(false);
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
+  });
+
+  // P2-2's other half: the quiet gate must agree with silentAutoAdopt, or a subdirectory session
+  // of an opted-out repository gets neither the steering nor the verbose hook sections.
+  it('quiet-scope: a root opt-out turns a subdirectory session verbose, unless the root CLAUDE.md carries the block', () => {
+    const sub = join(app(), 'pkg');
+    mkdirSync(sub);
+    expect(isAdoptedHere(sub)).toBe(true);
+    mkdirSync(memdirPath(app()), { recursive: true });
+    writeFileSync(disableSentinelPath(memdirPath(app())), '{}');
+    expect(isAdoptedHere(sub)).toBe(false);
+    writeManaged(app(), { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    expect(silentAutoAdopt({ cwd: sub }).action).toBe('already-adopted');
+    expect(isAdoptedHere(sub)).toBe(true);
+  });
+
+  // A repository at $HOME is never a steering root (silentAutoAdopt injects below it), so an
+  // opt-out recorded for $HOME does not silence a project directory under it either.
+  it('quiet-scope: a work tree at $HOME is not a root whose opt-out covers the directories below', () => {
+    git(home, 'init', '-q');
+    const proj = join(home, 'proj');
+    mkdirSync(proj);
+    mkdirSync(memdirPath(home), { recursive: true });
+    writeFileSync(disableSentinelPath(memdirPath(home)), '{}');
+    expect(silentAutoAdopt({ cwd: proj }).action).toBe('inject');
+    expect(isAdoptedHere(proj)).toBe(true);
   });
 });

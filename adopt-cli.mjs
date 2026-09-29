@@ -49,7 +49,6 @@ import {
   localMdPath,
   forgetLocalSteering,
   tildePath,
-  keepLocalExcluded,
 } from './lib/local-steering.mjs';
 
 /**
@@ -168,7 +167,12 @@ function adoptOne(cwd, { force, dryRun }) {
     const migNote = mig.action === 'removed' ? ' (+migrated legacy memdir)' : '';
     // CLAUDE.md now carries the block; a CLAUDE.local.md copy would load it twice.
     const local = dropLocalSteering(cwd);
-    const localNote = local.action === 'absent' ? '' : ` (+removed the block from ${local.path})`;
+    const localNote =
+      local.action === 'absent'
+        ? ''
+        : local.action === 'skipped-symlink'
+          ? ` (left ${local.path} alone: it is a symlink)`
+          : ` (+removed the block from ${local.path})`;
     log(`[adopt] ${cwd} → ${r.action}${migNote}${localNote}`);
     return r;
   } catch (e) {
@@ -236,9 +240,11 @@ function migrateAll(args) {
  *   3. a managed block in CLAUDE.md → keep it in sync, refreshing if shipped content drifted
  *      (unless CLAUDE_MEM_NO_TEMPLATE_REFRESH=1), and drop a local copy (no double steering).
  *   4. otherwise, inside a git work tree → the block in <top-level>/CLAUDE.local.md, kept
- *      out of commits via info/exclude; return 'local' (`written` says what changed).
- *   5. otherwise (no git, $HOME, a tracked CLAUDE.local.md, any git failure) → write
- *      nothing, return 'inject' (the caller puts the steering into SessionStart context).
+ *      out of commits via info/exclude; return 'local' (`written` says what changed). In a
+ *      subdirectory, a root CLAUDE.md block → 'already-adopted', a root opt-out → 'disabled'.
+ *   5. otherwise (no git, $HOME, a tracked or symlinked CLAUDE.local.md, an npm-publishable
+ *      root, any git failure) → write nothing, return 'inject' (the caller puts the steering
+ *      into SessionStart context) — or 'already-adopted' when that file carries the block.
  * Silent: never logs, never throws. Returns { ok, action, reason } for debugLog.
  */
 export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
@@ -276,16 +282,21 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
         if (resolve(root) !== resolve(cwd)) {
           if (readBlock(root, PLUGIN_SLUG).body !== null)
             return { ok: true, action: 'already-adopted', reason: 'root-claude-md' };
-          if (isAutoAdoptDisabledFor(root)) return { ok: true, action: 'inject', reason: 'root-disabled' };
-        }
-        const present = readLocalSteering(root, PLUGIN_SLUG).body !== null;
-        if (present && process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1') {
-          keepLocalExcluded(root);
-          return { ok: true, action: 'local', written: 'unchanged' };
+          // Off for the project means off here too: no file, no injected copy, no /adopt offer
+          // (delta review P2-2; lib/quiet-scope.mjs mirrors it).
+          if (isAutoAdoptDisabledFor(root)) return { ok: true, action: 'disabled', reason: 'root-disabled' };
         }
         const localBlock = buildClaudeMdBlock({ detailDocRef: tildePath(ensureSteeringDetailDoc()) });
-        const r = writeLocalSteering(root, { slug: PLUGIN_SLUG, version, block: localBlock });
+        const r = writeLocalSteering(root, {
+          slug: PLUGIN_SLUG,
+          version,
+          block: localBlock,
+          frozen: process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1',
+        });
         if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action };
+        // A refused file that carries the block anyway (tracked, or behind a link) is loaded by
+        // the host: injecting it too would load it twice.
+        if (r.present) return { ok: true, action: 'already-adopted', reason: `local-${r.reason}` };
         return { ok: true, action: 'inject', reason: `local-${r.reason}` };
       }
       return { ok: true, action: 'inject' };

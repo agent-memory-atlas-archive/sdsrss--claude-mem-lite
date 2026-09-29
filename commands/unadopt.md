@@ -18,7 +18,9 @@ Remove the claude-mem-lite steering block from the current project. Opposite of
    `.claude/` dir).
 4. The block auto-adopt keeps in `CLAUDE.local.md` at the git repository root (the
    file too, when nothing else is in it) and the lines it added to
-   `.git/info/exclude`.
+   `.git/info/exclude`. Those lines stay while another worktree of the repository
+   still has the block, or while a file the plugin created still holds your own
+   notes. A `CLAUDE.local.md` that is a symbolic link is left alone.
 
 It also cleans any leftover **legacy** memory-dir sentinel + detail doc for this
 project (slug-scoped — other plugins' blocks survive).
@@ -27,9 +29,10 @@ project (slug-scoped — other plugins' blocks survive).
 
 - `--force` — also remove a legacy memory-dir block lacking a state sidecar
 - `--dry-run` — preview what would be removed; no writes
-- `--all` — remove the CLAUDE.md managed block from every project in Claude
-  Code's known-project list (`~/.claude.json` `projects`), plus sweep any legacy
-  memory-dir sentinels. Slug-scoped, so user content and other plugins' blocks
+- `--all` — remove the CLAUDE.md managed block and the auto-written
+  `CLAUDE.local.md` block from every project in Claude Code's known-project list
+  (`projects` in `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`), plus sweep
+  any legacy memory-dir sentinels. Slug-scoped, so user content and other plugins' blocks
   survive. A project Claude Code never opened isn't listed — `cd` into it and run
   `/unadopt` there. Pair with `--dry-run` to preview.
 - `--status` — read-only adoption probe (mirrors `/adopt --status`)

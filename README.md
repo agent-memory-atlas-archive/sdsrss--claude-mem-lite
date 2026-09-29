@@ -237,6 +237,34 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.21.0
+
+**Some projects get a new id, and what they stored moves once.** No schema-version change:
+6.20.0 still opens the database after this release has. Pin `claude-mem-lite@6.20.0` before
+upgrading to avoid the move; after it, 6.20.0 names these directories by their old ids again, so
+their moved rows are listed only with `--project <new id>`.
+
+- **Directories named in a non-Latin script** used to share an id: every character outside ASCII
+  letters, digits and `_.-` became `-`, so `~/projects/博客` and `~/projects/商城` were both
+  `projects----`. Letters, marks and digits of every script are now kept (`projects--博客`). An
+  all-ASCII name keeps its id byte for byte.
+- **The same parent and name in different repositories** (`~/a/packages/api` and
+  `~/b/packages/api`, or two repositories' `.claude/worktrees/fix`) shared `packages--api`. One
+  keeps it, chosen from the stored memories (the existing directory most file-linked memories
+  came from); each other one gets `packages--api~<8 hex digits from its path>`.
+- **At a project's first session start its data moves.** A non-Latin project whose old id no
+  stored path shows another directory using takes everything under it, deferred items and
+  session history included. Otherwise only the memories whose file paths lie inside the directory
+  move; the rest stay under the old id. A one-time notice says what moved and how to list what
+  stayed (`claude-mem-lite recent 50 --project <old id>`).
+- **Also changed:** two sessions open in one project keep separate memory sessions (handoffs,
+  summaries and unsaved tool activity no longer mix); a session's follow-up prompts no longer
+  resume another session; maintenance hides idle memories for 7 days before queuing them for
+  deletion, in every project; an importance you set is no longer raised by later reads;
+  `recall` / `mem_recall` rank the current project and the exact path first (`--project` /
+  `project` keep one project); `<private>` fails closed on an unclosed, nested or attributed tag.
+  Full list: CHANGELOG.md.
+
 ## Upgrading to 6.19.0
 
 **Search output changes; no switch.** No schema change and no migration, so reverting is

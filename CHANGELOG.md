@@ -2,6 +2,114 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.21.0 — projects and concurrent sessions stop sharing memory
+
+**Upgrade note: some projects get a new id, and what they stored moves once.** No schema-version
+change: 6.20.0 still opens the database after this release has (the two columns it adds are
+listed under Changed).
+
+- **Which projects.** A project's id is `<parent>--<directory>`. Two kinds of directory shared
+  their id with other directories and now get their own:
+  - a name with characters outside ASCII letters, digits and `_.-`. Each such character used to
+    become `-`, so `~/projects/博客` and `~/projects/商城` were both `projects----`. Letters,
+    marks and digits of every script are now kept (`projects--博客`); punctuation, symbols, emoji
+    and invisible format characters are still replaced. An all-ASCII name keeps its id byte for
+    byte.
+  - the same parent and name in different repositories: `~/a/packages/api` and
+    `~/b/packages/api`, or two repositories' `.claude/worktrees/fix`. One directory keeps
+    `packages--api`; each other one gets `packages--api~<8 hex digits from its path>`.
+- **Which directory keeps a shared id.** The first session start in one of those directories
+  after the upgrade decides, from the stored memories: the id goes to the existing directory the
+  most file-linked memories came from, and to the directory starting the session only when no
+  memory points at another one. The decision is recorded in the runtime directory and stands
+  until that directory no longer exists.
+- **What moves, once per project, at its first session start.**
+  - A non-Latin project whose old id no stored path shows another directory using takes
+    everything under it: memories, sessions, summaries, handoffs, events and deferred items.
+  - Otherwise, and always for a directory that does not keep a shared id, only the memories
+    whose recorded file paths lie inside the directory move, with the rest of their compression
+    groups. Memories with no path, or only relative ones, stay under the old id.
+  - A one-time notice says what moved and, when memories stayed, how to list them:
+    `claude-mem-lite recent 50 --project <old id>`.
+- **Reverting.** Pin `claude-mem-lite@6.20.0` before upgrading to avoid the move. After it,
+  6.20.0 opens the database but names these directories by their old ids again, so their moved
+  rows are listed only with `--project <new id>`.
+
+**Changed**
+
+- **Two sessions open in one project keep separate memory sessions.** The second session's start
+  used to take over the first one's session id: the first session's handoff described the
+  second one's prompt, one summary stood for both, and one session's end of turn saved the
+  other's tool activity (and gave it the other's "unsaved bugfix" reminder). Session state and
+  the tool-activity buffer are now kept per Claude Code process, from the `CLAUDE_PID` the host
+  sets on hooks; without it the per-project behaviour is unchanged. A buffer left by a session
+  that exited mid-turn is still saved by the next session in the project.
+- **A session's follow-up prompts no longer resume another session.** Within a session's first
+  three prompts, a short follow-up such as `ok do it` could inject, and use up, a different
+  session's handoff. A session now resumes at most one handoff, and after it has finished a turn
+  only a prompt that names a past session (`上次`, `resume`, `where we left off`,
+  `last session`) resumes one; a bare `继续` / `continue` then means "go on". A session's first
+  prompt and the hand-back after `/clear` work as before.
+- **Maintenance hides idle memories before it deletes them, in every project.** Only the project
+  that started the session had its old idle memories hidden (kept, and reachable by id); every
+  other project's identical ones were queued for deletion directly. Every project's are now
+  hidden first, stamped in a new nullable `hidden_at` column, and queued for deletion only if 7
+  days later they are still idle, have no lesson, are not superseded and do not hold a
+  compression group. Memories hidden before this release are never queued. `maintain scan`
+  reports how many maintenance has hidden.
+- **An importance you set stays.** `update --importance` and `mem_update` were undone by the next
+  read (a memory read twice at importance 1 is raised to 2) and by maintenance's access boost.
+  Both now skip a memory whose importance was set, stamped in a new nullable
+  `importance_set_at` column; decay is unchanged. export / restore and `verify-apply --undo`
+  carry the stamp.
+- **`recall` and `mem_recall` rank the current project and the exact path first**, then
+  importance and recency. They matched a file by its name in every project, so another
+  package's or project's `index.mjs` could lead. `--project` (CLI) and a new optional `project`
+  argument (MCP) keep one project.
+- **`<private>` fails closed.** An unclosed `<private>` now hides everything after it, nested
+  blocks pair by depth, and `<private reason="…">` is recognised. Text in those shapes used to be
+  stored, sent to the background model and injected later.
+- **A subagent and its parent each get a file's recorded lesson once.** Claude Code gives a
+  subagent's hooks the parent's session id, and the "already shown" record was per session, so
+  whichever thread touched a file first used the lesson up for the other — usually the subagent
+  that then edited it. The record is now per thread.
+- **The `<memory-context>` search on each prompt skips prompts with no topic** (continuations,
+  confirmations, slash commands, pure git / npm operations), as the other prompt search has
+  since v2.43, and its events half gets the minimum length its memory half already had
+  (issue #39).
+
+**Fixed**
+
+- Install: `--help` and unknown flags no longer run install-family commands (`uninstall
+  --dry-run` and `uninstall --help` uninstalled, `install --help` installed, `cleanup-hooks
+  --dry-run` removed hooks); an unknown flag on a writing command now exits 1 without acting.
+  install / uninstall / cleanup-hooks keep hooks you wrote that mention claude-mem-lite, and
+  hooks you added under the plugin's matchers. A user-scope MCP server named `mem` is removed
+  only when it runs this plugin's server. `cleanup` no longer deletes other programs' `mem-*`,
+  `cite-*` and `adopt-*` temp directories. An unparseable `settings.json` is refused before
+  install or uninstall changes anything. An inaccessible data directory is reported as such
+  (doctor ✗, install exit 1 with a chmod / chown remedy) instead of "no database yet" or
+  "another install is in progress". A failed `repair` removes its staging directory.
+  `cleanup-hooks` warns when it leaves an enabled plugin with no hooks. The unadopt advice
+  printed by uninstall names a command that still runs. With no API key set, doctor checks
+  that the `claude` CLI the background worker spawns resolves.
+- Data: `restore` restores every distinct row of a backup (25 rows had come back as 1) and exits
+  1 when nothing could be restored. Deleting a correction brings back the memory it had
+  superseded, and the delete preview lists the rows a delete brings back. `fts-check` and doctor
+  compare each full-text index with its content, so a stale index is no longer reported
+  healthy. Maintenance never hides a compression group's keeper (which hid the whole group),
+  fuzzy auto-dedup never merges across projects, and `maintain --ops dedup` says why a pair did
+  not merge. A cluster merge keeps the keeper's title when the model's reply has none, and
+  session summaries keep only text lessons and decisions.
+- Output: `mem_search` no longer heads a recency listing as matches (an `obs_type` with no match;
+  a query that sanitizes to nothing). `mem_timeline` says when its query anchored nothing.
+  `browse --tier` says the tier is empty rather than the store. `recent N --limit M` names the
+  count it used. A decision saved without a lesson is asked for its constraint and tradeoff.
+  `mem_defer` refuses a blank title.
+- Docs: the READMEs no longer promise a hash guard on the managed `CLAUDE.md` block (`adopt`
+  rewrites it; keep notes outside the markers or set `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`), and say
+  which episodes the LLM-failure path keeps instead of "zero data loss".
+
 ## v6.20.0 — memory guidance moves out of CLAUDE.md; recalled memories are checked and corrected
 
 **Upgrade note: auto-adopt no longer adds its block to your project's `CLAUDE.md`.**

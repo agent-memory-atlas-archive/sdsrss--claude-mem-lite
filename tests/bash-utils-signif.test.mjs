@@ -37,6 +37,35 @@ describe('detectBashSignificance — green test summary exemption', () => {
     expect(sig.isError).toBe(false);
   });
 
+  // Sandbox corpus 2026-09-29 (docs/audits/20260929-sandbox-usage-eval.md): node's built-in
+  // runner prints the LABEL first ("ℹ fail 0"; TAP: "# fail 0"), so every green `npm test`
+  // of a node:test project was stored as "→ ERROR", replayed under "Recent activity" in the
+  // handoff, and read by the episode summarizer as a fixed bug.
+  it('does NOT mark a green node:test (spec reporter) summary as error', () => {
+    const sig = detectBashSignificance(
+      { command: 'npm test 2>&1 | tail -8' },
+      '✔ parseMoney (0.7ms)\n✔ allocate (0.2ms)\nℹ tests 12\nℹ suites 0\nℹ pass 12\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0',
+    );
+    expect(sig.isError).toBe(false);
+    expect(sig.isTest).toBe(true);
+  });
+
+  it('does NOT mark a green TAP summary ("# fail 0") as error', () => {
+    const sig = detectBashSignificance(
+      { command: 'node --test --test-reporter=tap' },
+      'TAP version 13\nok 1 - parseMoney\n1..1\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0',
+    );
+    expect(sig.isError).toBe(false);
+  });
+
+  it('DOES mark a red node:test summary ("ℹ fail 2") as error', () => {
+    const sig = detectBashSignificance(
+      { command: 'npm test' },
+      '✖ allocate sums to total (1.1ms)\nℹ tests 12\nℹ pass 10\nℹ fail 2\nℹ cancelled 0',
+    );
+    expect(sig.isError).toBe(true);
+  });
+
   it('DOES mark "5 fail" bun-test output as error (red run)', () => {
     const sig = detectBashSignificance(
       { command: 'bun test logger.test.ts' },
@@ -67,6 +96,22 @@ describe('detectBashSignificance — green test summary exemption', () => {
       'npm ERR! code ENOENT\nnpm ERR! Install failed: package not found',
     );
     expect(sig.isError).toBe(true);
+  });
+
+  // A write that prints a diff quotes the code it edited. `throw new Error(` inside a hunk is
+  // file content; git's own `error: patch failed` outside any hunk is still a failure.
+  it('does NOT read error words inside a unified-diff hunk as a failure', () => {
+    const diff =
+      'diff --git a/src/invoice.mjs b/src/invoice.mjs\nindex 1..2 100644\n--- a/src/invoice.mjs\n+++ b/src/invoice.mjs\n' +
+      '@@ -1,3 +1,4 @@\n export function lineTotal(line) {\n+  if (bad) throw new Error(`bad discount for ${line.desc}`);\n   return line.qty * line.unitPrice;\n-  // TypeError: old comment\n }\n';
+    const sig = detectBashSignificance({ command: "sed -i 's/a/b/' src/invoice.mjs && git diff" }, diff);
+    expect(sig.isError).toBe(false);
+    expect(sig.isHardError).toBe(false);
+    const failed = detectBashSignificance(
+      { command: 'git apply fix.patch && git diff' },
+      `error: patch failed: src/invoice.mjs:1\nerror: src/invoice.mjs: patch does not apply\n${diff}`,
+    );
+    expect(failed.isError).toBe(true);
   });
 
   it('does NOT mark grep output containing "error" as error', () => {

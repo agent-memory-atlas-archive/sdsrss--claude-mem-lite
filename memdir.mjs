@@ -13,6 +13,7 @@ import { readFileSync, existsSync, unlinkSync, mkdirSync, readdirSync } from 'fs
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { join } from 'path';
 import { claudeConfigDir } from './lib/data-paths.mjs';
+import { homedir } from 'os';
 import { createHash } from 'crypto';
 
 const MEMORY_LINE_BUDGET = 180;
@@ -80,6 +81,31 @@ export function isAutoAdoptDisabled(memdir) {
 
 export function memdirPath(projectCwd) {
   return join(claudeConfigDir(), 'projects', encodeProjectPath(projectCwd), 'memory');
+}
+
+/**
+ * Where versions before 6.20.0 put this project's memdir: always under ~/.claude, whatever
+ * CLAUDE_CONFIG_DIR said. Null when that is where memdirPath points anyway.
+ * @param {string} projectCwd
+ * @returns {string|null}
+ */
+export function legacyMemdirPath(projectCwd) {
+  const legacy = join(homedir(), '.claude', 'projects', encodeProjectPath(projectCwd), 'memory');
+  return legacy === memdirPath(projectCwd) ? null : legacy;
+}
+
+/**
+ * The per-project opt-out, read where it lives now AND where an earlier version wrote it: a
+ * user with CLAUDE_CONFIG_DIR set who ran `adopt --disable` before 6.20.0 has the sentinel
+ * under ~/.claude, and moving memdirPath must not silently re-arm auto-adopt for them
+ * (pre-tag defect review P2-3).
+ * @param {string} projectCwd
+ * @returns {boolean}
+ */
+export function isAutoAdoptDisabledFor(projectCwd) {
+  if (isAutoAdoptDisabled(memdirPath(projectCwd))) return true;
+  const legacy = legacyMemdirPath(projectCwd);
+  return legacy !== null && isAutoAdoptDisabled(legacy);
 }
 
 function memoryFile(memdir) {

@@ -10,7 +10,16 @@
 // where it would steer every project below it ($HOME, `/`), or where the user opted out.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+  readdirSync,
+  symlinkSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -21,6 +30,7 @@ import {
   writeLocalSteering,
   readLocalSteering,
   removeLocalSteering,
+  isSharedAncestor,
 } from '../lib/local-steering.mjs';
 import { silentAutoAdopt, cmdUnadopt, cmdAdopt } from '../adopt-cli.mjs';
 import { isOwnAdoptionArtifact, readBlock, writeManaged } from '../claudemd.mjs';
@@ -31,6 +41,7 @@ import {
   CURRENT_SENTINEL_VERSION,
 } from '../adopt-content.mjs';
 import { memdirPath, disableSentinelPath } from '../memdir.mjs';
+import { isAdoptedHere } from '../lib/quiet-scope.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SLUG = PLUGIN_SLUG;
@@ -52,7 +63,12 @@ let home;
 let saved;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'cml-local-'));
-  saved = { HOME: process.env.HOME, MEM_NO_AUTO_ADOPT: process.env.MEM_NO_AUTO_ADOPT };
+  saved = {
+    HOME: process.env.HOME,
+    MEM_NO_AUTO_ADOPT: process.env.MEM_NO_AUTO_ADOPT,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+  };
+  delete process.env.CLAUDE_CONFIG_DIR;
   process.env.HOME = home;
   delete process.env.MEM_NO_AUTO_ADOPT;
 });
@@ -182,7 +198,9 @@ describe('silentAutoAdopt picks the channel', () => {
     writeFileSync(join(app, LOCAL_MD), 'team notes\n');
     git(app, 'add', LOCAL_MD);
     git(app, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'tracked');
-    expect(silentAutoAdopt({ cwd: app }).action).toBe('inject');
+    // The reason, not only the outcome: with the exclude roll-back, removing the tracked check
+    // would still refuse (as exclude-failed) after touching info/exclude twice.
+    expect(silentAutoAdopt({ cwd: app })).toMatchObject({ action: 'inject', reason: 'local-tracked' });
   });
 
   it('a project that carries the CLAUDE.md block is synced and loses a stale local block', () => {
@@ -345,7 +363,7 @@ describe('SessionStart end to end', () => {
     initRepo(app);
     dataDir = join(home, 'data');
   });
-  const sessionStart = (cwd) => {
+  const sessionStart = (cwd, extraEnv = {}) => {
     const r = spawnSync(process.execPath, [join(REPO, 'hook.mjs'), 'session-start'], {
       cwd,
       input: JSON.stringify({ session_id: 'local-e2e', source: 'startup', cwd }),
@@ -358,11 +376,18 @@ describe('SessionStart end to end', () => {
         CLAUDE_PROJECT_DIR: cwd,
         CLAUDE_MEM_SKIP_UPDATE: '1',
         CLAUDE_MEM_SKIP_MAINTAIN: '1',
+        ...extraEnv,
       },
     });
     expect(r.status).toBe(0);
     return r.stdout.trim() ? JSON.parse(r.stdout.trim()) : {};
   };
+
+  it('MEM_NO_ADOPT_HINT=1 silences the local-file note but still writes the file', () => {
+    const out = sessionStart(app, { MEM_NO_ADOPT_HINT: '1' });
+    expect(out.systemMessage).toBeUndefined();
+    expect(existsSync(join(app, LOCAL_MD))).toBe(true);
+  });
 
   // Claude Code reads CLAUDE.local.md at startup, BEFORE SessionStart hooks run, so the session
   // that creates the file does not load it. The release-tree sandbox run showed it: in the first
@@ -395,5 +420,208 @@ describe('SessionStart end to end', () => {
     const out = sessionStart(plain);
     expect(out.hookSpecificOutput.additionalContext).toContain(HEADING);
     expect(readdirSync(plain)).toEqual([]);
+  });
+});
+
+// Pre-tag defect review (v6.20.0, against 80335a4): P2-1 worktrees, P2-2 symlinks, P1-1 npm pack,
+// P2-3 a pre-upgrade opt-out under ~/.claude, P2-4 --disable --all without a memdir, and the
+// mutations no test could catch (tracked refusal leaving exclude alone, filesystem-root refusal,
+// the post-append check, exclude cleanup after a hand delete, the note switch, quiet-scope, the
+// --all sweeps, CLAUDE_CONFIG_DIR wiring, --dry-run and --status lines).
+describe('pre-tag defect review: local steering edges', () => {
+  const app = () => join(home, 'work', 'app');
+  const withCwd = (dir, fn) => {
+    const before = process.cwd();
+    process.chdir(dir);
+    process.env.CLAUDE_PROJECT_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  };
+  const captureLog = (fn) => {
+    const lines = [];
+    const orig = console.log;
+    console.log = (m) => lines.push(String(m));
+    try {
+      fn();
+    } finally {
+      console.log = orig;
+    }
+    return lines.join('\n');
+  };
+  beforeEach(() => initRepo(app()));
+
+  it('a symlinked CLAUDE.local.md is not written through', () => {
+    const other = join(home, 'dotfiles');
+    mkdirSync(other);
+    writeFileSync(join(other, 'shared.md'), 'shared notes\n');
+    symlinkSync(join(other, 'shared.md'), join(app(), LOCAL_MD));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-symlink' });
+    expect(readFileSync(join(other, 'shared.md'), 'utf8')).toBe('shared notes\n');
+  });
+
+  it('removing one worktree’s block keeps the shared exclude entry while another worktree still has one', () => {
+    const wt = join(home, 'work', 'wt');
+    git(app(), 'worktree', 'add', '-q', wt);
+    silentAutoAdopt({ cwd: app() });
+    silentAutoAdopt({ cwd: wt });
+    removeLocalSteering(wt, SLUG);
+    expect(status(app())).toBe('');
+    removeLocalSteering(app(), SLUG);
+    expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+  });
+
+  it('with template refresh frozen, a missing exclude entry is restored', () => {
+    silentAutoAdopt({ cwd: app() });
+    writeFileSync(join(app(), '.git', 'info', 'exclude'), '');
+    process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH = '1';
+    try {
+      silentAutoAdopt({ cwd: app() });
+    } finally {
+      delete process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH;
+    }
+    expect(status(app())).toBe('');
+  });
+
+  it('a publishable npm package at the root gets injection, not a file npm pack would ship', () => {
+    writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'lib', version: '1.0.0' }));
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-npm-publishable',
+    });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('a private package, a files whitelist, or an .npmignore entry keeps the local file', () => {
+    for (const [i, setup] of [
+      () => writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'a', private: true })),
+      () => writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'b', files: ['index.js'] })),
+      () => {
+        writeFileSync(join(app(), 'package.json'), JSON.stringify({ name: 'c' }));
+        writeFileSync(join(app(), '.npmignore'), 'CLAUDE.local.md\n');
+      },
+    ].entries()) {
+      const dir = join(home, 'work', `pkg${i}`);
+      initRepo(dir);
+      const before = process.cwd();
+      process.chdir(dir);
+      try {
+        setup.call(null);
+      } finally {
+        process.chdir(before);
+      }
+      for (const f of ['package.json', '.npmignore']) {
+        if (existsSync(join(app(), f))) {
+          writeFileSync(join(dir, f), readFileSync(join(app(), f)));
+          rmSync(join(app(), f));
+        }
+      }
+      expect(silentAutoAdopt({ cwd: dir }).action, `setup ${i}`).toBe('local');
+    }
+  });
+
+  it('refusing a tracked CLAUDE.local.md leaves info/exclude as it was', () => {
+    writeFileSync(join(app(), LOCAL_MD), 'team\n');
+    git(app(), 'add', LOCAL_MD);
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'tracked');
+    const before = excludeOf(app());
+    silentAutoAdopt({ cwd: app() });
+    expect(excludeOf(app())).toBe(before);
+  });
+
+  it('a negated ignore rule makes the exclude entry useless: nothing written, exclude restored', () => {
+    writeFileSync(join(app(), '.gitignore'), '!CLAUDE.local.md\n');
+    git(app(), 'add', '.gitignore');
+    git(app(), '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'negate');
+    const before = excludeOf(app());
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({
+      action: 'inject',
+      reason: 'local-exclude-failed',
+    });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(excludeOf(app())).toBe(before);
+  });
+
+  it('the filesystem root and $HOME are never a steering root', () => {
+    expect(isSharedAncestor('/')).toBe(true);
+    expect(isSharedAncestor(home)).toBe(true);
+    expect(isSharedAncestor(app())).toBe(false);
+  });
+
+  it('unadopt after a hand delete still drops the exclude entry', () => {
+    silentAutoAdopt({ cwd: app() });
+    rmSync(join(app(), LOCAL_MD));
+    withCwd(app(), () => cmdUnadopt([]));
+    expect(excludeOf(app())).not.toMatch(/^CLAUDE\.local\.md$/m);
+  });
+
+  it('quiet-scope counts a local block as adopted even with MEM_NO_AUTO_ADOPT=1', () => {
+    silentAutoAdopt({ cwd: app() });
+    process.env.MEM_NO_AUTO_ADOPT = '1';
+    expect(isAdoptedHere(app())).toBe(true);
+    rmSync(join(app(), LOCAL_MD));
+    expect(isAdoptedHere(app())).toBe(false);
+  });
+
+  it('unadopt --all and adopt --disable --all sweep the local block of every known project', () => {
+    const other = join(home, 'work', 'other');
+    initRepo(other);
+    silentAutoAdopt({ cwd: app() });
+    silentAutoAdopt({ cwd: other });
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [app()]: {}, [other]: {} } }));
+    withCwd(app(), () => cmdUnadopt(['--all']));
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(existsSync(join(other, LOCAL_MD))).toBe(false);
+  });
+
+  it('adopt --disable --all disables known projects that have no memory dir', () => {
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [app()]: {} } }));
+    silentAutoAdopt({ cwd: app() });
+    withCwd(app(), () => cmdAdopt(['--disable', '--all']));
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('disabled');
+  });
+
+  it('with CLAUDE_CONFIG_DIR, unadopt --all reads the moved .claude.json', () => {
+    const cfg = join(home, 'cfg');
+    mkdirSync(cfg);
+    writeFileSync(join(cfg, '.claude.json'), JSON.stringify({ projects: { [app()]: {} } }));
+    silentAutoAdopt({ cwd: app() });
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    try {
+      withCwd(home, () => cmdUnadopt(['--all']));
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('an opt-out written under ~/.claude before CLAUDE_CONFIG_DIR was honoured still holds', () => {
+    const cfg = join(home, 'cfg');
+    mkdirSync(cfg);
+    const legacy = join(home, '.claude', 'projects', app().replace(/[^a-zA-Z0-9]/g, '-'), 'memory');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(disableSentinelPath(legacy), '{}');
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    try {
+      expect(silentAutoAdopt({ cwd: app() }).action).toBe('disabled');
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('--dry-run and --status name the local file', () => {
+    silentAutoAdopt({ cwd: app() });
+    expect(withCwd(app(), () => captureLog(() => cmdUnadopt(['--dry-run'])))).toMatch(
+      /would-remove the block in .*CLAUDE\.local\.md/,
+    );
+    expect(withCwd(app(), () => captureLog(() => cmdAdopt(['--status'])))).toMatch(
+      /local: +✓ .*CLAUDE\.local\.md/,
+    );
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(true);
   });
 });

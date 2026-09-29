@@ -671,8 +671,16 @@ export function detectBashSignificance(input, response) {
   // node's built-in runner and TAP print the label first — "ℹ fail 0" / "# fail 0" — so the
   // count-first form never saw them and every green node:test run was an error (sandbox
   // corpus 2026-09-29: the handoff replayed passing `npm test` runs as "→ ERROR").
+  // A green summary counts only when NO summary in the output is red: a command that ran two
+  // suites prints one summary each, and a node:test run whose failures were all timeouts says
+  // "fail 0" next to "cancelled 1" (pre-tag defect review, item 7 F1). Red = a nonzero fail /
+  // cancelled count in either summary form.
   const hasGreenTestSummary =
-    looksLikeError && /\b0\s+(fail|failed|failures)\b|^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+0[ \t]*$/im.test(scan);
+    looksLikeError &&
+    /\b0\s+(fail|failed|failures)\b|^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+0[ \t]*$/im.test(scan) &&
+    !/\b[1-9]\d*\s+(fail|failed|failures|failing)\b|^[ \t]*(?:ℹ|#)[ \t]*(?:fail|cancelled)[ \t]+[1-9]\d*[ \t]*$/im.test(
+      scan,
+    );
   // NOTE: do not add `\bFAIL\s` here — with /i flag it would re-match the
   // very `0 fail\n` token green-summary is trying to exempt. A real test
   // failure produces "N fail" (N≥1) which never triggers hasGreenTestSummary,

@@ -399,3 +399,92 @@ describe('detectBashSignificance — read-only exemption checks every statement'
     expect(hard('grep x $(npm test', RED_RUN)).toBe(true); // unbalanced
   });
 });
+
+// Pre-tag defect review (item 7, F1): the label-first green summary matched ANY "ℹ fail 0" in the
+// output, so a command that ran two suites — one green, one red — read green, and so did a run
+// whose only failures were timeouts ("ℹ fail 0" next to "ℹ cancelled 1"). Real node 22 output.
+describe('detectBashSignificance — a green summary does not hide a red one', () => {
+  const GREEN_RUN = [
+    '✔ ok (0.513118ms)',
+    'ℹ tests 1',
+    'ℹ suites 0',
+    'ℹ pass 1',
+    'ℹ fail 0',
+    'ℹ cancelled 0',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 53.530078',
+  ].join('\n');
+  const RED_RUN = [
+    '✖ sum (0.790855ms)',
+    'ℹ tests 1',
+    'ℹ suites 0',
+    'ℹ pass 0',
+    'ℹ fail 1',
+    'ℹ cancelled 0',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 63.864786',
+    '',
+    '✖ failing tests:',
+    '',
+    'test at b.test.mjs:2:1',
+    '✖ sum (0.790855ms)',
+    '  Error: boom: total mismatch',
+    '      at TestContext.<anonymous> (file:///work/r/b.test.mjs:2:24)',
+  ].join('\n');
+  const TIMEOUT_RUN = [
+    '✖ slow (51.153443ms)',
+    'ℹ tests 1',
+    'ℹ suites 0',
+    'ℹ pass 0',
+    'ℹ fail 0',
+    'ℹ cancelled 1',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 545.788902',
+    '',
+    '✖ failing tests:',
+    '',
+    'test at c.test.mjs:2:1',
+    '✖ slow (51.153443ms)',
+    "  'test timed out after 50ms'",
+  ].join('\n');
+  const sig = (out) => detectBashSignificance({ command: 'npm test 2>&1 | tail -30' }, out);
+
+  it('premise: a green run alone is not an error', () => {
+    expect(sig(GREEN_RUN).isError).toBe(false);
+  });
+
+  it('a green run followed by a red run is an error', () => {
+    expect(sig(`${GREEN_RUN}\n${RED_RUN}`).isError).toBe(true);
+  });
+
+  it('a run whose only failures were cancelled (timeouts) is an error', () => {
+    expect(sig(TIMEOUT_RUN).isError).toBe(true);
+  });
+});
+
+// The count-first summaries (bun, jest) need the same rule: a workspace loop that prints
+// "0 fail" for one package and "1 fail" for the next is red.
+describe('detectBashSignificance — count-first summaries, one green and one red', () => {
+  it('bun-style "0 fail" followed by "1 fail" is an error', () => {
+    const out = [
+      'pkg-a/src/sum.test.ts:',
+      '✓ sums [0.12ms]',
+      '',
+      ' 5 pass',
+      ' 0 fail',
+      ' 9 expect() calls',
+      'Ran 5 tests across 1 files. [18.00ms]',
+      'pkg-b/src/split.test.ts:',
+      '✗ splits [0.40ms]',
+      '',
+      ' 4 pass',
+      ' 1 fail',
+      ' 7 expect() calls',
+      'Ran 5 tests across 1 files. [21.00ms]',
+    ].join('\n');
+    expect(detectBashSignificance({ command: 'bun test --cwd packages' }, out).isError).toBe(true);
+  });
+});

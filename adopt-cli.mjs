@@ -20,6 +20,8 @@ import {
   memdirPath,
   disableSentinelPath,
   isAutoAdoptDisabled,
+  isAutoAdoptDisabledFor,
+  legacyMemdirPath,
   removePluginSection,
   removePluginDoc,
   isAdopted as memdirIsAdopted,
@@ -47,6 +49,7 @@ import {
   localMdPath,
   forgetLocalSteering,
   tildePath,
+  keepLocalExcluded,
 } from './lib/local-steering.mjs';
 
 /**
@@ -55,8 +58,11 @@ import {
  */
 function dropLocalSteering(cwd) {
   const root = localSteeringRoot(cwd);
-  if (!root || readLocalSteering(root, PLUGIN_SLUG).body === null) return { action: 'absent' };
-  return { ...removeLocalSteering(root, PLUGIN_SLUG), path: localMdPath(root) };
+  if (!root) return { action: 'absent' };
+  // Runs even when the block is already gone (deleted by hand): removeLocalSteering then drops
+  // the exclude lines it added (pre-tag defect review, mutation M7).
+  const r = removeLocalSteering(root, PLUGIN_SLUG);
+  return r.action === 'absent' ? { action: 'absent' } : { ...r, path: localMdPath(root) };
 }
 
 function log(msg) {
@@ -236,9 +242,8 @@ function migrateAll(args) {
  * Silent: never logs, never throws. Returns { ok, action, reason } for debugLog.
  */
 export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
-  const memdir = memdirPath(cwd);
   try {
-    if (isAutoAdoptDisabled(memdir)) {
+    if (isAutoAdoptDisabledFor(cwd)) {
       return { ok: true, action: 'disabled', reason: 'disabled-by-sentinel' };
     }
     migrateLegacyMemoryDir(cwd, PLUGIN_SLUG);
@@ -271,12 +276,13 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
         if (resolve(root) !== resolve(cwd)) {
           if (readBlock(root, PLUGIN_SLUG).body !== null)
             return { ok: true, action: 'already-adopted', reason: 'root-claude-md' };
-          if (isAutoAdoptDisabled(memdirPath(root)))
-            return { ok: true, action: 'inject', reason: 'root-disabled' };
+          if (isAutoAdoptDisabledFor(root)) return { ok: true, action: 'inject', reason: 'root-disabled' };
         }
         const present = readLocalSteering(root, PLUGIN_SLUG).body !== null;
-        if (present && process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1')
+        if (present && process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1') {
+          keepLocalExcluded(root);
           return { ok: true, action: 'local', written: 'unchanged' };
+        }
         const localBlock = buildClaudeMdBlock({ detailDocRef: tildePath(ensureSteeringDetailDoc()) });
         const r = writeLocalSteering(root, { slug: PLUGIN_SLUG, version, block: localBlock });
         if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action };
@@ -333,7 +339,17 @@ function cmdDisable(args) {
     if (r.action !== 'absent') log(`[adopt --disable] ${r.path} → ${r.action}`);
     if (r.residue) log(`  ⚠ ${r.residue}`);
   }
-  const targets = all ? listAllMemdirs().map((m) => m.memdir) : [memdirPath(detectCwd())];
+  // Known projects too, not only memdirs that already exist: Claude Code creates `memory/`
+  // only when its auto-memory is used, and a project without one was left armed (pre-tag
+  // defect review P2-4).
+  const targets = all
+    ? [
+        ...new Set([
+          ...listAllMemdirs().map((m) => m.memdir),
+          ...listKnownProjectDirs().map((d) => memdirPath(d)),
+        ]),
+      ]
+    : [memdirPath(detectCwd())];
 
   if (targets.length === 0) {
     log('[adopt --disable] no memdirs found');
@@ -373,7 +389,12 @@ function cmdEnable(args) {
     if (root && forgetLocalSteering(root))
       log(`[adopt --enable] ${localMdPath(root)} → will be written again`);
   }
-  const targets = all ? listAllMemdirs().map((m) => m.memdir) : [memdirPath(detectCwd())];
+  // The legacy ~/.claude memdir too: isAutoAdoptDisabledFor still honours a sentinel an earlier
+  // version left there, so --enable must be able to remove it.
+  const cwdNow = detectCwd();
+  const targets = all
+    ? listAllMemdirs().map((m) => m.memdir)
+    : [memdirPath(cwdNow), legacyMemdirPath(cwdNow)].filter(Boolean);
 
   if (targets.length === 0) {
     log('[adopt --enable] no memdirs found');

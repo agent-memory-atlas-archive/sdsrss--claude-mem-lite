@@ -1982,7 +1982,7 @@ function cmdDelete(db, args) {
 
   const confirm = flags.confirm === true || flags.confirm === 'true';
   // Shared preview body (lib/delete-core, P2-12) — single source with mem_delete.
-  const { rows, lines: previewLines, missing } = previewDeleteRows(db, ids);
+  const { rows, lines: previewLines, missing, alsoLine } = previewDeleteRows(db, ids);
 
   if (rows.length === 0) {
     fail('[mem] No observations found for given IDs');
@@ -1992,6 +1992,7 @@ function cmdDelete(db, args) {
   if (!confirm) {
     out(`[mem] Preview: ${rows.length} observation(s) will be deleted:`);
     for (const line of previewLines) out(line);
+    if (alsoLine) out(`[mem] ${alsoLine}`);
     if (missing.length > 0) out(`[mem] Note: ID(s) ${missing.join(', ')} not found and will be skipped.`);
     out('[mem] Run with --confirm to execute deletion.');
     return;

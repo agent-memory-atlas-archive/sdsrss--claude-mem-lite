@@ -1100,7 +1100,7 @@ server.registerTool(
   },
   safeHandler(async (args) => {
     // Shared preview body (lib/delete-core, P2-12) — single source with CLI delete.
-    const { rows, lines: previewLines, missing } = previewDeleteRows(db, args.ids);
+    const { rows, lines: previewLines, missing, alsoLine } = previewDeleteRows(db, args.ids);
 
     if (rows.length === 0) {
       return { content: [{ type: 'text', text: 'No observations found for given IDs.' }] };
@@ -1108,6 +1108,7 @@ server.registerTool(
 
     if (!args.confirm) {
       const lines = [`Preview: ${rows.length} observation(s) will be deleted:\n`, ...previewLines];
+      if (alsoLine) lines.push(`\n${alsoLine}`);
       if (missing.length > 0)
         lines.push(`\nNote: ID(s) ${missing.join(', ')} not found and will be skipped.`);
       lines.push(`\nCall mem_delete(ids=[...], confirm=true) to execute.`);

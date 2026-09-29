@@ -1543,6 +1543,36 @@ describe('CLI delete command', () => {
     const old = testDb.prepare('SELECT superseded_at, superseded_by FROM observations WHERE id = 1').get();
     expect(old).toEqual({ superseded_at: null, superseded_by: null });
   });
+
+  // The preview is the one place a user can see a side effect before it happens, and it named
+  // only the rows being deleted: a weekly summary previewed as "1 observation(s) will be
+  // deleted" and then answered "Recovered 44 merged/compressed child observation(s) to live".
+  it('preview names the rows the delete will bring back, and the counts match the run', async () => {
+    insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', title: 'Weekly summary' });
+    insertObs(testDb, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      title: 'Member A',
+      compressedInto: 1,
+    });
+    insertObs(testDb, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      title: 'Member B',
+      compressedInto: 1,
+    });
+    insertObs(testDb, { sessionId: 'mem-s1', project: 'test--project', title: 'Old claim' });
+    testDb
+      .prepare('UPDATE observations SET superseded_at = ?, superseded_by = 1 WHERE id = 4')
+      .run(Date.now());
+    const preview = await captureStdout(() => run(['delete', '1']));
+    expect(preview).toMatch(
+      /also brings back 2 merged\/compressed child observation\(s\) and 1 observation\(s\) it superseded/,
+    );
+    const done = await captureStdout(() => run(['delete', '1', '--confirm']));
+    expect(done).toMatch(/Recovered 2 merged\/compressed/);
+    expect(done).toMatch(/Restored 1 observation\(s\)/);
+  });
 });
 
 // ─── update command ─────────────────────────────────────────────────────────

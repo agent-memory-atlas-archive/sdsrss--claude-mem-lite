@@ -656,6 +656,13 @@ function cmdRecent(db, args) {
   // Positional [N] wins for backward-compat; --limit is sibling-parity alias
   // (search/recall/browse/stats all accept --limit). Pre-2.69 `recent --limit N`
   // was silently ignored — surprising users extrapolating from siblings.
+  // --limit is read BEFORE the contest, like search's --deep/--no-deep: the ternary below
+  // never touched it when the count won, so the inert-flag notice told `recent 3 --limit 5`
+  // that `recent` "does not filter on" --limit and the rows were UNFILTERED. Name the winner.
+  const flagLimit = flags.limit;
+  if (isValid && flagLimit !== undefined && String(flagLimit) !== rawArg) {
+    process.stderr.write(`[mem] Both a count (${rawArg}) and --limit ${flagLimit} given — using ${rawArg}\n`);
+  }
   const limit = isValid
     ? rawLimit
     : parseIntFlag(flags.limit, { name: '--limit', defaultValue: 10, max: RECENT_MAX });

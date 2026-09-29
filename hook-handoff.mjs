@@ -25,6 +25,7 @@ import {
   CONTINUE_KEYWORDS,
   UNCONSUMED_HANDOFF_SQL,
 } from './hook-shared.mjs';
+import { RESUME_PAST_KEYWORDS } from './lib/handoff-constants.mjs';
 // T10d: import the whole module (not a named export) so tests can spy on
 // gitStateModule.readGitState via vi.spyOn. Named-import bindings are
 // immutable in ESM and cannot be mocked after the fact.
@@ -703,6 +704,29 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
   // The bug was a single-char 'a' + fresh clear handoff → Stage 0 auto-match.
   if (!promptText || typeof promptText !== 'string') return false;
   if (promptText.trim().length < 2) return false;
+
+  // A session's own follow-ups are not a resume of ANOTHER session. The stages below counted
+  // this session's OWN exit handoff (written by its previous Stop) as evidence, while
+  // pickHandoffToInject excludes own exit rows and returns another session's newest one — so
+  // `ok do it` after a `继续` injected (and consumed) a second, unrelated session's handoff,
+  // and a session that had started a new task got yesterday's on a short follow-up.
+  if (currentCcSessionId) {
+    const firstPromptAt = db
+      .prepare('SELECT MIN(created_at_epoch) AS m FROM user_prompts WHERE cc_session_id = ?')
+      .get(currentCcSessionId)?.m;
+    // One resume per session: a handoff consumed since this session's first prompt was its.
+    if (
+      typeof firstPromptAt === 'number' &&
+      db
+        .prepare('SELECT 1 FROM session_handoffs WHERE project = ? AND consumed_at >= ?')
+        .get(project, firstPromptAt)
+    )
+      return false;
+    const endedATurn = db
+      .prepare(`SELECT 1 FROM session_handoffs WHERE project = ? AND type = 'exit' AND session_id = ?`)
+      .get(project, currentCcSessionId);
+    if (endedATurn) return RESUME_PAST_KEYWORDS.test(promptText);
+  }
 
   // T10d Stage -1: Git-commit anchor — current HEAD == a stored
   // git_sha_at_handoff ⇒ working tree hasn't moved since the handoff.

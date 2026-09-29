@@ -1354,6 +1354,10 @@ describe('T10d: git_sha_at_handoff capture in buildAndSaveHandoff', () => {
 });
 
 describe('T10d: git-commit anchor in detectContinuationIntent', () => {
+  // The anchored handoff belongs to a PREVIOUS session ('sPrev'), the one asking is 'sX'.
+  // These cases used one id for both, i.e. a session "resuming" its own exit handoff — the
+  // shape pickHandoffToInject never returns and detectContinuationIntent now rejects
+  // (tests/handoff-own-session.test.mjs); with it the anchor was no longer what was tested.
   let db;
   beforeEach(() => {
     db = createTestDb();
@@ -1368,7 +1372,7 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
     db.prepare(
       `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
                 VALUES (?, 'exit', ?, ?, ?, ?, ?)`,
-    ).run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
+    ).run('mem', 'sPrev', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
       changed: [],
@@ -1386,7 +1390,7 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
     db.prepare(
       `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
                 VALUES (?, 'exit', ?, ?, ?)`,
-    ).run('mem', 'sX', Date.now(), 'abc123');
+    ).run('mem', 'sPrev', Date.now(), 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
       changed: [],
@@ -1405,7 +1409,7 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
     db.prepare(
       `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
                 VALUES (?, 'exit', ?, ?, ?, ?, ?)`,
-    ).run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
+    ).run('mem', 'sPrev', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor', 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
       changed: [],
@@ -1423,7 +1427,7 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
     db.prepare(
       `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch, match_keywords, git_sha_at_handoff)
                 VALUES (?, 'exit', ?, ?, ?, ?, NULL)`,
-    ).run('mem', 'sX', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor');
+    ).run('mem', 'sPrev', 'refactor auth', Date.now() - 24 * 3600000, 'auth refactor');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
       changed: [],
@@ -1458,7 +1462,7 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
     db.prepare(
       `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff)
                 VALUES (?, 'exit', ?, ?, ?)`,
-    ).run('mem', 'sX', Date.now() - 60 * 3600000, 'abc123');
+    ).run('mem', 'sPrev', Date.now() - 60 * 3600000, 'abc123');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
       changed: [],
@@ -1476,7 +1480,7 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
     db.prepare(
       `INSERT INTO session_handoffs (project, type, session_id, created_at_epoch, git_sha_at_handoff, match_keywords)
                 VALUES (?, 'exit', ?, ?, ?, ?)`,
-    ).run('mem', 'sX', Date.now() - 80 * 3600000, 'abc123', 'auth refactor');
+    ).run('mem', 'sPrev', Date.now() - 80 * 3600000, 'abc123', 'auth refactor');
 
     vi.spyOn(gitStateModule, 'readGitState').mockReturnValue({
       changed: [],

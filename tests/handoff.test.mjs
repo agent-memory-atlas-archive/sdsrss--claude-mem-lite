@@ -263,10 +263,56 @@ describe('buildAndSaveHandoff', () => {
 
     const row = db.prepare(`SELECT * FROM session_handoffs WHERE project = 'test-proj'`).get();
     expect(row.unfinished).toContain('handoff logic');
-    expect(row.unfinished).toContain('sed -i dispatch.mjs');
+    // A Bash edit is named by the file it wrote, not by its command text.
+    expect(row.unfinished).toContain('Edited dispatch.mjs (Bash)');
     expect(row.unfinished).not.toContain('cat config.mjs');
     expect(row.unfinished).toContain('test failed');
     expect(row.unfinished).not.toContain('Read schema');
+  });
+
+  // Sandbox usage evaluation 2026-09-29: the handoff replayed passing runs as "→ ERROR", a
+  // heredoc script as its first 50 characters, and the host's auto-memory note as the only
+  // "edit" of the session.
+  it('Recent activity: hard failures and project edits only, Bash edits named by file', () => {
+    seedSession(db, 's1', 'test-proj');
+    seedPrompt(db, 's1', 'add coupons', 1);
+    const snapshot = {
+      entries: [
+        {
+          tool: 'Bash',
+          desc: 'npm test → ERROR: ℹ tests 25 ℹ pass 25 ℹ fail 0',
+          isError: true,
+          isHardError: false,
+          files: [],
+        },
+        {
+          tool: 'Bash',
+          desc: "python3 - <<'EOF' p='src/invoice.mjs' s=open(p).read()…",
+          files: ['/w/app/src/invoice.mjs', '/w/app/test/invoice.test.mjs'],
+          bashWrites: ['/w/app/src/invoice.mjs', '/w/app/test/invoice.test.mjs'],
+          isError: false,
+          isHardError: false,
+        },
+        { tool: 'Write', desc: 'Created project_discount_plan.md (820 chars)', files: [], isError: false },
+        {
+          tool: 'Bash',
+          desc: 'npm test → ERROR: ✖ coupon applies before tax AssertionError: 10170 !== 10000',
+          isError: true,
+          isHardError: true,
+          files: [],
+        },
+      ],
+      files: ['/w/app/src/invoice.mjs'],
+    };
+    buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', snapshot);
+    const pending = db
+      .prepare(`SELECT unfinished FROM session_handoffs WHERE project = 'test-proj'`)
+      .get().unfinished;
+    expect(pending).toContain('Edited invoice.mjs, invoice.test.mjs (Bash)');
+    expect(pending).toContain('AssertionError');
+    expect(pending).not.toContain('ℹ fail 0');
+    expect(pending).not.toContain('python3');
+    expect(pending).not.toContain('project_discount_plan.md');
   });
 
   it('successful bash commands (git push, test, build) are NOT pending activity', () => {

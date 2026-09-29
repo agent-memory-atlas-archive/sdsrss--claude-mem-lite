@@ -36,6 +36,46 @@ import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { summarySourceLabel } from './lib/fast-summary.mjs';
 
 /**
+ * Which episode entries the handoff replays as "Recent activity": failures and edits.
+ *
+ * A failure is `isHardError` when the entry carries it, `isError` only for entries buffered
+ * before that field existed. `isError` fires on any "error"/"fail" word in exit-0 output —
+ * in the sandbox usage evaluation (docs/audits/20260929-sandbox-usage-eval.md) it put
+ * passing test runs and printed diffs under Recent activity as "→ ERROR".
+ *
+ * An edit must have touched a file the capture kept: an Edit/Write whose `files` came back
+ * EMPTY wrote only to a path the capture drops (the host's auto-memory, the scratchpad), so
+ * "Created MEMORY.md" is not the user's work. An entry with no `files` field at all predates
+ * the field and is kept as before.
+ * @param {object} e episode entry
+ * @returns {boolean}
+ */
+function isPendingActivity(e) {
+  if (!e) return false;
+  const failed = e.isHardError !== undefined ? e.isHardError : e.isError;
+  if (failed) return true;
+  if (!isEditEntry(e)) return false;
+  return !(Array.isArray(e.files) && e.files.length === 0);
+}
+
+/**
+ * The line an entry contributes. A Bash edit is named by the files it wrote: its command is
+ * usually a heredoc script (`python3 - <<'EOF' p='…`), and the first 50 characters of that
+ * say nothing about what changed.
+ * @param {object} e episode entry
+ * @returns {string}
+ */
+function pendingActivityLine(e) {
+  const failed = e.isHardError !== undefined ? e.isHardError : e.isError;
+  if (e.tool === 'Bash' && !failed && Array.isArray(e.bashWrites) && e.bashWrites.length > 0) {
+    const names = [...new Set(e.bashWrites.map((f) => basename(f)))];
+    const shown = names.slice(0, 4).join(', ') + (names.length > 4 ? ` +${names.length - 4} more` : '');
+    return `Edited ${shown} (Bash)`;
+  }
+  return e.desc;
+}
+
+/**
  * Build and save a handoff snapshot to session_handoffs table.
  * Called synchronously during handleStop (/exit) or handleSessionStart (/clear).
  *
@@ -263,8 +303,8 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   if (episodeSnapshot?.entries) {
     const seenDescs = new Set();
     const pendingDescs = episodeSnapshot.entries
-      .filter((e) => e.isError || isEditEntry(e))
-      .map((e) => e.desc)
+      .filter(isPendingActivity)
+      .map(pendingActivityLine)
       .filter((d) => {
         if (seenDescs.has(d)) return false;
         seenDescs.add(d);

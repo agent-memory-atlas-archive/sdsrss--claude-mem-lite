@@ -125,6 +125,7 @@ import {
   hardDeleteCandidateCount,
   purgeStale,
   recoverOrphanedChildren,
+  runWideEdgeCleanupOnce,
   recoverBuriedLessons,
   sweepDeferredWorkOrphans,
 } from './lib/maintain-core.mjs';
@@ -1990,6 +1991,17 @@ function runSessionStartAutoMaintain(db, project) {
       const orphansRecovered = recoverOrphanedChildren(db, mctx);
       if (orphansRecovered > 0)
         debugLog('DEBUG', 'auto-maintain', `recovered ${orphansRecovered} orphaned compression children`);
+
+      // Report §9-D one-shot: narrow the event edges written before episodes were keyed to
+      // their edited files. Own snapshot (only when something changes) and own marker, so it
+      // runs once per database and never on a foreground hook.
+      const edgePrune = runWideEdgeCleanupOnce(db);
+      if (edgePrune.ran && edgePrune.changed > 0)
+        debugLog(
+          'DEBUG',
+          'auto-maintain',
+          `narrowed ${edgePrune.changed} events (${edgePrune.removed} edges)`,
+        );
 
       // Heal lesson rows citation-decay buried at importance 0 under the old floor=0.
       // Non-destructive (0→1 on lesson-bearing rows only); idempotent no-op once none remain.

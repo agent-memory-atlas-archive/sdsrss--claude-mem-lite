@@ -652,7 +652,7 @@ function main() {
       console.log('before the split existed). Re-walk live, or re-dump — an absent field is not a zero.');
     } else {
       console.log("Arms are path A's gates in path A's order (admissionVerdict). An id that rode in on two");
-      console.log('verdicts in one session is a pair in both. D#181 reads `no-signal`, D#182 `length<8`,');
+      console.log('verdicts in one session is a pair in both. D#183 reads `no-signal`, D#184 `length<8`,');
       console.log('each against `admitted`; `shape` empties after the release carrying 8e5efa3.');
       console.table(
         rows.map((r) => ({
@@ -809,8 +809,8 @@ export function byScope(records, scopeOf) {
  *   shape       a no-topic shape (lib/prompt-admission.mjs). Path B stops searching these
  *               from 8e5efa3 on, so this arm empties in sessions after that release.
  *   length<8    CJK-weighted effective length under 8: path A's shouldSkip length arm.
- *               Path B admits 2-char CJK / 5-char other on purpose — D#182's arm.
- *   no-signal   no error signature, file, intent, identifier or CJK run — D#181's arm.
+ *               Path B admits 2-char CJK / 5-char other on purpose — D#184's arm.
+ *   no-signal   no error signature, file, intent, identifier or CJK run — D#183's arm.
  *   short-8-14  admitted by path A only in a follow-up session (FOLLOWUP_PROMPT_MIN_LENGTH);
  *               the session state is not in the transcript, so it is its own arm.
  *   admitted    path A admits it in every session.

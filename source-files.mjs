@@ -82,7 +82,6 @@ export const SOURCE_FILES = [
   'lib/stats-quality.mjs',
   'lib/low-signal-patterns.mjs',
   'lib/private-strip.mjs',
-  'lib/project-owner.mjs',
   'lib/project-rekey.mjs',
   // Which writer produced an observation (explicit save vs machine-written); search + get marks.
   'lib/provenance.mjs',

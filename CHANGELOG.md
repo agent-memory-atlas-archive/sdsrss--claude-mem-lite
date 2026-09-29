@@ -4,36 +4,30 @@ All notable changes to claude-mem-lite are documented in this file.
 
 ## v6.21.0 — projects and concurrent sessions stop sharing memory
 
-**Upgrade note: some projects get a new id, and what they stored moves once.** No schema-version
+**Upgrade note: projects named in a non-Latin script get a new id, and what they stored moves once.** No schema-version
 change: 6.20.0 still opens the database after this release has (the two columns it adds are
 listed under Changed).
 
-- **Which projects.** A project's id is `<parent>--<directory>`. Two kinds of directory shared
-  their id with other directories and now get their own:
-  - a name with characters outside ASCII letters, digits and `_.-`. Each such character used to
-    become `-`, so `~/projects/博客` and `~/projects/商城` were both `projects----`. Letters,
-    marks and digits of every script are now kept (`projects--博客`); punctuation, symbols, emoji
-    and invisible format characters are still replaced. An all-ASCII name keeps its id byte for
-    byte.
-  - the same parent and name in different repositories: `~/a/packages/api` and
-    `~/b/packages/api`, or two repositories' `.claude/worktrees/fix`. One directory keeps
-    `packages--api`; each other one gets `packages--api~<8 hex digits from its path>`.
-- **Which directory keeps a shared id.** The first session start in one of those directories
-  after the upgrade decides, from the stored memories: the id goes to the existing directory the
-  most file-linked memories came from, and to the directory starting the session only when no
-  memory points at another one. The decision is recorded in the runtime directory and stands
-  until that directory no longer exists.
+- **Which projects.** A project's id is `<parent>--<directory>`, and every character outside
+  ASCII letters, digits and `_.-` used to become `-`, so `~/projects/博客` and `~/projects/商城`
+  were both `projects----`: two projects' memories, handoffs, startup context and file recall
+  were one pool. Letters, marks and digits of every script are now kept (`projects--博客`);
+  punctuation, symbols, emoji and invisible format characters are still replaced. An all-ASCII
+  name keeps its id byte for byte.
 - **What moves, once per project, at its first session start.**
-  - A non-Latin project whose old id no stored path shows another directory using takes
+  - When no stored file path shows another directory using the old id, the project takes
     everything under it: memories, sessions, summaries, handoffs, events and deferred items.
-  - Otherwise, and always for a directory that does not keep a shared id, only the memories
-    whose recorded file paths lie inside the directory move, with the rest of their compression
-    groups. Memories with no path, or only relative ones, stay under the old id.
+  - Otherwise only the memories whose recorded file paths lie inside the directory move, with
+    the rest of their compression groups. Memories with no path, or only relative ones, stay
+    under the old id.
   - A one-time notice says what moved and, when memories stayed, how to list them:
     `claude-mem-lite recent 50 --project <old id>`.
 - **Reverting.** Pin `claude-mem-lite@6.20.0` before upgrading to avoid the move. After it,
   6.20.0 opens the database but names these directories by their old ids again, so their moved
   rows are listed only with `--project <new id>`.
+- **Not in this release:** directories with the same parent and name in different repositories
+  (`~/a/packages/api` and `~/b/packages/api`, two repositories' `.claude/worktrees/fix`) still
+  share one id.
 
 **Changed**
 

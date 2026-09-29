@@ -1,10 +1,7 @@
 // claude-mem-lite shared project resolution
 // Extracted from server.mjs and mem-cli.mjs to eliminate duplication
 
-import { basename, dirname, join } from 'path';
-import { readFileSync, existsSync } from 'fs';
-// A leaf over node:os / node:path: resolves the data dir without loading better-sqlite3.
-import { resolveDataDir, resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
+import { basename, dirname } from 'path';
 
 // Leaf module: imports nothing from utils.mjs. utils.mjs re-exports this module's
 // symbols as a backward-compat barrel, so importing the barrel back from here
@@ -32,79 +29,7 @@ const _cache = new Map();
  * @returns {string} Sanitized project identifier safe for use in filenames
  */
 export function inferProject() {
-  return projectIdForDir(inferProjectDir());
-}
-
-/** Runtime file recording which directory owns a plain project id (D16). */
-export const PROJECT_OWNER_PREFIX = '.project-owner-';
-
-/** A directory as the owner record stores it: no trailing separator, NFC. */
-export function canonicalProjectDir(dir) {
-  return (
-    String(dir)
-      .replace(/[\\/]+$/, '')
-      .normalize('NFC') || String(dir)
-  );
-}
-
-/** FNV-1a 32-bit over the UTF-8 bytes, as 8 hex digits. Stable across processes and releases. */
-function pathHash(s) {
-  let h = 0x811c9dc5;
-  for (const b of Buffer.from(s, 'utf8')) {
-    h ^= b;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(16).padStart(8, '0');
-}
-
-/** RUNTIME_DIR, resolved the way hook-shared.mjs resolves it, or null when it cannot be. */
-function defaultRuntimeDir() {
-  try {
-    return resolveRuntimeDir(resolveDataDir(process.env.CLAUDE_MEM_DIR));
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The directory recorded as owning `id`, or null when there is no record or the recorded
- * directory no longer exists (a deleted or moved checkout gives its id up).
- *
- * @param {string|null} runtimeDir
- * @param {string} id
- * @returns {string|null}
- */
-export function readProjectOwner(runtimeDir, id) {
-  if (!runtimeDir) return null;
-  let owner;
-  try {
-    owner = readFileSync(join(runtimeDir, `${PROJECT_OWNER_PREFIX}${id}`), 'utf8').trim();
-  } catch {
-    return null;
-  }
-  return owner && existsSync(owner) ? owner : null;
-}
-
-/**
- * The project id of a directory: its plain `parent--basename` id (projectNameFromDir) unless
- * another directory owns that id, in which case `<id>~<8 hex>` from the full path.
- *
- * D16: ~/a/packages/api and ~/b/packages/api — or two repositories' .claude/worktrees/fix —
- * had one id, so each was injected the other's Last Session, handoffs and file lessons. The
- * owner record is written only by SessionStart (lib/project-owner.mjs); this read is one
- * small file per call and never writes, so the hook hot path stays DB-free. With no record
- * the plain id is returned, exactly as before D16.
- *
- * @param {string} dir Absolute directory path
- * @param {string|null} [runtimeDir]
- * @returns {string}
- */
-export function projectIdForDir(dir, runtimeDir = defaultRuntimeDir()) {
-  const id = projectNameFromDir(dir);
-  const owner = readProjectOwner(runtimeDir, id);
-  const self = canonicalProjectDir(dir);
-  if (!owner || canonicalProjectDir(owner) === self) return id;
-  return `${id}~${pathHash(self)}`;
+  return projectNameFromDir(inferProjectDir());
 }
 
 /**

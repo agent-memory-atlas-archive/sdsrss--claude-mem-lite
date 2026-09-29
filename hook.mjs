@@ -49,8 +49,7 @@ import {
 // Direct import (not via the utils.mjs barrel): the barrel's re-exports are a v2.21
 // backward-compat surface that knip already lists as unused; new shared symbols go to
 // their canonical module.
-import { inferProjectDir, projectNameFromDir, readProjectOwner } from './project-utils.mjs';
-import { electProjectOwner, claimProjectOwner, sweepDeadProjectOwners } from './lib/project-owner.mjs';
+import { inferProjectDir } from './project-utils.mjs';
 import { extractFileTargets } from './bash-utils.mjs';
 import { isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
 import { readHookStdin } from './lib/hook-stdin.mjs';
@@ -2737,32 +2736,6 @@ function noteLocalSteeringOnce(project) {
 }
 
 /**
- * D16: before anything names a file or a row after this project, settle which directory owns
- * its plain id. A live owner record is left alone; otherwise the owner is elected from the
- * rows (lib/project-owner.mjs) and recorded. Records naming a directory that is gone are
- * swept first. Best-effort: with no record, every face uses the plain id, as before D16.
- */
-function settleProjectOwner() {
-  try {
-    sweepDeadProjectOwners(RUNTIME_DIR);
-    const dir = inferProjectDir();
-    const id = projectNameFromDir(dir);
-    if (readProjectOwner(RUNTIME_DIR, id)) return;
-    const db = openDb();
-    if (!db) return;
-    let owner;
-    try {
-      owner = electProjectOwner(db, { dir, id, alsoProjects: [legacyProjectNameFromDir(dir)] });
-    } finally {
-      db.close();
-    }
-    claimProjectOwner(RUNTIME_DIR, id, owner);
-  } catch (e) {
-    debugCatch(e, 'session-start-owner');
-  }
-}
-
-/**
  * D9: a project whose directory name is not all ASCII got a new id (project-utils.mjs
  * projectNameFromDir). Once per project, move the rows its old id holds that provably came
  * from this directory, and tell the user where the rest are. No-op for ASCII names, whose id
@@ -2771,44 +2744,21 @@ function settleProjectOwner() {
 function rekeyProjectOnce(db, project) {
   try {
     const dir = inferProjectDir();
-    const plain = projectNameFromDir(dir);
-    // Ids this directory's rows can sit under: the pre-D9 one, and — when another directory
-    // owns the plain id (D16) — the plain one.
-    const sources = [...new Set([legacyProjectNameFromDir(dir), plain])].filter((s) => s !== project);
-    if (sources.length === 0) return;
+    const legacy = legacyProjectNameFromDir(dir);
+    if (legacy === project) return;
     const marker = join(RUNTIME_DIR, `${PROJECT_REKEY_MARKER_PREFIX}${project}`);
     if (existsSync(marker)) return;
-    let moved = 0;
-    let left = 0;
-    let whole = false;
-    for (const legacy of sources) {
-      // An old id nothing shows another directory using is this directory's alone: take all of
-      // it — sessions, summaries, handoffs, deferred items — not only the memories a path proves.
-      // Never for the plain id of a directory that does not own it (D16): the owner is alive.
-      if (legacy !== plain && project === plain && legacyIdIsExclusive(db, { dir, legacy })) {
-        moved += moveProjectRows(db, { from: legacy, to: project }).moved;
-        whole = true;
-        continue;
-      }
-      const r = rekeyLegacyProject(db, { dir, project, legacy });
-      moved += r.moved;
-      if (legacy !== plain) left += r.left;
-    }
+    // An old id nothing shows another directory using is this directory's alone: take all of
+    // it — sessions, summaries, handoffs, deferred items — not only the memories a path proves.
+    const whole = legacyIdIsExclusive(db, { dir, legacy });
+    const { moved, left } = whole
+      ? { ...moveProjectRows(db, { from: legacy, to: project }), left: 0 }
+      : rekeyLegacyProject(db, { dir, project, legacy });
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    if (moved === 0 && left === 0 && !whole) return;
     const movedLine = whole
       ? `Moved everything stored under the old id (${moved} ${moved === 1 ? 'memory' : 'memories'}, with its sessions and deferred items): nothing there came from another directory.`
       : `Moved ${moved} ${moved === 1 ? 'memory' : 'memories'} whose files are in this directory.`;
-    if (project !== plain) {
-      // D16: another directory owns the plain id; what could not be attributed stays with it.
-      queueHookSystemMessage(
-        `claude-mem-lite: this directory's memory now has its own id, ${project}, because ${plain} ` +
-          `belongs to ${readProjectOwner(RUNTIME_DIR, plain) || 'another directory'}. ${movedLine} ` +
-          `Memories with no file path stay under ${plain}. Shown once.`,
-      );
-      return;
-    }
-    if (moved === 0 && left === 0 && !whole) return;
-    const legacy = sources[0];
     const rest =
       left === 0
         ? ''
@@ -2896,7 +2846,6 @@ function adoptOrphanEpisodes(ccSessionId) {
 }
 
 async function handleSessionStart() {
-  settleProjectOwner();
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
   gcStalePreRecallCooldowns();

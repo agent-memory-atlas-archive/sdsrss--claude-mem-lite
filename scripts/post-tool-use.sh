@@ -84,10 +84,8 @@ if [[ "$tool" == "Read" ]]; then
     # D14/D9: with a host pid the reads file belongs to the process (hook-episode.mjs
     # readsFile), which pins CLAUDE_PROJECT_DIR, so no project name is needed at all — and a
     # project name in a non-Latin script is exactly what bash cannot spell like Node.
-    _mem_pid_key=0
     if [[ "${CLAUDE_PID:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
       _reads_key="@h${CLAUDE_PID}"
-      _mem_pid_key=1
     else
       _dir="${CLAUDE_PROJECT_DIR:-$PWD}"
       # Strip trailing slashes so ${_dir##*/} / ${_dir%/*} match Node's path.basename /
@@ -186,20 +184,10 @@ if [[ "$tool" == "Read" ]]; then
     # (a chmod would be a spawn). It only applies at creation; server.mjs
     # hardenRuntimeFiles() remediates files that predate this fix. Scoped safely:
     # this branch always exits before the node handoff below.
-    # D16: another directory may own this plain id (project-utils.mjs projectIdForDir). This
-    # directory's id then carries a hash of its path, which bash does not compute — hand the
-    # Read to hook.mjs. `$(<f)` is a builtin read; the owner is compared the way Node stores it
-    # (no trailing slash — `_dir` is already stripped; non-ASCII paths never reach here).
-    if [[ $_mem_pid_key == 0 && -r "${runtime_dir}/.project-owner-${_reads_key}" ]]; then
-      _mem_owner=$(<"${runtime_dir}/.project-owner-${_reads_key}")
-      [[ "$_mem_owner" != "$_dir" && -d "$_mem_owner" ]] && _mem_read_to_node=1
-    fi
-    if [[ $_mem_read_to_node == 0 ]]; then
-      umask 077
-      mkdir -p "$runtime_dir" 2>/dev/null
-      # Use printf to avoid shell interpretation of special characters in file paths
-      printf '%s\n' "$file_path" >> "${runtime_dir}/reads-${_reads_key}.txt"
-    fi
+    umask 077
+    mkdir -p "$runtime_dir" 2>/dev/null
+    # Use printf to avoid shell interpretation of special characters in file paths
+    printf '%s\n' "$file_path" >> "${runtime_dir}/reads-${_reads_key}.txt"
   fi
   [[ $_mem_read_to_node == 1 ]] || exit 0
 fi

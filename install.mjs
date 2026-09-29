@@ -94,7 +94,6 @@ import {
 import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
-import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
@@ -3129,16 +3128,11 @@ function cleanup() {
     }
   }
 
-  // Reap leaked test-fixture sandboxes from temp (mem-e2e-* / mem-audit-* / cite-*
-  // etc.) left by interrupted vitest runs — the §8.V4 disposal gap the audit found
-  // (~795MB). 24h age here (vs 1h in the test reaper) is conservative for a manual
-  // cleanup. Scans os.tmpdir(), the Claude Code temp root and ~/.cache/tmp (where
-  // `npm test` points TMPDIR, off the RAM-backed /tmp), depth-1, mem-prefixes
-  // only — never touches other tools' temp dirs.
-  const fixtureRoots = [tmpdir(), join(homedir(), '.claude', 'tmp'), join(homedir(), '.cache', 'tmp')];
-  const swept = sweepStaleTestFixtures({ dirs: fixtureRoots, ageMs: 24 * 60 * 60 * 1000, dryRun });
-  for (const p of swept.names) ok(`${dryRun ? 'Would remove' : 'Removed'}: ${p}`);
-  removed += swept.removed;
+  // No test-fixture sweep here. This used to reap `mem-*` / `cite-*` / `adopt-*` dirs from
+  // os.tmpdir(), ~/.claude/tmp and ~/.cache/tmp — this repo's fixture prefixes, and generic
+  // enough that it deleted other programs' temp dirs (`mem-profiler-snapshots/`) for users
+  // doctor had sent here. Leaked fixtures are the test suite's to reap, and it does, at the
+  // start of every run (tests/global-setup.mjs → lib/tmp-fixture-sweep.mjs).
 
   const verb = dryRun ? 'would be removed' : 'removed';
   console.log(`\n  ${removed === 0 ? 'No stale files found.' : `${removed} stale file(s) ${verb}.`}\n`);

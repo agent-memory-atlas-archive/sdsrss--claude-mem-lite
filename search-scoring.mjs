@@ -383,6 +383,8 @@ export function autoBoostIfNeeded(db, ids) {
     UPDATE observations SET importance = 2
     WHERE id IN (${placeholders})
       AND COALESCE(importance, 1) = 1
+      -- D10: not an importance a person set (update --importance / mem_update).
+      AND importance_set_at IS NULL
       AND COALESCE(access_count, 0) >= 2
       -- Exactly the rows demotePinned would floor to 1 (see the docblock above).
       AND NOT (

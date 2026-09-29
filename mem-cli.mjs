@@ -2367,7 +2367,7 @@ function cmdRestore(db, argv) {
       subtitle = ?, concepts = ?, facts = ?, search_aliases = ?, files_read = ?, branch = COALESCE(?, branch),
       scope = ?,
       access_count = ?, cited_count = ?, uncited_streak = ?, injection_count = ?,
-      decay_seen_count = ?, last_accessed_at = ?
+      decay_seen_count = ?, last_accessed_at = ?, importance_set_at = ?
     WHERE id = ?`);
 
   let restored = 0,
@@ -2470,6 +2470,9 @@ function cmdRestore(db, argv) {
         num(r.injection_count),
         num(r.decay_seen_count),
         r.last_accessed_at ?? null,
+        Number.isFinite(Number(r.importance_set_at)) && r.importance_set_at !== null
+          ? Number(r.importance_set_at)
+          : null,
         res.id,
       );
       // The FTS `text` column re-syncs through the observations _au trigger.

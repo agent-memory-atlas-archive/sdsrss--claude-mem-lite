@@ -387,3 +387,35 @@ describe('restore exits non-zero when nothing in the file could be restored', ()
     expect(again.exitCode).toBe(0);
   });
 });
+
+// D10: a person-set importance marker (importance_set_at) survives export → restore, so the
+// access-driven promotions keep leaving it alone in the restored store.
+describe('restore keeps importance_set_at', () => {
+  it('round-trips the marker', () => {
+    const dir = makeTmpDir();
+    try {
+      const a = join(dir, 'a');
+      const db = initDb(a);
+      insertSession(db, { id: 's', project: 'p' });
+      const id = Number(
+        insertObs(db, { sessionId: 's', project: 'p', title: 'set by hand', importance: 1 }).lastInsertRowid,
+      );
+      db.prepare('UPDATE observations SET importance_set_at = 1234567 WHERE id = ?').run(id);
+      db.close();
+      const exported = runCli(['export', '--project', 'p'], a);
+      expect(exported.exitCode).toBe(0);
+      const file = join(dir, 'backup.json');
+      writeFileSync(file, exported.stdout);
+      const b = join(dir, 'b');
+      expect(runCli(['restore', file], b).exitCode).toBe(0);
+      const back = new Database(join(b, 'claude-mem-lite.db'), { readonly: true });
+      const row = back
+        .prepare("SELECT importance_set_at FROM observations WHERE title = 'set by hand'")
+        .get();
+      back.close();
+      expect(row.importance_set_at).toBe(1234567);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

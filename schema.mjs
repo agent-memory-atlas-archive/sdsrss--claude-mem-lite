@@ -199,6 +199,8 @@ const LATEST_MIGRATION_COLUMNS = [
   // what makes the ALTER reachable at all. Pinned by the legacy-upgrade case in
   // tests/handoff-consume.test.mjs rather than left as an assertion in a comment.
   { table: 'session_handoffs', column: 'consumed_at' },
+  // D10, same no-bump reasoning (tests/importance-human-set.test.mjs pins the upgrade).
+  { table: 'observations', column: 'importance_set_at' },
   { table: 'observations', column: 'last_access_session_id' }, // v48
   { table: 'observations', column: 'decay_seen_at_first_cite' }, // v46
   { table: 'citation_surface_log', column: 'surface' }, // v45
@@ -614,6 +616,23 @@ export function initSchema(db) {
     // mislabel the one field in this row that a human actually wrote.
     if (!handoffCols.includes('next_steps')) {
       db.exec(`ALTER TABLE session_handoffs ADD COLUMN next_steps TEXT DEFAULT NULL`);
+    }
+  } catch {
+    /* non-critical — migration retries on next open */
+  }
+
+  // D10 (2026-09-29): when a PERSON last set this row's importance (update --importance /
+  // mem_update). The passes that promote on access (search-scoring autoBoostIfNeeded,
+  // maintain boostAccessed) skip a row carrying it, so `importance 1` from a user is not
+  // undone by the next read. Additive + nullable, no CURRENT_SCHEMA_VERSION bump — the
+  // consumed_at reasoning above: an older build opening this DB just ignores the column.
+  try {
+    const obsCols = db
+      .prepare(`PRAGMA table_info(observations)`)
+      .all()
+      .map((c) => c.name);
+    if (!obsCols.includes('importance_set_at')) {
+      db.exec(`ALTER TABLE observations ADD COLUMN importance_set_at INTEGER DEFAULT NULL`);
     }
   } catch {
     /* non-critical — migration retries on next open */

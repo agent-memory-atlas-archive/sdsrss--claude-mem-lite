@@ -49,7 +49,8 @@ import {
 // Direct import (not via the utils.mjs barrel): the barrel's re-exports are a v2.21
 // backward-compat surface that knip already lists as unused; new shared symbols go to
 // their canonical module.
-import { inferProjectDir } from './project-utils.mjs';
+import { inferProjectDir, projectNameFromDir, readProjectOwner } from './project-utils.mjs';
+import { electProjectOwner, claimProjectOwner, sweepDeadProjectOwners } from './lib/project-owner.mjs';
 import { extractFileTargets } from './bash-utils.mjs';
 import { isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
 import { readHookStdin } from './lib/hook-stdin.mjs';
@@ -2734,6 +2735,32 @@ function noteLocalSteeringOnce(project) {
 }
 
 /**
+ * D16: before anything names a file or a row after this project, settle which directory owns
+ * its plain id. A live owner record is left alone; otherwise the owner is elected from the
+ * rows (lib/project-owner.mjs) and recorded. Records naming a directory that is gone are
+ * swept first. Best-effort: with no record, every face uses the plain id, as before D16.
+ */
+function settleProjectOwner() {
+  try {
+    sweepDeadProjectOwners(RUNTIME_DIR);
+    const dir = inferProjectDir();
+    const id = projectNameFromDir(dir);
+    if (readProjectOwner(RUNTIME_DIR, id)) return;
+    const db = openDb();
+    if (!db) return;
+    let owner;
+    try {
+      owner = electProjectOwner(db, { dir, id, alsoProjects: [legacyProjectNameFromDir(dir)] });
+    } finally {
+      db.close();
+    }
+    claimProjectOwner(RUNTIME_DIR, id, owner);
+  } catch (e) {
+    debugCatch(e, 'session-start-owner');
+  }
+}
+
+/**
  * D9: a project whose directory name is not all ASCII got a new id (project-utils.mjs
  * projectNameFromDir). Once per project, move the rows its old id holds that provably came
  * from this directory, and tell the user where the rest are. No-op for ASCII names, whose id
@@ -2742,13 +2769,33 @@ function noteLocalSteeringOnce(project) {
 function rekeyProjectOnce(db, project) {
   try {
     const dir = inferProjectDir();
-    const legacy = legacyProjectNameFromDir(dir);
-    if (legacy === project) return;
+    const plain = projectNameFromDir(dir);
+    // Ids this directory's rows can sit under: the pre-D9 one, and — when another directory
+    // owns the plain id (D16) — the plain one.
+    const sources = [...new Set([legacyProjectNameFromDir(dir), plain])].filter((s) => s !== project);
+    if (sources.length === 0) return;
     const marker = join(RUNTIME_DIR, `${PROJECT_REKEY_MARKER_PREFIX}${project}`);
     if (existsSync(marker)) return;
-    const { moved, left } = rekeyLegacyProject(db, { dir, project, legacy });
+    let moved = 0;
+    let left = 0;
+    for (const legacy of sources) {
+      const r = rekeyLegacyProject(db, { dir, project, legacy });
+      moved += r.moved;
+      if (legacy !== plain) left += r.left;
+    }
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    const movedLine = `Moved ${moved} ${moved === 1 ? 'memory' : 'memories'} whose files are in this directory.`;
+    if (project !== plain) {
+      // D16: another directory owns the plain id; what could not be attributed stays with it.
+      queueHookSystemMessage(
+        `claude-mem-lite: this directory's memory now has its own id, ${project}, because ${plain} ` +
+          `belongs to ${readProjectOwner(RUNTIME_DIR, plain) || 'another directory'}. ${movedLine} ` +
+          `Memories with no file path stay under ${plain}. Shown once.`,
+      );
+      return;
+    }
     if (moved === 0 && left === 0) return;
+    const legacy = sources[0];
     const rest =
       left === 0
         ? ''
@@ -2760,7 +2807,7 @@ function rekeyProjectOnce(db, project) {
     queueHookSystemMessage(
       `claude-mem-lite: this project's memory now has its own id, ${project}. Its old id, ${legacy}, ` +
         'could be shared with other directories whose names are not in Latin letters. ' +
-        `Moved ${moved} ${moved === 1 ? 'memory' : 'memories'} whose files are in this directory.${rest} Shown once.`,
+        `${movedLine}${rest} Shown once.`,
     );
   } catch (e) {
     debugCatch(e, 'session-start-rekey');
@@ -2836,6 +2883,7 @@ function adoptOrphanEpisodes(ccSessionId) {
 }
 
 async function handleSessionStart() {
+  settleProjectOwner();
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
   gcStalePreRecallCooldowns();

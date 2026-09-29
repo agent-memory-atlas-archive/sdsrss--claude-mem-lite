@@ -158,6 +158,10 @@ describe('no shipped module keeps a private temp+rename writer', () => {
     // would silently widen the permissions on session state
     'hook-update.mjs', // update-state.json
     'lib/native-binding-hint.mjs', // ABI self-heal marker (runs when the DB cannot open)
+    // D16 project-owner record (.project-owner-<id>, runtime dir, 0600). Its publish is a
+    // LINK — create-if-absent, so two SessionStarts cannot both win — which the shared writer
+    // has no mode for; the rename only replaces a record whose directory is gone.
+    'lib/project-owner.mjs',
   ]);
 
   it('the sweep walks a plausible number of shipped modules', () => {

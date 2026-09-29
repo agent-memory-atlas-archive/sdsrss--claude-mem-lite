@@ -83,6 +83,7 @@
     "lib/stats-quality.mjs",
     "lib/low-signal-patterns.mjs",
     "lib/private-strip.mjs",
+    "lib/project-owner.mjs",
     "lib/project-rekey.mjs",
     "lib/provenance.mjs",
     "lib/citation-tracker.mjs",

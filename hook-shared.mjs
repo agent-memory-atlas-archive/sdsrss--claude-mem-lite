@@ -422,6 +422,19 @@ function processAlive(pid) {
 }
 
 /**
+ * True when `suffix` (a hostScopeSuffix() value) names a Claude Code process other than this one
+ * that is still running — whose buffer, and lock-contention spill, are its own to flush. False
+ * for this process, for a gone one, and for '' (a writer that had no host pid).
+ *
+ * @param {string} suffix
+ * @returns {boolean}
+ */
+export function isOtherLiveHost(suffix) {
+  const m = /^@h([1-9]\d{0,9})$/.exec(String(suffix));
+  return !!m && suffix !== hostScopeSuffix() && processAlive(Number(m[1]));
+}
+
+/**
  * Runtime files `<stem>@h<pid><ext>` left by a Claude Code process that has exited — files no
  * live session will read again (D14). Never this process's own, and none at all when this
  * process has no host pid. A recycled pid reads as alive, so such a file waits for the

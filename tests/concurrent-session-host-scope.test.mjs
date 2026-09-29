@@ -260,6 +260,65 @@ describe('adoption and clean-up', () => {
     expect(buffers()).toEqual(before); // same file, same content, for the next SessionStart
   });
 
+  it('adopts the per-project buffer an older version left under a non-Latin project’s OLD id', () => {
+    // Before D9 ~/projects/博客 buffered into ep-projects----.json; its new id is projects--博客,
+    // so nothing looked under the old name again and the 7-day sweep deleted the buffer.
+    const blog = join(dirname(dirname(projectDir)), 'projects', '博客');
+    mkdirSync(blog, { recursive: true });
+    const legacyBuffer = {
+      sessionId: 'hook-old-blog',
+      project: 'projects----',
+      startedAt: Date.now() - 5000,
+      lastAt: Date.now() - 4000,
+      files: [join(blog, 'post.js')],
+      entries: [
+        {
+          tool: 'Edit',
+          desc: 'post.js: layout',
+          files: [join(blog, 'post.js')],
+          ts: Date.now() - 4000,
+          isError: false,
+          isSignificant: true,
+          bashSig: null,
+        },
+      ],
+      filesRead: [],
+    };
+    for (const host of [HOST_A, undefined]) {
+      writeFileSync(join(runtime, 'ep-projects----.json'), JSON.stringify(legacyBuffer));
+      start(`cc-blog-${host}`, host, 'startup', { CLAUDE_PROJECT_DIR: blog });
+      expect(readdirSync(runtime), `host ${host}`).not.toContain('ep-projects----.json');
+    }
+  });
+
+  it("collects a gone process's Read paths along with its buffer", () => {
+    const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], {
+      encoding: 'utf8',
+    }).stdout;
+    start('cc-D', dead);
+    prompt('cc-D', dead, 'Fix the DELTA_BUG crash on empty body');
+    const read = spawnSync('bash', [join(REPO, 'scripts/post-tool-use.sh')], {
+      input: JSON.stringify({
+        session_id: 'cc-D',
+        tool_name: 'Read',
+        tool_input: { file_path: join(projectDir, 'src/server.js') },
+      }),
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_PROJECT_DIR: projectDir,
+        CLAUDE_PID: dead,
+        CLAUDE_MEM_DIR: '',
+      },
+      encoding: 'utf8',
+    });
+    expect(read.status).toBe(0);
+    edit('cc-D', dead, 'src/server.js', 'DELTA_BUG');
+    expect(readdirSync(runtime), 'premise: the gone process left its reads').toContain(`reads-@h${dead}.txt`);
+    start('cc-E', HOST_A);
+    expect(readdirSync(runtime).filter((f) => f.startsWith('reads-'))).toEqual([]);
+  });
+
   it("removes a gone process's session file and keeps a live one's", () => {
     const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], {
       encoding: 'utf8',

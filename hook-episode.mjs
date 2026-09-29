@@ -16,7 +16,9 @@ import {
   constants as fsConstants,
 } from 'fs';
 import { inferProject, isEditEntry } from './utils.mjs';
-import { RUNTIME_DIR, hostScopeSuffix, deadHostFiles } from './hook-shared.mjs';
+import { RUNTIME_DIR, hostScopeSuffix, deadHostFiles, isOtherLiveHost } from './hook-shared.mjs';
+import { inferProjectDir } from './project-utils.mjs';
+import { legacyProjectNameFromDir } from './lib/project-rekey.mjs';
 
 /**
  * Read the episode buffer WITHOUT holding the lock: the dying-process salvage in hook.mjs's
@@ -61,8 +63,21 @@ export function episodeFile(host = hostScopeSuffix(), project = inferProject()) 
  * @param {string} [project]
  * @returns {string}
  */
-export function readsFile(project = inferProject()) {
-  return join(RUNTIME_DIR, `reads-${hostScopeSuffix() || project}.txt`);
+export function readsFile(project = inferProject(), host = hostScopeSuffix()) {
+  return join(RUNTIME_DIR, `reads-${host || project}.txt`);
+}
+
+/**
+ * The reads file that went with an orphan buffer (orphanEpisodeFiles), named by the same rule
+ * as readsFile: `ep-<id>@h<pid>.json` read into `reads-@h<pid>.txt`, a per-project
+ * `ep-<id>.json` into `reads-<id>.txt`. `@` never occurs in a project id.
+ * @param {string} orphanPath
+ * @returns {string}
+ */
+export function orphanReadsFile(orphanPath) {
+  const key = basename(orphanPath).slice('ep-'.length, -'.json'.length);
+  const at = key.indexOf('@h');
+  return at === -1 ? readsFile(key, '') : readsFile(key.slice(0, at), key.slice(at));
 }
 
 /**
@@ -72,16 +87,25 @@ export function readsFile(project = inferProject()) {
  * flushed the one shared buffer at SessionStart; with per-process buffers nobody else reads
  * these, so SessionStart adopts them instead of leaving them to the 7-day sweep.
  *
- * Empty when this process has no host pid: the per-project buffer is then its own.
+ * Without a host pid the per-project buffer is this process's own, so only the pre-D9 one is
+ * an orphan.
  *
  * @param {string} [project]
  * @returns {string[]} absolute paths
  */
 export function orphanEpisodeFiles(project = inferProject()) {
-  if (!hostScopeSuffix()) return [];
-  const legacy = episodeFile('', project);
-  const stem = basename(legacy).slice(0, -'.json'.length);
-  return [...(existsSync(legacy) ? [legacy] : []), ...deadHostFiles(stem, '.json')];
+  const own = hostScopeSuffix();
+  const out = [];
+  // Per-project buffers: this id's (an older version's, unless it is this process's own because
+  // there is no host pid), and the pre-D9 id's — a non-Latin project buffered under
+  // `ep-projects----.json` before its id changed, and nothing looks under that name again.
+  for (const id of new Set([project, legacyProjectNameFromDir(inferProjectDir())])) {
+    if (!own && id === project) continue;
+    const file = episodeFile('', id);
+    if (existsSync(file)) out.push(file);
+  }
+  if (own) out.push(...deadHostFiles(basename(episodeFile('', project)).slice(0, -'.json'.length), '.json'));
+  return out;
 }
 
 /**
@@ -323,10 +347,11 @@ export function mergePendingEntries(episode) {
         } catch {}
         continue;
       }
-      // Only merge entries belonging to the same project, and to this process's buffer (D14).
-      // An entry written before `host` existed has none and merges as it always did.
+      // Only merge entries belonging to the same project, and not another RUNNING process's
+      // (D14): its own next flush takes those. A gone process's spill is merged here, as the
+      // shared buffer's was before D14. An entry written before `host` existed merges as ever.
       if (pending.project && episode.project && pending.project !== episode.project) continue;
-      if (typeof pending.host === 'string' && pending.host !== hostScopeSuffix()) continue;
+      if (typeof pending.host === 'string' && isOtherLiveHost(pending.host)) continue;
       if (pending.entry) {
         unlinkSync(fp);
         episode.entries.push(pending.entry);

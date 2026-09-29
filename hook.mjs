@@ -71,6 +71,7 @@ import {
   episodeHasSignificantContent,
   explainSignificance,
   orphanEpisodeFiles,
+  orphanReadsFile,
   readsFile,
 } from './hook-episode.mjs';
 // CODE_DIR, not DB_DIR: the schema-skew notice asks which CODE homes exist, and those are
@@ -2828,6 +2829,17 @@ function adoptOrphanEpisodes(ccSessionId) {
       episode = JSON.parse(readFileSync(claim, 'utf8'));
     } catch {
       /* unreadable — dropped with the claim below, as the sweep would */
+    }
+    // Its Read paths travel with it: the flush collects this process's reads file, and the gone
+    // process's would otherwise wait for the 24h sweep.
+    const theirs = orphanReadsFile(orphan);
+    if (theirs !== readsFile()) {
+      try {
+        appendFileSync(readsFile(), readFileSync(theirs, 'utf8'), { mode: 0o600 });
+        unlinkSync(theirs);
+      } catch {
+        /* none recorded */
+      }
     }
     if (!flushLeftoverEpisode(claim, episode, ccSessionId)) {
       try {

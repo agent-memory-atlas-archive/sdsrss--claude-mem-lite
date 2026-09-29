@@ -1243,6 +1243,16 @@ describe('makeEntryDesc', () => {
       expect(desc).toContain(HEAD.slice(0, 30));
     });
 
+    // D13 made `<private reason="…">` a tag, and an unclosed one hides everything after it; the
+    // head-only guard still looked for the bare `<private>`, so an UNCLOSED attributed opener in a
+    // long output (no `</private>` for the guard to find) was shown through the tail window.
+    it('shows no tail after an unclosed ATTRIBUTED <private> opener in a long output', () => {
+      const resp = `start ${'log line ok\n'.repeat(900)}<private reason="pii">${'q'.repeat(9000)} SECRET-PIN-4412`;
+      const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });
+      expect(desc).not.toMatch(/SECRET|4412|qqqq/);
+      expect(desc).toContain('start log line ok');
+    });
+
     it('shows no tail when a <private> block opened between the two windows ends the output', () => {
       const resp = `${HEAD}\n${'log line ok\n'.repeat(400)}<private>${'p'.repeat(5000)} MY-PRIVATE-TOTP 481-992 </private>`;
       const desc = makeEntryDesc('Bash', { command: 'c' }, resp, { isError: false });

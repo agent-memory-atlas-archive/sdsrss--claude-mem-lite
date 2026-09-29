@@ -370,7 +370,10 @@ function scrubTruncate(str, max, window = DESC_SCRUB_WINDOW) {
 // window, which cannot see a span that crosses its edge, and pairing the markers per window
 // stored span text two ways in the v6.19.0 pre-tag review (a cut inside a closed `<private>`, a
 // key with no END more than 4096 characters back).
-const PRIVATE_TAG_HINT_RE = /<\/?private>/i;
+// Any `<private` or `</private` followed by whitespace or `>`: the tag grammar
+// lib/private-strip.mjs accepts, attributes included (D13), and a little more. Broader only costs
+// a shorter description; narrower showed an unclosed `<private reason="…">`'s content in the tail.
+const PRIVATE_TAG_HINT_RE = /<\/?private[\s>]/i;
 const HEAD_ONLY_MAX = 60;
 // The tail window is scrubbed with TAIL_CONTEXT characters before it, which are then dropped: a
 // label cut by the window's edge (`pass|word: <value>`) is seen whole, so its value is not left

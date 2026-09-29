@@ -98,7 +98,7 @@ import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
-import { isMemHook, launcherEntryPath } from './lib/hook-prune.mjs';
+import { isMemHook, isMemHookCommand, stripMemHooks, launcherEntryPath } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
 // and any external consumers still import HOOK_SCRIPT_FILES from install.mjs.
@@ -1090,9 +1090,8 @@ function configureHooks() {
   };
 
   for (const [event, configs] of Object.entries(hookConfigs)) {
-    const existing = Array.isArray(settings.hooks[event])
-      ? settings.hooks[event].filter((cfg) => !isMemHook(cfg))
-      : [];
+    // Per entry (stripMemHooks), so a hook the user added under one of our matchers stays.
+    const existing = Array.isArray(settings.hooks[event]) ? stripMemHooks(settings.hooks[event]).kept : [];
     settings.hooks[event] = [...existing, ...configs];
   }
 
@@ -2779,6 +2778,8 @@ export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR) {
     for (const cfg of configs) {
       if (!isMemHook(cfg)) continue;
       for (const h of cfg.hooks || []) {
+        // A user's own entry inside one of our groups is not ours to call an orphan.
+        if (!isMemHookCommand(h?.command)) continue;
         const cmd = h.command || '';
         if (cmd.includes('${CLAUDE_PLUGIN_ROOT}')) continue;
         // The launcher's entry argument, which is unquoted and so invisible to the
@@ -2900,8 +2901,8 @@ function cleanupMemHooksFromSettings(settings) {
   let removed = 0;
   for (const [event, configs] of Object.entries(settings.hooks)) {
     if (!Array.isArray(configs)) continue;
-    const kept = configs.filter((cfg) => !isMemHook(cfg));
-    removed += configs.length - kept.length;
+    const { kept, removed: n } = stripMemHooks(configs);
+    removed += n;
     if (kept.length > 0) settings.hooks[event] = kept;
     else delete settings.hooks[event];
   }

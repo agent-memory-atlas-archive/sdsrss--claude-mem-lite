@@ -839,7 +839,12 @@ server.registerTool(
         return { content: [{ type: 'text', text: 'No observations found.' }] };
       }
 
-      const lines = [`Timeline (most recent ${rows.length}):\n`];
+      // A query that anchored nothing says so, as the CLI does: without it the recency window
+      // read as the neighbourhood of what the caller asked about.
+      const miss = args.query
+        ? `No anchor found for "${queryLabel(args.query)}" — showing the most recent observations instead.\n`
+        : '';
+      const lines = [`${miss}Timeline (most recent ${rows.length}):\n`];
       for (const r of rows.reverse()) {
         lines.push(
           `#${r.id} ${typeIcon(r.type)} [${r.type}] ${truncate(r.title || r.subtitle || '(untitled)')} | ${r.project} | ${fmtDate(r.created_at)}`,

@@ -411,3 +411,23 @@ describe('mem_stats names the data dir', () => {
     expect(text).toMatch(/Data dir: \S+/);
   });
 });
+
+// ─── mem_timeline query that anchors nothing (E2E round 2026-09-29) ─────────
+// The CLI says `No anchor found for "<q>", showing recent timeline`; the MCP face fell back
+// to the recency window with only `Timeline (most recent N):`, so the model read the rows as
+// the neighbourhood of what it asked about. Same "listing presented as an answer" shape the
+// mem_search header fix closed.
+describe('mem_timeline says when its query anchored nothing', () => {
+  it('names the miss before the recency window', async () => {
+    await client.callTool({
+      name: 'mem_save',
+      arguments: { content: 'timeline anchor probe row about widgets', type: 'discovery' },
+    });
+    const res = await client.callTool({ name: 'mem_timeline', arguments: { query: 'zzqqxxnomatch' } });
+    const text = textOf(res);
+    expect(text).toMatch(/Timeline \(most recent \d+\)/); // premise: the fallback still ran
+    expect(text).toMatch(
+      /No anchor found for "zzqqxxnomatch" — showing the most recent observations instead/,
+    );
+  });
+});

@@ -544,7 +544,14 @@ export const memBrowseSchema = {
 };
 
 export const memDeferSchema = {
-  title: z.string().min(1).max(200).describe('One-line subject of the deferred item'),
+  // Blank refused like mem_update's title (and the CLI's `defer add "   "`): a whitespace title
+  // was stored and printed as an empty line in every SessionStart banner.
+  title: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((s) => s.trim() !== '', 'title cannot be empty')
+    .describe('One-line subject of the deferred item'),
   priority: boundedInt(z.number().int().min(1).max(3))
     .optional()
     .describe('1=low, 2=normal, 3=urgent (default: 2)'),

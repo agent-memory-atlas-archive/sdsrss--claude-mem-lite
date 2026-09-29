@@ -16,6 +16,8 @@ import {
   readdirSync,
   statSync,
   lstatSync,
+  accessSync,
+  constants as fsConstants,
 } from 'fs';
 import { join, resolve, dirname, basename, sep } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -1880,6 +1882,15 @@ async function doctor() {
     issues++;
   }
 
+  const dataDirDenied = dataDirAccessError();
+  if (dataDirDenied) {
+    fail(
+      `Data directory: ${MEM_DATA_DIR} is not accessible (${dataDirDenied}) — the checks below ` +
+        `read it as missing. Fix: ${dataDirAccessRemedy()}`,
+    );
+    issues++;
+  }
+
   // Which code homes does this machine actually run? A machine can hold three
   // at once (plugin cache / ~/.claude-mem-lite / npm-global) and each owns its
   // own native binding. Answering about only the dir install.mjs sits in got it
@@ -3473,7 +3484,34 @@ async function rebuildBinding() {
 // lock — locking the parent too would deadlock. A live peer (another session's
 // install/self-heal) holds it → skip rather than race into a torn install. Lock
 // path is shared with hook-update.installExtractedRelease (both env-aware).
+/**
+ * The data dir exists but this user cannot enter it (chmod 000, root-owned after a `sudo`
+ * run). Every existsSync under it then answers false, so doctor reported an intact database
+ * as "not found" and the code as "missing", and install read acquireLock's null — which it
+ * returns for a permission error and a live peer alike — as "Another install/repair is in
+ * progress" and exited 0. Returns the error code, or null when accessible or absent.
+ */
+function dataDirAccessError(dir = MEM_DATA_DIR) {
+  try {
+    accessSync(dir, fsConstants.R_OK | fsConstants.W_OK | fsConstants.X_OK);
+    return null;
+  } catch (e) {
+    return e.code === 'ENOENT' ? null : e.code || 'EACCES';
+  }
+}
+
+const dataDirAccessRemedy = () =>
+  `chmod u+rwx ${shellWord(MEM_DATA_DIR)} (or chown it back to your user if a sudo run created it)`;
+
 async function runLockedInstall() {
+  const denied = dataDirAccessError();
+  if (denied) {
+    console.error(
+      `[install] ${MEM_DATA_DIR} is not accessible (${denied}) — nothing was done. Fix: ${dataDirAccessRemedy()}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   const release = acquireLock(join(MEM_DATA_DIR, 'runtime', 'install.lock')); // runtime-dir:stays-put — install lock serialises real installers
   if (!release) {
     console.log('[install] Another install/repair is in progress — skipping to avoid a torn write.');

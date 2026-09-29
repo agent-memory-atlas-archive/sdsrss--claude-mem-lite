@@ -140,3 +140,42 @@ describe('an unparseable settings.json stops install/uninstall before any side e
     }, 120_000);
   }
 });
+
+// Same round: a data dir the user cannot enter (chmod 000, wrong owner after `sudo`) read as
+// ABSENT everywhere — doctor said "no database yet" and "server.mjs: missing" over an intact
+// install, and install said "Another install/repair is in progress — skipping" and exited 0,
+// because acquireLock answers null for a permission error and for a live peer alike.
+describe('an inaccessible data dir is named as a permission problem', () => {
+  const skip = process.getuid?.() === 0; // root ignores the mode bits this relies on
+  function locked() {
+    const s = sandbox();
+    const data = join(s.root, 'data');
+    mkdirSync(join(data, 'runtime'), { recursive: true });
+    writeFileSync(join(data, 'claude-mem-lite.db'), '');
+    chmodSync(data, 0o000);
+    return { s, data, restore: () => chmodSync(data, 0o755) };
+  }
+  it.skipIf(skip)('install exits 1 and says the directory is not accessible', () => {
+    const { s, data, restore } = locked();
+    try {
+      const r = run(s, ['install']);
+      expect(r.status).toBe(1);
+      expect(r.stderr + r.stdout).toMatch(/not accessible/);
+      expect(r.stderr + r.stdout).toContain(data);
+      expect(r.stdout).not.toMatch(/Another install\/repair is in progress/);
+    } finally {
+      restore();
+    }
+  });
+  it.skipIf(skip)('doctor leads with the permission problem', () => {
+    const { s, data, restore } = locked();
+    try {
+      const r = run(s, ['doctor']);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toMatch(new RegExp(`✗ Data directory: .*not accessible \\(EACCES\\)`));
+      expect(r.stdout).toContain(`chmod u+rwx ${data}`);
+    } finally {
+      restore();
+    }
+  });
+});

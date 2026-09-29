@@ -1852,6 +1852,8 @@ server.registerTool(
     const { filename, rows } = recallByFile(db, args.file, {
       limit: args.limit ?? 10,
       includeNoise: args.include_noise === true,
+      project: args.project ? resolveProject(args.project) : null,
+      currentProject: inferProject(),
     });
 
     if (rows.length === 0) {

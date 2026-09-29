@@ -523,6 +523,12 @@ export const memExportSchema = {
 
 export const memRecallSchema = {
   file: z.string().min(1).describe('File path or filename to recall observations for'),
+  project: z
+    .string()
+    .optional()
+    .describe(
+      'Only this project. Default: every project, ranked current project first, then exact-path matches before same-name files',
+    ),
   limit: boundedInt(z.number().int().min(1).max(50)).optional().describe('Max results (default 10)'),
   include_noise: coerceBool
     .optional()

@@ -736,7 +736,7 @@ function cmdRecall(db, args) {
   if (file === null) return;
   if (!file) {
     fail(
-      '[mem] Usage: claude-mem-lite recall <file> [--limit N] [--include-noise] [--json] — file may also be passed via --file <file>',
+      '[mem] Usage: claude-mem-lite recall <file> [--limit N] [--project P] [--include-noise] [--json] — file may also be passed via --file <file>',
     );
     return;
   }
@@ -746,7 +746,12 @@ function cmdRecall(db, args) {
   const jsonOutput = flags.json === true || flags.json === 'true';
 
   // Shared core with MCP mem_recall: query + escaping + access bump (lib/recall-core.mjs)
-  const { filename, rows } = recallByFile(db, file, { limit, includeNoise });
+  const { filename, rows } = recallByFile(db, file, {
+    limit,
+    includeNoise,
+    project: flags.project ? resolveProject(db, flags.project) : null,
+    currentProject: cliProject(db),
+  });
 
   if (jsonOutput) {
     out(
@@ -3166,9 +3171,11 @@ Commands:
     --type T            Filter obs type (bugfix|decision|discovery|feature|refactor|change)
     --json              Output as JSON: {project,limit,type,total,results:[…]}
 
-  recall <file>         Show observations related to a file
+  recall <file>         Show observations related to a file (current project first,
+                        then exact-path matches before same-name files elsewhere)
     --file F            File as a flag (alias for the positional)
     --limit N           Max results (default 10)
+    --project P         Only this project
     --include-noise     Include hook-llm fallback titles ("Modified X", raw error logs)
     --json              Output as JSON: {file,limit,include_noise,total,results:[…]}
 

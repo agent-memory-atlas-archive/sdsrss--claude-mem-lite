@@ -817,20 +817,7 @@ export function buildImmediateObservation(episode) {
     importance = ruleImportance;
   }
 
-  // Separate files_modified (from Edit/Write tools) from files_read (everything else)
-  const modifiedFiles = new Set();
-  const searchedFiles = new Set();
-  for (const entry of episode.entries) {
-    if (!entry.files) continue;
-    // A Bash entry can do both: `cp a b` reads a and writes b.
-    const edited = new Set(entryEditedFiles(entry));
-    for (const f of entry.files) (edited.has(f) ? modifiedFiles : searchedFiles).add(f);
-  }
-  // Merge bash-tracked reads and search tool files into filesRead
-  const allReads = new Set([...(episode.filesRead || []), ...searchedFiles]);
-  // Remove files that were both searched AND modified — they're modified
-  for (const f of modifiedFiles) allReads.delete(f);
-
+  const { modified, read } = splitEpisodeFiles(episode);
   return {
     type: inferredType,
     title,
@@ -838,10 +825,37 @@ export function buildImmediateObservation(episode) {
     narrative: episode.entries.map((e) => e.desc).join('; '),
     concepts: [],
     facts: [],
-    files: [...modifiedFiles],
-    filesRead: [...allReads],
+    files: modified,
+    filesRead: read,
     importance,
   };
+}
+
+/**
+ * The files an episode EDITED, and everything else it touched. `episode.files` is every
+ * path any entry mentioned — `cat package.json`, `ls src`, a README it skimmed — and it is
+ * not the right edge set for a lesson: `files` becomes `files_modified` and the
+ * observation_files / events.file_paths recall keys. In the sandbox usage evaluation
+ * (docs/audits/20260929-sandbox-usage-eval.md) the episode summarizer stored that whole
+ * list, so 21 of 79 PreToolUse lesson injections fired on `package.json` and none of the
+ * 21 concerned it.
+ * @param {{entries?: object[], files?: string[], filesRead?: string[]}} episode
+ * @returns {{modified: string[], read: string[]}}
+ */
+export function splitEpisodeFiles(episode) {
+  const modified = new Set();
+  const searched = new Set();
+  for (const entry of episode?.entries || []) {
+    if (!entry?.files) continue;
+    // A Bash entry can do both: `cp a b` reads a and writes b.
+    const edited = new Set(entryEditedFiles(entry));
+    for (const f of entry.files) (edited.has(f) ? modified : searched).add(f);
+  }
+  // Merge bash-tracked reads and search tool files into filesRead
+  const read = new Set([...(episode?.filesRead || []), ...searched]);
+  // Remove files that were both searched AND modified — they're modified
+  for (const f of modified) read.delete(f);
+  return { modified: [...modified], read: [...read] };
 }
 
 // ─── Haiku extraction recovery helpers ──────────────────────────────────────
@@ -985,6 +999,7 @@ export async function handleLLMEpisode() {
   // forever). Guard defensively, mirroring buildImmediateObservation's `|| []`.
   const episodeFiles = Array.isArray(episode.files) ? episode.files : [];
   const fileList = episodeFiles.map((f) => basename(f)).join(', ') || '(multiple)';
+  const edgeFiles = splitEpisodeFiles(episode);
 
   // Defense-in-depth (cso F#4): split static instructions (system) from
   // per-call data (user). Episode descriptions and file paths come from tool
@@ -1227,8 +1242,11 @@ ${diagnosisBlock(diag)}`;
         narrative: truncate(scrubSecrets(parsed.narrative || ''), 500),
         concepts: Array.isArray(parsed.concepts) ? parsed.concepts.slice(0, 10) : [],
         facts: Array.isArray(parsed.facts) ? parsed.facts.slice(0, 10) : [],
-        files: episodeFiles,
-        filesRead: episode.filesRead || [],
+        // Edges go to what the episode EDITED (splitEpisodeFiles). A read-only episode
+        // (a `discovery`) edited nothing, and what it read is the only place its lesson
+        // can attach, so it keeps every touched file as before.
+        files: edgeFiles.modified.length > 0 ? edgeFiles.modified : episodeFiles,
+        filesRead: edgeFiles.modified.length > 0 ? edgeFiles.read : episode.filesRead || [],
         // v2.33.1: when lesson is low-signal, don't trust Haiku's importance
         // inflation. v2.54.0: extended from {change, discovery} to all types
         // except `decision` after audit (2026-04-30) showed bugfix lesson

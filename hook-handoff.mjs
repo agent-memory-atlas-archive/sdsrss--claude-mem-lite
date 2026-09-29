@@ -35,6 +35,9 @@ import * as pausedReaderModule from './lib/paused-reader.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { summarySourceLabel } from './lib/fast-summary.mjs';
 
+/** How much of the first subject prompt `working_on` keeps (see buildAndSaveHandoff). */
+export const WORKING_ON_FIRST_MAX = 600;
+
 /**
  * Which episode entries the handoff replays as "Recent activity": failures and edits.
  *
@@ -188,15 +191,26 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // pre-reorder code: two prompts differing only in their credential both render as
   // `deploy with key ***`, and keying on the raw text would replay that identical sentence
   // twice. The key is what the resuming session is actually shown. Pinned by a case.
+  //
+  // The FIRST subject prompt keeps WORKING_ON_FIRST_MAX characters, the rest 200. The first
+  // prompt is usually the task statement, and its tail is where a multi-step request puts
+  // the later steps: in the sandbox usage evaluation (docs/audits/20260929-sandbox-usage-eval.md)
+  // "…3. CLI 的 create 命令加 --coup…" was cut at 200, and on the live DB 63 of 115 stored
+  // handoffs sit at the cap. `match_keywords` is still derived from the 200-character form
+  // (`matchPromptLines`), so which later prompt counts as a continuation does not move.
   const seen = new Set();
   const safePromptLines = [];
+  const matchPromptLines = [];
   for (const p of sourcePrompts) {
-    const line = truncate(scrubSecrets(normalizeInline(p.prompt_text)), 200);
+    const scrubbed = scrubSecrets(normalizeInline(p.prompt_text));
+    const line = truncate(scrubbed, 200);
     if (seen.has(line)) continue;
     seen.add(line);
-    safePromptLines.push(line);
+    safePromptLines.push(safePromptLines.length === 0 ? truncate(scrubbed, WORKING_ON_FIRST_MAX) : line);
+    matchPromptLines.push(line);
   }
   let workingOn = safePromptLines.join(' → ');
+  let workingOnForMatch = matchPromptLines.join(' → ');
 
   if (subjectPrompts.length === 0) {
     const fallback = db
@@ -215,6 +229,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
       // defense-in-depth for rows that predate that — which is not hypothetical: D#49 still
       // has three bare credential-shaped values backfilled in a sibling column.
       workingOn = `(carry-forward subject) ${truncate(scrubSecrets(normalizeInline(fallback.title)), 180)}`;
+      workingOnForMatch = workingOn;
     }
   }
 
@@ -553,7 +568,7 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
   // The nullish guard mirrors what join() already did with a nullish element. Without it
   // String(undefined) would put the literal token "undefined" into the term set — a behaviour
   // change smuggled in by the per-element rewrite rather than chosen.
-  const allText = [workingOn, ...completed.map((c) => c.title).filter(Boolean), unfinished]
+  const allText = [workingOnForMatch, ...completed.map((c) => c.title).filter(Boolean), unfinished]
     .map((t) => (t === null || t === undefined ? '' : scrubSecrets(String(t))))
     .join(' ');
   const keywords = extractMatchKeywords(allText, safeFiles);

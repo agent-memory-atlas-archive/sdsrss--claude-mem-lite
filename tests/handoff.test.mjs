@@ -1491,3 +1491,35 @@ describe('T10d: git-commit anchor in detectContinuationIntent', () => {
     expect(detectContinuationIntent(db, '继续 please', 'mem')).toBe(true);
   });
 });
+
+// Sandbox usage evaluation 2026-09-29: the task statement's tail ("3. CLI 的 create 命令加
+// --coupon…") was cut at 200 characters, and the resumed session could not see step 3.
+describe('working_on keeps the task statement', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('keeps 600 chars of the first prompt, 200 of later ones; match keywords stay on the 200 form', () => {
+    seedSession(db, 's1', 'test-proj');
+    const first =
+      '我们要给 invoicer 加折扣功能，分三步做：1. 发票行支持按行折扣 discountPct（0-100 的整数），行金额四舍五入到分；' +
+      '2. 支持整单优惠码 coupon：SAVE10 表示税前小计减 10%，FLAT5 表示税前小计直接减 5.00 元（最多减到 0）；优惠码无效要报错；' +
+      '3. CLI 的 create 命令加 --coupon 参数，--item 也要能带折扣（比如 "Logo:1:1200.00:10" 表示这一行打九折）。' +
+      '今天只做第 1 步，加上测试，做完就停，剩下的下次再做。';
+    expect(first.length).toBeGreaterThan(200);
+    expect(first.length).toBeLessThan(600);
+    seedPrompt(db, 's1', first, 1);
+    seedPrompt(db, 's1', `also ${'x'.repeat(300)} tail-marker-zzqv`, 2);
+    buildAndSaveHandoff(db, 's1', 'test-proj', 'exit', null);
+    const row = db
+      .prepare(`SELECT working_on, match_keywords FROM session_handoffs WHERE project = 'test-proj'`)
+      .get();
+    expect(row.working_on).toContain('Logo:1:1200.00:10');
+    expect(row.working_on).toContain('下次再做');
+    expect(row.working_on).not.toContain('tail-marker-zzqv');
+    // `--coupon 参数` sits past character 200 of the first prompt: shown, not matched on.
+    expect(row.match_keywords).not.toMatch(/logo:1:1200/i);
+  });
+});

@@ -122,3 +122,21 @@ describe('install-family commands do nothing on a flag they do not know', () => 
     untouched(s);
   });
 });
+
+// Same file, neighbouring defect: install and uninstall refused an unparseable settings.json
+// only AFTER their first side effects — install had copied files, run npm and registered the
+// MCP server; uninstall had removed the MCP registration and the CLI link — and then printed
+// "fix it first; nothing was written". Both now check it before doing anything.
+describe('an unparseable settings.json stops install/uninstall before any side effect', () => {
+  for (const cmd of ['uninstall', 'install']) {
+    it(`${cmd} exits 1 and calls nothing`, () => {
+      const s = sandbox();
+      writeFileSync(s.settings, '{,\n  "hooks": {}\n}\n');
+      const r = run(s, [cmd]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/not valid JSON/);
+      expect(existsSync(s.calls)).toBe(false);
+      expect(existsSync(join(s.home, '.claude-mem-lite'))).toBe(false);
+    }, 120_000);
+  }
+});

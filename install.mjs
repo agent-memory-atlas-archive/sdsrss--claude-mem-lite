@@ -1250,6 +1250,11 @@ function offerCleanOldVectorDb() {
 
 async function install() {
   console.log('\nclaude-mem-lite installer\n');
+  // Refuse an unparseable settings.json BEFORE the first side effect (throws
+  // SettingsUnparseableError, reported by main). configureHooks read it only after files
+  // were copied, npm had run and the MCP server was registered — then printed "nothing was
+  // written" over a half-done install. uninstall below does the same for the same reason.
+  readSettings();
 
   // 1. Install source files to ~/.claude-mem-lite/
   const IS_DEV = flags.has('--dev');
@@ -1279,6 +1284,7 @@ async function install() {
 
 async function uninstall() {
   console.log('\nclaude-mem-lite uninstaller\n');
+  readSettings(); // before any side effect — see install()
 
   // 1. Remove MCP (legacy hook-based install).
   // Try both the legacy "mem" (pre-v2.78) and current "mem-lite" names so a user

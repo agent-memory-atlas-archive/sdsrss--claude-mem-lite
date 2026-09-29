@@ -13,15 +13,18 @@ listed under Changed).
   Plane, such as an emoji, became two), so `~/projects/博客` and `~/projects/商城` were both
   `projects----`: two projects' memories, handoffs, startup context and file recall were one
   pool. Letters, marks and digits of every script are now kept (`projects--博客`,
-  `Projekte--Übung`); punctuation, symbols, emoji and invisible format characters still become
-  one `-` each. An id whose parent and directory names are both plain ASCII keeps its id byte
-  for byte. Any other id changes, including one whose only non-ASCII character is an emoji
-  (`projects----` becomes `projects---`).
+  `Projekte--Übung`); punctuation, symbols and invisible format characters are still replaced.
+  An id whose parent and directory names are both plain ASCII keeps its id byte for byte, and so
+  does one whose only other characters are replaced both before and after (`⚡app`, `app—v2`).
+  A name with letters, marks or digits of another script changes id, and so does one with a
+  character outside the Basic Multilingual Plane, such as `🚀`, which used to become two `-`
+  and now becomes one.
 - **What moves, once per project, at its first session start.**
-  - When no stored file path shows another directory using the old id, the project takes
-    everything under it: memories, sessions, summaries, handoffs, events and deferred items. A
-    sibling whose memories carry no file path is invisible to that check, so the first of two
-    such directories to start a session takes both.
+  - When nothing shows another directory using the old id (no stored file path inside one, and
+    no other directory that has already moved off it), the project takes everything under it:
+    memories, sessions, summaries, handoffs, events and deferred items. A sibling whose memories
+    carry no file path and that has not started a session since the upgrade is invisible to that
+    check, so the first of two such directories to start a session takes both.
   - Otherwise only the memories whose recorded file paths lie inside the directory move, with
     the rest of their compression groups. Memories with no path, or only relative ones, stay
     under the old id.
@@ -64,15 +67,16 @@ listed under Changed).
   importance 1 is raised to 2), by maintenance's access boost, and by re-enrich, which raised a
   lowered importance to the model's score and hid the row when the model scored it 0. All three
   now leave a memory whose importance was set alone, stamped in a new nullable
-  `importance_set_at` column. Decay and the demotion of often-injected, never-cited memories
-  still apply. export / restore and `verify-apply --undo` carry the stamp.
+  `importance_set_at` column. Decay, the demotion of often-injected, never-cited memories and
+  cluster-merge (which can raise a merged group's keeper) still change it. export / restore and `verify-apply --undo` carry the stamp.
 - **`recall` and `mem_recall` rank the current project and the exact path first**, then
   importance and recency. They matched a file by its name in every project, so another
   package's or project's `index.mjs` could lead. `--project` (CLI) and a new optional `project`
   argument (MCP) keep one project.
 - **`<private>` fails closed.** An unclosed `<private>` now hides everything after it, nested
   blocks pair by depth, and `<private reason="…">` is recognised, also when a long command
-  output is stored as a head and a tail. Text in those shapes used to be stored, sent to the
+  output is stored as a head and a tail (an attribute value containing `<` is not read as a
+  tag). Text in those shapes used to be stored, sent to the
   background model and injected later.
 - **A subagent and its parent each get a file's recorded lesson once.** Claude Code gives a
   subagent's hooks the parent's session id, and the "already shown" record was per session, so

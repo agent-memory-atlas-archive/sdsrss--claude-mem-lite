@@ -248,12 +248,16 @@ directories by their old ids again, so their moved rows are listed only with
 - **Which projects.** Every character outside ASCII letters, digits and `_.-` used to become `-`,
   so `~/projects/博客` and `~/projects/商城` were both `projects----` and shared one memory.
   Letters, marks and digits of every script are now kept (`projects--博客`). An id whose parent
-  and directory names are both plain ASCII keeps its id byte for byte; any other id changes.
+  and directory names are both plain ASCII keeps its id byte for byte; a name with letters,
+  marks or digits of another script, or with a character outside the Basic Multilingual Plane
+  such as `🚀`, changes id.
 - **At a project's first session start its data moves.** When no stored file path shows another
   directory using the old id, the project takes everything under it, deferred items and session
   history included. Otherwise only the memories whose file paths lie inside the directory move;
   the rest stay under the old id. A one-time notice says what moved and how to list what stayed
   (`claude-mem-lite recent 50 --project <old id>`).
+- **Not in this release:** directories with the same parent and name in different repositories
+  (`~/a/packages/api` and `~/b/packages/api`) still share one id.
 - **Also changed:** two sessions open in one project keep separate memory sessions (handoffs,
   summaries and unsaved tool activity no longer mix); a session's follow-up prompts no longer
   resume another session; maintenance hides idle memories for 7 days before queuing them for

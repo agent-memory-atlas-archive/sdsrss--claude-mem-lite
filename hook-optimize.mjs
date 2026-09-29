@@ -483,8 +483,9 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // hide a real observation until manual surgery. In wide scope, fall through and let
       // clampImportance floor it to 1 (kept visible, low-ranked) instead of hiding.
       // A compression keeper is never hidden: hiding it hides every member compressed into it
-      // (the same rule NOT_COMPRESSION_KEEPER_SQL enforces on the maintenance writers). It takes
-      // the wide path below instead — floored to importance 1 and stamped, so it is not re-sent.
+      // (the same rule NOT_COMPRESSION_KEEPER_SQL enforces on the maintenance writers). It falls
+      // through to the normal update instead: floored to importance 1 and stamped, so it is not
+      // re-sent. In narrow scope that update still replaces its title and narrative.
       const isKeeper = !!db
         .prepare('SELECT 1 FROM observations WHERE compressed_into = ? LIMIT 1')
         .get(cand.id);

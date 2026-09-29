@@ -771,6 +771,43 @@ describe('Suite 2: Episode Buffer Management', () => {
     expect(parsed.hookSpecificOutput.additionalContext).not.toMatch(/episode flushed/);
   });
 
+  // §9-B (docs/audits/20260929-sandbox-usage-eval.md): the nudge repeated on every qualifying
+  // flush — 3.2 times per nudged session in real use. One session hears it once.
+  it('PostToolUse: the unsaved-bugfix nudge is said once per session', () => {
+    runHook('session-start', { env: { HOME: tmpHome } });
+    const cycle = (sessionId, tag) => {
+      const withSession = (payload) => JSON.stringify({ ...JSON.parse(payload), session_id: sessionId });
+      runHook('post-tool-use', {
+        stdin: withSession(
+          makeToolPayload(
+            'Bash',
+            { command: `npx vitest run tests/${tag}.test.js` },
+            `FAIL tests/${tag}.test.js\nAssertionError: expected 1 to be 2\n Tests  1 failed (1)`,
+          ),
+        ),
+        env: { HOME: tmpHome },
+      });
+      let nudged = 0;
+      for (let i = 1; i < 11; i++) {
+        const { stdout } = runHook('post-tool-use', {
+          stdin: withSession(
+            makeToolPayload(
+              'Edit',
+              { file_path: `/work/app/src/${tag}.js`, old_string: `o${i}`, new_string: `n${i}` },
+              'OK — edited file',
+            ),
+          ),
+          env: { HOME: tmpHome },
+        });
+        if (stdout && stdout.includes('Unsaved bugfix-shape')) nudged++;
+      }
+      return nudged;
+    };
+    expect(cycle('sess-once-a', 'first'), 'premise: a regression-fix flush nudges').toBe(1);
+    expect(cycle('sess-once-a', 'second'), 'the same session is not nudged again').toBe(0);
+    expect(cycle('sess-once-b', 'third'), 'another session is').toBe(1);
+  });
+
   it('SessionStart flush receipt + dashboard arrive as ONE envelope', () => {
     // History, in two corrections. First: flushEpisode wrote its receipt with no
     // trailing newline and the dashboard wrote a second object right after, landing as

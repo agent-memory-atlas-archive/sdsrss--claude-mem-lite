@@ -168,6 +168,8 @@ import {
   loadCiteBackForEpisode,
   extractCiteBackSignals,
   buildUnsavedBugfixHint,
+  claimBugfixNudge,
+  BUGFIX_NUDGE_MARKER_PREFIX,
   countUnsavedBugfixShape,
   buildCiteRecallNudge as libBuildCiteRecallNudge,
   nextCiteStreakState,
@@ -354,7 +356,7 @@ if (!event) process.exit(0);
 // Regression chain: v2.33.1 introduced the receipt; v2.33.3 misdiagnosed the
 // Stop rejection as event-name mismatch; v2.33.4 is the root-cause fix.
 const RECEIPT_EVENTS = new Set(['PostToolUse', 'SessionStart', 'UserPromptSubmit']);
-function flushEpisode(episode, hookEventName = 'PostToolUse') {
+function flushEpisode(episode, hookEventName = 'PostToolUse', receiverSession = null) {
   if (!episode || episode.entries.length === 0) return;
 
   // Acquire the DB ONCE, up front, and bail before touching anything destructive when it
@@ -369,7 +371,7 @@ function flushEpisode(episode, hookEventName = 'PostToolUse') {
   const db = openDb();
   if (!db) return;
   try {
-    flushEpisodeWithDb(db, episode, hookEventName);
+    flushEpisodeWithDb(db, episode, hookEventName, receiverSession);
   } finally {
     try {
       db.close();
@@ -449,7 +451,7 @@ function summaryInputSubs(subs) {
   return out;
 }
 
-function flushEpisodeWithDb(db, episode, hookEventName) {
+function flushEpisodeWithDb(db, episode, hookEventName, receiverSession = null) {
   // Split by CC session so concurrent same-project sessions flush as separate
   // observations. planEpisodeFlush returns [episode] BY REFERENCE for the common
   // single-session (or all-legacy) case → flushEpisodeGroup(episode) is identical
@@ -583,8 +585,12 @@ function flushEpisodeWithDb(db, episode, hookEventName) {
       const lines = [];
       // v2.83: error→fix nudge lifted to lib/cite-back-hint.mjs::buildUnsavedBugfixHint
       // so the wording (count + "Save now" verb) stays in sync with cite-back.
+      // §9-B: TDD reds stay silent (inside the builder), and a session is nudged once — the
+      // claim is taken only when the hint would actually be shown.
+      // Keyed by the session that RECEIVES this receipt — the hook invocation's own — not by
+      // whose entries the buffer holds: one project buffer can mix concurrent sessions.
       const bugfixHint = buildUnsavedBugfixHint(episode);
-      if (bugfixHint) lines.push(bugfixHint);
+      if (bugfixHint && claimBugfixNudge(RUNTIME_DIR, receiverSession)) lines.push(bugfixHint);
       // v2.81: cite-back hint — fires when this episode edits a file that
       // PreToolUse:Read/Edit nudged earlier in the same session. Precision
       // signal (we know the file was warned about); orthogonal to the
@@ -851,7 +857,11 @@ async function handlePostToolUse() {
 
       // Phase transition → flush current episode, start new
       if (bufferFull || timeGap || (!fileRelated && episode.entries.length >= 2)) {
-        flushEpisode(episode);
+        flushEpisode(
+          episode,
+          'PostToolUse',
+          typeof hookData.session_id === 'string' ? hookData.session_id : null,
+        );
         episode = null;
       }
     }
@@ -1825,7 +1835,9 @@ function gcStalePreRecallCooldowns() {
       // shape as the cooldown files, same 24h GC (dedup window is 5 min).
       const isCooldown = name.startsWith('pre-recall-cooldown-') && name.endsWith('.json');
       const isInjectedMarker =
-        name.startsWith('.claude-mem-injected-') || name.startsWith('.claude-mem-keyctx-'); // D#123 Key Context marker — same per-session growth, same 24h GC
+        name.startsWith('.claude-mem-injected-') ||
+        name.startsWith('.claude-mem-keyctx-') || // D#123 Key Context marker — same per-session growth, same 24h GC
+        name.startsWith(BUGFIX_NUDGE_MARKER_PREFIX); // §9-B once-per-session nudge claim — same shape
       if (!isCooldown && !isInjectedMarker) continue;
       try {
         const p = join(RUNTIME_DIR, name);
@@ -2736,7 +2748,7 @@ async function handleSessionStart() {
       } else {
         const prevEpisode = readEpisode();
         if (prevEpisode && prevEpisode.entries && prevEpisode.entries.length > 0) {
-          flushEpisode(prevEpisode, 'SessionStart');
+          flushEpisode(prevEpisode, 'SessionStart', ccSessionId);
         }
       }
     } finally {

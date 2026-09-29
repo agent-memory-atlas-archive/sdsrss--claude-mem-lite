@@ -291,16 +291,22 @@ describe('SessionStart end to end', () => {
     return r.stdout.trim() ? JSON.parse(r.stdout.trim()) : {};
   };
 
-  it('writes CLAUDE.local.md, injects nothing, keeps the tree clean, and tells the user once', () => {
+  // Claude Code reads CLAUDE.local.md at startup, BEFORE SessionStart hooks run, so the session
+  // that creates the file does not load it. The release-tree sandbox run showed it: in the first
+  // session of every project neither the main agent nor its subagents had any steering (0/4).
+  // That session gets the block injected once; from the next session on the file carries it.
+  it('first session: writes CLAUDE.local.md AND injects the block once; later sessions rely on the file', () => {
     const first = sessionStart(app);
     expect(readFileSync(join(app, LOCAL_MD), 'utf8')).toContain(HEADING);
-    expect(first.hookSpecificOutput?.additionalContext ?? '').not.toContain(HEADING);
+    expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
     expect(status(app)).toBe('');
     expect(first.systemMessage).toMatch(/CLAUDE\.local\.md/);
     // The block points at a detail doc that exists, in the plugin's data dir.
     const ref = /→ `([^`]+plugin_claude_mem_lite\.md)`/.exec(readFileSync(join(app, LOCAL_MD), 'utf8'))?.[1];
     expect(ref && ref.startsWith(dataDir) && existsSync(ref)).toBe(true);
-    expect(sessionStart(app).systemMessage).toBeUndefined();
+    const second = sessionStart(app);
+    expect(second.hookSpecificOutput?.additionalContext ?? '').not.toContain(HEADING);
+    expect(second.systemMessage).toBeUndefined();
   });
 
   it('outside git the steering is still injected', () => {

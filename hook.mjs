@@ -2753,6 +2753,7 @@ async function handleSessionStart() {
   // Report §9-A: 'inject' means the project carries no managed block and nothing was written;
   // the steering text then joins this SessionStart's context (injectSteeringPart below).
   let adoptAction = null;
+  let adoptWritten = null;
   try {
     if (process.env.MEM_NO_AUTO_ADOPT !== '1') {
       const project = inferProject();
@@ -2760,6 +2761,7 @@ async function handleSessionStart() {
       const { silentAutoAdopt } = await import('./adopt-cli.mjs');
       const r = silentAutoAdopt({ cwd, markerDir: RUNTIME_DIR, markerKey: project });
       adoptAction = r.action;
+      adoptWritten = r.written ?? null;
       if (r.ok) {
         debugLog('DEBUG', 'session-start-auto-adopt', `action=${r.action} project=${project}`);
       } else {
@@ -2929,6 +2931,14 @@ async function handleSessionStart() {
       if (steering) stdoutParts.push(steering);
       offerAdoptOnce(project);
     } else if (adoptAction === 'local') {
+      // Claude Code read CLAUDE.local.md before this hook ran, so the session that CREATES it
+      // does not load it (release-tree sandbox: first sessions had no steering, 0/4). Inject
+      // the same block once; from the next session the file carries it. An update needs no
+      // copy: the session already loaded the previous text.
+      if (adoptWritten === 'created') {
+        const steering = await buildInjectedSteering();
+        if (steering) stdoutParts.push(steering);
+      }
       noteLocalSteeringOnce(project);
     }
 

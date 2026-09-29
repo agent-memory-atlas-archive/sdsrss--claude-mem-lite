@@ -19,7 +19,7 @@ import {
 import { liveObsFilterSql } from '../lib/inject-search-core.mjs';
 import { buildNotLowSignalSql } from '../lib/low-signal-patterns.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
-import { cooldownPathFor as sharedCooldownPathFor } from '../lib/cooldown-path.mjs';
+import { cooldownPathFor as sharedCooldownPathFor, threadKey } from '../lib/cooldown-path.mjs';
 import { citeFactorClause } from '../scoring-sql.mjs';
 import {
   fileMatchClause,
@@ -536,7 +536,7 @@ try {
   // its own agent_id, and the two threads share no context — keyed on session_id alone, the
   // thread that touched a file first used up the recall (and the UPS-injected ids) for the
   // other, often the subagent that then edited it. The framing arm below stays per session.
-  const dedupKey = sessionId && agentId ? `${sessionId}-${agentId}` : sessionId;
+  const dedupKey = threadKey(sessionId, agentId);
   const cooldownPath = cooldownPathFor(dedupKey);
   const isSessionScoped = Boolean(sessionId);
   const cooldown = readCooldown(cooldownPath);

@@ -14,7 +14,7 @@
 // every memdir). New-scheme adoption happens per-project on SessionStart (cwd known).
 
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
-import { homedir } from 'os';
+import { claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
 import { join, isAbsolute } from 'path';
 import {
   memdirPath,
@@ -66,7 +66,7 @@ function detectCwd() {
 }
 
 function projectsRoot() {
-  return join(homedir(), '.claude', 'projects');
+  return join(claudeConfigDir(), 'projects');
 }
 
 function listAllMemdirs() {
@@ -87,7 +87,7 @@ function listAllMemdirs() {
 }
 
 function claudeConfigPath() {
-  return join(homedir(), '.claude.json');
+  return claudeStatePath();
 }
 
 // Real adopted-project paths come from Claude Code's own ~/.claude.json `projects`

@@ -12,7 +12,7 @@
 import { readFileSync, existsSync, unlinkSync, mkdirSync, readdirSync } from 'fs';
 import { atomicWriteFileSync as atomicWrite } from './lib/atomic-write.mjs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { claudeConfigDir } from './lib/data-paths.mjs';
 import { createHash } from 'crypto';
 
 const MEMORY_LINE_BUDGET = 180;
@@ -79,7 +79,7 @@ export function isAutoAdoptDisabled(memdir) {
 }
 
 export function memdirPath(projectCwd) {
-  return join(homedir(), '.claude', 'projects', encodeProjectPath(projectCwd), 'memory');
+  return join(claudeConfigDir(), 'projects', encodeProjectPath(projectCwd), 'memory');
 }
 
 function memoryFile(memdir) {

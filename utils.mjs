@@ -69,6 +69,15 @@ import { resolveDataDir } from './lib/resolve-data-dir.mjs';
 export const COMPRESSED_AUTO = -1;
 /** compressed_into sentinel: pending user-confirmed purge (marked by idle cleanup) */
 export const COMPRESSED_PENDING_PURGE = -2;
+/**
+ * SQL clause: this row is not the KEEPER of a compression group. Every writer of the two
+ * sentinels above carries it. Auto-compress backdates a weekly summary to its members' median
+ * time, so the age-based hide passes reached it within two runs — and hiding a keeper hides
+ * every member compressed into it, so the week went unsearchable (E2E round 2026-09-29).
+ * Non-correlated on purpose: SQLite materializes the list once instead of scanning per row.
+ */
+export const NOT_COMPRESSION_KEEPER_SQL =
+  'id NOT IN (SELECT compressed_into FROM observations WHERE compressed_into > 0)';
 
 // ─── Path Safety ──────────────────────────────────────────────────────────
 

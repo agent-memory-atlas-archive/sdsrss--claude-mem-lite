@@ -597,3 +597,50 @@ describe('selectFuzzyDedupeIds — title + body fuzzy dedup (audit #8)', () => {
     expect(selectFuzzyDedupeIds(rows)).toEqual([1]);
   });
 });
+
+// E2E round 2026-09-29: auto-compress backdates a weekly summary to its members' median time,
+// so it was already past every age gate — the next maintenance passes decayed it and hid it
+// (markAutoCompressible → COMPRESSED_AUTO), and hiding a keeper hides every row compressed
+// into it: search for the week's content and for "Weekly summary" both answered No results.
+// The five writers of COMPRESSED_AUTO / COMPRESSED_PENDING_PURGE now skip group keepers.
+describe('a compression keeper is never auto-hidden or idle-marked', () => {
+  function seedWeek(db) {
+    const keeper = add(db, { title: 'Weekly summary: 4 discovery observations', importance: 1 });
+    const loner = add(db, { title: 'stale loner with no group', importance: 1 });
+    for (let i = 0; i < 2; i++) add(db, { title: `member ${i}`, importance: 1, compressedInto: keeper });
+    return { keeper, loner };
+  }
+
+  test('markAutoCompressible (both passes) leaves the keeper live', async () => {
+    const { markAutoCompressible } = await import('../lib/maintain-core.mjs');
+    const db = freshDb();
+    const { keeper, loner } = seedWeek(db);
+    markAutoCompressible(db, 'proj-a');
+    expect(get(db, keeper, 'compressed_into')).toBeNull();
+    expect(get(db, loner, 'compressed_into')).toBe(-1); // premise: the pass does fire
+  });
+
+  test('decayAndMarkIdle does not queue the keeper for purge', () => {
+    const db = freshDb();
+    const { keeper, loner } = seedWeek(db);
+    decayAndMarkIdle(db, ctx(Date.now() - 30 * DAY));
+    expect(get(db, keeper, 'compressed_into')).toBeNull();
+    expect(get(db, loner, 'compressed_into')).toBe(COMPRESSED_PENDING_PURGE);
+  });
+
+  test('runIdleCleanup (MCP idle path) leaves the keeper live', async () => {
+    const { runIdleCleanup } = await import('../search-scoring.mjs');
+    const db = freshDb();
+    const keeper = add(db, {
+      title: 'Weekly summary',
+      importance: 1,
+      type: 'change',
+      epochOffset: -20 * DAY,
+    });
+    add(db, { title: 'member', importance: 1, type: 'change', compressedInto: keeper });
+    const loner = add(db, { title: 'loner', importance: 1, type: 'change', epochOffset: -20 * DAY });
+    runIdleCleanup(db);
+    expect(get(db, keeper, 'compressed_into')).toBeNull();
+    expect(get(db, loner, 'compressed_into')).not.toBeNull();
+  });
+});

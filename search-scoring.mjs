@@ -5,7 +5,13 @@
 // testability (server.mjs has top-level side effects), hence the former
 // "server-internals" name — renamed in audit P3 since it is not server-only.
 
-import { debugCatch, COMPRESSED_AUTO, COMPRESSED_PENDING_PURGE, OBS_BM25 } from './utils.mjs';
+import {
+  debugCatch,
+  COMPRESSED_AUTO,
+  COMPRESSED_PENDING_PURGE,
+  NOT_COMPRESSION_KEEPER_SQL,
+  OBS_BM25,
+} from './utils.mjs';
 import { BASE_STOP_WORDS } from './stop-words.mjs';
 import { porterStem } from './tfidf.mjs';
 import { CLI_INVOKE } from './cli-path.mjs';
@@ -442,6 +448,7 @@ export function runIdleCleanup(db) {
           -- SAME "lessons never auto-GC" guard; without it a lesson demoted to imp≤1
           -- by citation-decay gets pending-purge'd here and hard-deleted by purgeStale.
           AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
+          AND ${NOT_COMPRESSION_KEEPER_SQL}
       `,
         )
         .run(cutoff);
@@ -461,6 +468,7 @@ export function runIdleCleanup(db) {
           -- recoverBuriedLessons only re-floors live (compressed_into=0) rows, so a
           -- compressed lesson is unrecoverable. Parity with selectCompressionCandidates.
           AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
+          AND ${NOT_COMPRESSION_KEEPER_SQL}
       `,
         )
         .run(cutoff);

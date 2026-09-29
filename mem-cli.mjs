@@ -3331,7 +3331,9 @@ Commands:
     --all               Legacy sweep: strip old memory-dir (MEMORY.md) sentinels from
                         known projects. Does NOT adopt — CLAUDE.md adoption is
                         per-project, on each project's next SessionStart.
-    --force             Overwrite a manually-edited managed block
+    --force             Also remove a legacy memory-dir block that has no state
+                        sidecar. (The CLAUDE.md block is always rewritten to the
+                        current template, edits inside it included.)
     --dry-run           Print intended writes without touching disk
     --status            List adopted projects + version
 

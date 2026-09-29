@@ -73,6 +73,28 @@ describe('cmdAdopt / cmdUnadopt (current project, CLAUDE.md scheme)', () => {
     expect(process.exitCode).toBe(0);
   });
 
+  // E2E round 2026-09-29: README said "Hash-guarded: editing the managed-block body yourself
+  // blocks automatic rewrites unless you pass --force" and `help` listed `--force  Overwrite a
+  // manually-edited managed block`. Neither has been true since v3.13 moved the block into
+  // CLAUDE.md (its blockHash is written, never read): adopt and every SessionStart regenerate
+  // the block, and --force only reaches the legacy memory-dir cleanup — what
+  // commands/adopt.md already said. The docs now say so; this pins the behaviour they describe.
+  it('rewrites a hand-edited block without --force — keep notes outside the markers', () => {
+    writeFileSync(claudeMd(fakeCwd), '# Mine\n\nkept outside\n');
+    cmdAdopt([]);
+    const edited = readFileSync(claudeMd(fakeCwd), 'utf8').replace(BEGIN, `${BEGIN}\nMY NOTE`);
+    writeFileSync(claudeMd(fakeCwd), edited);
+    cmdAdopt([]);
+    const after = readFileSync(claudeMd(fakeCwd), 'utf8');
+    expect(after).not.toContain('MY NOTE');
+    expect(after).toContain('kept outside');
+    const readme = readFileSync(join(import.meta.dirname, '..', 'README.md'), 'utf8');
+    expect(readme).not.toMatch(/Hash-guarded/);
+    expect(readme).toMatch(/hand edits\s+included/);
+    const zh = readFileSync(join(import.meta.dirname, '..', 'README.zh-CN.md'), 'utf8');
+    expect(zh).not.toMatch(/Hash 守护|UserEditedError/);
+  });
+
   it('migrates away a legacy memory-dir sentinel on adopt', () => {
     seedLegacy(fakeCwd);
     expect(memdirIsAdopted(memdirPath(fakeCwd), PLUGIN_SLUG)).toBe(true);

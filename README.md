@@ -580,8 +580,10 @@ Slash commands `/adopt` and `/unadopt` wrap the same CLI.
   `/exit` + fresh session is enough. Same caveat applies to `unadopt`.
 
 **Safety:**
-- Hash-guarded: editing the managed-block body yourself blocks automatic
-  rewrites unless you pass `--force`.
+- Regenerated, not hand-edit-safe: `adopt` rewrites the managed block to the shipped
+  template, and so does every SessionStart whenever the block differs from it — hand edits
+  included. Keep your own notes outside the `claude-mem-lite:begin…end` markers, or set
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` to freeze the block.
 - Slug-scoped & dedup-guarded: only the `claude-mem-lite:begin…end` region is
   ever rewritten, and duplicate / CRLF-orphaned copies are collapsed to one.
   Unlike the legacy `MEMORY.md` scheme there is no line-budget gate — `CLAUDE.md`

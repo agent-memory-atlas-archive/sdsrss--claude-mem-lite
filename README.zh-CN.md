@@ -479,9 +479,11 @@ Slash 命令 `/adopt` 和 `/unadopt` 是上述 CLI 的包装。
   同理。
 
 **安全性：**
-- Hash 守护：你手动改了 sentinel 段 → 下一次 adopt 报 `UserEditedError`，
-  除非显式 `--force`。
-- 预算门：MEMORY.md 已 >180 行时拒绝新增（避开 Claude Code 200 行截断）。
+- 托管块会被重新生成，不保留手改：`adopt` 会把它改写成出货模板，每次 SessionStart
+  只要它和模板不同也会改写——手动编辑的内容一样被覆盖。自己的笔记写在
+  `claude-mem-lite:begin…end` 标记之外，或设 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1` 冻结。
+- 按 slug 限定、去重：只改写 `claude-mem-lite:begin…end` 这一段，重复或 CRLF 残留的
+  副本会合并成一份。旧的 `MEMORY.md` 方案才有行数预算，`CLAUDE.md` 没有截断上限。
 - **任何安装路径每次 SessionStart 都自动 adopt，且不再把托管块加进 `CLAUDE.md`（6.19.4
   之后的下一个版本起）。** 没有托管块的 git 项目，引导写进 git 根目录的 `CLAUDE.local.md`
   （经 `.git/info/exclude` 排除在 git 之外），不在 git 里时注入 SessionStart 上下文；带

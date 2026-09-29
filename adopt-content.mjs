@@ -51,7 +51,7 @@ PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Wr
 | When | Call |
 |------|------|
 | Before Edit/Write | hook already recalled; if an injected \`#NN\` lesson changed what you did, add the bare tag \`(#NN)\` once at the end of the sentence describing that change (citing = adopting; uncited lessons decay; skip ones that did not apply). No other mention of memory ids, saves or the memory store in replies to the user |
-| A recalled memory drives an answer or a design choice | check its claim in the code or \`git log\` first: \`#NN\` rows are saved notes, \`E#NN\` rows are automatic summaries of past sessions and can be wrong, and both describe the code as it was. If the code disagrees, trust the code and replace the note: \`mem_save(..., supersedes=[NN])\`, or \`supersedes=["E#NN"]\` for an event |
+| A recalled memory drives an answer or a design choice | check its claim in the code or \`git log\` first: \`#NN\` and \`E#NN\` rows are notes from past sessions, many written automatically, so they can be wrong, and they describe the code as it was. If the code disagrees, trust the code and replace the note: \`mem_save(..., supersedes=[NN])\`, or \`supersedes=["E#NN"]\` for an event |
 | After fixing a non-trivial bug | \`mem_save(type="bugfix", lesson_learned="<root cause + fix, only what this change's diff shows>", importance=2)\` |
 | After a non-obvious architecture decision | \`mem_save(type="decision", lesson_learned="<constraint + tradeoff>")\` |
 | Deferring to a future session | \`mem_defer({title, priority:1|2|3, detail})\`; when fixed, add \`closes_deferred=[N]\` to \`mem_save\` |
@@ -100,8 +100,8 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 
 ## 记忆是旧笔记，不是现在的代码
 
-- \`E#NN\` 是后台根据会话自动写的摘要，可能写错：2026-09 的沙箱实测里 43 条中有 6 条事实错误、13 条部分错误。
-  \`#NN\` 是 agent 主动保存的笔记，更可靠，但也可能说得超出当时那次改动的实际范围。两者描述的都是保存那一刻的代码。
+- \`E#NN\` 是后台根据会话自动写的事件摘要，可能写错：2026-09 的沙箱实测里 43 条中有 6 条事实错误、13 条部分错误。
+  \`#NN\` 可能是 agent 主动保存的笔记，\`#NN\` 也可能是后台自动整理的会话摘要；主动保存的也可能说得超出当时那次改动的实际范围。两者描述的都是保存那一刻的代码。
 - 用一条记忆回答"之前做了什么、为什么"，或据此做设计决定之前，先在代码或 \`git log -S\` / \`git show\` 里核对它的具体说法。
 - 代码与记忆矛盾时，以代码为准，回复里按代码说；然后用
   \`mem_save(type=<原类型>, title=..., lesson_learned="<按代码更正后的说法>", supersedes=[NN])\`

@@ -229,6 +229,79 @@ describe('silentAutoAdopt picks the channel', () => {
   });
 });
 
+// Pre-tag claims review (P1-2/3/4, P2-3, P1-5): the plugin wrote the file back after the user
+// removed it, a root-level opt-out did not hold for a session started in a subdirectory, a
+// subdirectory session added a local copy next to the root's CLAUDE.md block, and the file named
+// the data dir by absolute path (the username), while `npm pack` does not read info/exclude.
+describe('a removed or opted-out local block stays removed', () => {
+  const app = () => join(home, 'work', 'app');
+  beforeEach(() => initRepo(app()));
+
+  it('a CLAUDE.local.md the user deleted is not written again; the steering is injected instead', () => {
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    rmSync(join(app(), LOCAL_MD));
+    const r = silentAutoAdopt({ cwd: app() });
+    expect(r).toMatchObject({ action: 'inject', reason: 'local-removed' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('after unadopt the next session does not write it again', () => {
+    silentAutoAdopt({ cwd: app() });
+    const cwdBefore = process.cwd();
+    process.chdir(app());
+    process.env.CLAUDE_PROJECT_DIR = app();
+    try {
+      cmdUnadopt([]);
+    } finally {
+      process.chdir(cwdBefore);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('inject');
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('adopt --enable re-arms it', () => {
+    silentAutoAdopt({ cwd: app() });
+    rmSync(join(app(), LOCAL_MD));
+    const cwdBefore = process.cwd();
+    process.chdir(app());
+    process.env.CLAUDE_PROJECT_DIR = app();
+    try {
+      cmdAdopt(['--enable']);
+    } finally {
+      process.chdir(cwdBefore);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+    expect(silentAutoAdopt({ cwd: app() }).action).toBe('local');
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(true);
+  });
+
+  it('an opt-out at the repository root holds for a session started in a subdirectory', () => {
+    const sub = join(app(), 'pkg');
+    mkdirSync(sub);
+    mkdirSync(memdirPath(app()), { recursive: true });
+    writeFileSync(disableSentinelPath(memdirPath(app())), '{}');
+    expect(silentAutoAdopt({ cwd: sub }).action).toBe('inject');
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('a subdirectory session of a repository whose root CLAUDE.md carries the block adds nothing', () => {
+    writeManaged(app(), { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    const sub = join(app(), 'pkg');
+    mkdirSync(sub);
+    const r = silentAutoAdopt({ cwd: sub });
+    expect(r.action).toBe('already-adopted');
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  it('the file names the detail doc under ~, not by the home path', () => {
+    silentAutoAdopt({ cwd: app() });
+    const text = readFileSync(join(app(), LOCAL_MD), 'utf8');
+    expect(text).not.toContain(home);
+    expect(text).toMatch(/→ `~\/[^`]*plugin_claude_mem_lite\.md`/);
+  });
+});
+
 describe('the CLI verbs clean the local block up', () => {
   let app;
   let cwdBefore;
@@ -301,12 +374,19 @@ describe('SessionStart end to end', () => {
     expect(first.hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
     expect(status(app)).toBe('');
     expect(first.systemMessage).toMatch(/CLAUDE\.local\.md/);
-    // The block points at a detail doc that exists, in the plugin's data dir.
+    // The block points at a detail doc that exists, in the plugin's data dir, named under ~.
     const ref = /→ `([^`]+plugin_claude_mem_lite\.md)`/.exec(readFileSync(join(app, LOCAL_MD), 'utf8'))?.[1];
-    expect(ref && ref.startsWith(dataDir) && existsSync(ref)).toBe(true);
+    const abs = ref?.replace(/^~/, home);
+    expect(abs && abs.startsWith(dataDir) && existsSync(abs)).toBe(true);
     const second = sessionStart(app);
     expect(second.hookSpecificOutput?.additionalContext ?? '').not.toContain(HEADING);
     expect(second.systemMessage).toBeUndefined();
+  });
+
+  it('at $HOME the steering is injected without suggesting /adopt, which would write ~/CLAUDE.md', () => {
+    const out = sessionStart(home);
+    expect(out.hookSpecificOutput.additionalContext).toContain(HEADING);
+    expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
   });
 
   it('outside git the steering is still injected', () => {

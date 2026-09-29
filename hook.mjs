@@ -19,7 +19,7 @@
 // you're changing it.
 
 import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { join, resolve as resolvePath } from 'path';
 import { readFileSync, writeFileSync, unlinkSync, readdirSync, renameSync, statSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import {
@@ -2646,6 +2646,10 @@ async function buildInjectedSteering() {
 const ADOPT_OFFER_MARKER_PREFIX = '.adopt-offered-';
 function offerAdoptOnce(project) {
   if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  // /adopt at $HOME would write ~/CLAUDE.md, an ancestor of every project below it — the case
+  // lib/local-steering.mjs refuses (pre-tag claims review, P3). Do not suggest it there.
+  const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  if (resolvePath(cwd) === resolvePath(homedir())) return;
   try {
     const marker = join(RUNTIME_DIR, `${ADOPT_OFFER_MARKER_PREFIX}${project}`);
     if (existsSync(marker)) return;
@@ -2672,8 +2676,8 @@ function noteLocalSteeringOnce(project) {
     if (existsSync(marker)) return;
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     queueHookSystemMessage(
-      "claude-mem-lite: memory guidance for this project is in CLAUDE.local.md at the repository root. It is listed in the repository's .git/info/exclude, so git never sees or commits it. " +
-        '`claude-mem-lite unadopt` removes it; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
+      'claude-mem-lite: memory guidance for this project is in CLAUDE.local.md at the repository root. Git ignores it (it is added to .git/info/exclude unless your ignore rules already cover it), so it is not committed, but npm pack and other packagers do not read .git/info/exclude. ' +
+        'Delete it or run `claude-mem-lite unadopt` and it is not written again; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
     );
   } catch (e) {
     debugCatch(e, 'session-start-local-note');

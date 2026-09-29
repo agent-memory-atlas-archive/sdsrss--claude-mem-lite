@@ -23,8 +23,13 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 describe('the steering tells the agent to check a recalled memory and correct it', () => {
   const block = buildClaudeMdBlock();
 
-  it('the managed block names E# rows as automatic summaries that can be wrong', () => {
-    expect(block).toMatch(/`E#NN` rows are automatic summaries[^|]*can be wrong/);
+  // Pre-tag claims review P2-4: `#NN` is not only what an agent saved — background summaries of
+  // type `change` and the rule-based episode pre-save are observations too.
+  it('the managed block says #NN and E#NN rows can be automatic and wrong', () => {
+    expect(block).toMatch(
+      /`#NN` and `E#NN` rows are notes from past sessions, many written automatically[^|]*can be wrong/,
+    );
+    expect(block).not.toMatch(/`#NN` rows are saved notes/);
   });
 
   it('the managed block asks for a check against the code before a memory drives an answer', () => {
@@ -46,7 +51,8 @@ describe('the steering tells the agent to check a recalled memory and correct it
   it('the detail doc carries the same rules in full', () => {
     const doc = getDetailDoc();
     expect(doc).toMatch(/## 记忆是旧笔记，不是现在的代码/);
-    expect(doc).toMatch(/`E#NN` 是后台根据会话自动写的摘要/);
+    expect(doc).toMatch(/`#NN` 也可能是后台自动整理的/);
+    expect(doc).not.toMatch(/`#NN` 是 agent 主动保存的笔记/);
     expect(doc).toContain('supersedes=["E#NN"]');
     expect(doc).toMatch(/只写这次 diff 能证明的内容/);
   });

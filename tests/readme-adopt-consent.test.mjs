@@ -43,14 +43,14 @@ describe('README auto-adopt description matches silentAutoAdopt', () => {
     [
       'README.md',
       () => EN,
-      /Auto-adopt does not write your project's `CLAUDE\.md`/,
+      /Auto-adopt no longer adds its block to your project's `CLAUDE\.md`/,
       /`CLAUDE\.local\.md`/,
       /\.git\/info\/exclude/,
     ],
     [
       'README.zh-CN.md',
       () => ZH,
-      /自动 adopt 不写你项目的 `CLAUDE\.md`/,
+      /自动 adopt 不再把托管块加进你项目的 `CLAUDE\.md`/,
       /`CLAUDE\.local\.md`/,
       /\.git\/info\/exclude/,
     ],
@@ -62,6 +62,17 @@ describe('README auto-adopt description matches silentAutoAdopt', () => {
       expect(text, `${name} must say the file is excluded from git`).toMatch(exclude);
     });
   }
+
+  // Pre-tag claims review P1-1: projects an earlier version adopted keep a CLAUDE.md block that
+  // the first session of this version refreshes, so "never writes anything git tracks" was false.
+  it('neither README claims auto-adopt never touches tracked files', () => {
+    for (const text of [EN, ZH]) {
+      expect(text).not.toMatch(/never writes\s+anything git tracks/);
+      expect(text).not.toMatch(/without touching anything git tracks/);
+      expect(text).not.toMatch(/不写任何被 git 跟踪的文件/);
+      expect(text).not.toMatch(/不碰任何被 git 跟踪的文件/);
+    }
+  });
 
   it('the implementation still writes CLAUDE.md on every session, not a memdir sentinel once', () => {
     // Assert the premise before asserting the docs against it. If the code moved back to

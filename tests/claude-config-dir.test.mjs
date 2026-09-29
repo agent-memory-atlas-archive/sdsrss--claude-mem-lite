@@ -11,6 +11,7 @@ import { join } from 'path';
 import { claudeConfigDir, claudeStatePath } from '../lib/data-paths.mjs';
 import { memdirPath } from '../memdir.mjs';
 import { readProjectTasks } from '../lib/task-reader.mjs';
+import { recentPlans } from '../lib/plan-reader.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 
@@ -53,6 +54,22 @@ describe('the host config home follows CLAUDE_CONFIG_DIR', () => {
       );
       process.env.CLAUDE_CONFIG_DIR = cfg;
       expect(readProjectTasks().map((t) => t.title)).toEqual(['probe task']);
+    } finally {
+      rmSync(cfg, { recursive: true, force: true });
+    }
+  });
+
+  it('the plan reader looks under the moved config home', () => {
+    const cfg = mkdtempSync(join(tmpdir(), 'cml-cfgdir-plans-'));
+    try {
+      mkdirSync(join(cfg, 'plans'));
+      writeFileSync(join(cfg, 'plans', 'my-plan.md'), '# Probe plan\n');
+      process.env.CLAUDE_CONFIG_DIR = cfg;
+      expect(
+        recentPlans()
+          .map((p) => p.name ?? p.file ?? p.path)
+          .join(' '),
+      ).toMatch(/my-plan/);
     } finally {
       rmSync(cfg, { recursive: true, force: true });
     }

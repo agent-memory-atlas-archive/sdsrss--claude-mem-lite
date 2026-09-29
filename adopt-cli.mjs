@@ -15,7 +15,7 @@
 
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
-import { join, isAbsolute } from 'path';
+import { join, isAbsolute, resolve } from 'path';
 import {
   memdirPath,
   disableSentinelPath,
@@ -45,6 +45,8 @@ import {
   removeLocalSteering,
   ensureSteeringDetailDoc,
   localMdPath,
+  forgetLocalSteering,
+  tildePath,
 } from './lib/local-steering.mjs';
 
 /**
@@ -263,10 +265,19 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
       if (markerDir && markerKey) writeMarker(markerDir, markerKey);
       const root = localSteeringRoot(cwd);
       if (root) {
+        // A session started below the top-level (pre-tag claims review P2-3, P1-4): the host
+        // loads the root's CLAUDE.md as an ancestor, so a block there already steers this
+        // session; and an opt-out recorded for the root covers the file that lives there.
+        if (resolve(root) !== resolve(cwd)) {
+          if (readBlock(root, PLUGIN_SLUG).body !== null)
+            return { ok: true, action: 'already-adopted', reason: 'root-claude-md' };
+          if (isAutoAdoptDisabled(memdirPath(root)))
+            return { ok: true, action: 'inject', reason: 'root-disabled' };
+        }
         const present = readLocalSteering(root, PLUGIN_SLUG).body !== null;
         if (present && process.env.CLAUDE_MEM_NO_TEMPLATE_REFRESH === '1')
           return { ok: true, action: 'local', written: 'unchanged' };
-        const localBlock = buildClaudeMdBlock({ detailDocRef: ensureSteeringDetailDoc() });
+        const localBlock = buildClaudeMdBlock({ detailDocRef: tildePath(ensureSteeringDetailDoc()) });
         const r = writeLocalSteering(root, { slug: PLUGIN_SLUG, version, block: localBlock });
         if (r.action !== 'refused') return { ok: true, action: 'local', written: r.action };
         return { ok: true, action: 'inject', reason: `local-${r.reason}` };
@@ -355,6 +366,13 @@ function cmdDisable(args) {
  */
 function cmdEnable(args) {
   const all = hasFlag(args, '--all');
+  // Re-arm the CLAUDE.local.md block too: a block the user or `unadopt` removed is not written
+  // back until this forgets that it was (lib/local-steering.mjs).
+  for (const dir of all ? listKnownProjectDirs() : [detectCwd()]) {
+    const root = localSteeringRoot(dir);
+    if (root && forgetLocalSteering(root))
+      log(`[adopt --enable] ${localMdPath(root)} → will be written again`);
+  }
   const targets = all ? listAllMemdirs().map((m) => m.memdir) : [memdirPath(detectCwd())];
 
   if (targets.length === 0) {
@@ -396,7 +414,7 @@ function statusAll() {
   const localRoot = localSteeringRoot(cwd);
   const localHere = localRoot && readLocalSteering(localRoot, PLUGIN_SLUG).body !== null;
   log(
-    `  local:      ${localHere ? `✓ ${localMdPath(localRoot)} (auto-written, excluded from git)` : localRoot ? '✗ none' : '— not a git work tree (steering is injected at session start)'}`,
+    `  local:      ${localHere ? `✓ ${localMdPath(localRoot)} (auto-written, excluded from git)` : localRoot ? '✗ none' : '— none here: not a git work tree, or its root is $HOME or / (steering is injected at session start)'}`,
   );
   if (hasLegacyMemdirSentinel(cwd, PLUGIN_SLUG)) {
     log('  legacy:     ⚠ memory-dir sentinel still present (migrates on next SessionStart, or run `adopt`)');

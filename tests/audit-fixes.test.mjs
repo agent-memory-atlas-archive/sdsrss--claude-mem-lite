@@ -1118,6 +1118,46 @@ describe('Fuzzy auto-dedup (hook auto-maintain)', () => {
     }
   });
 
+  // E2E round 2026-09-29: the scan never selected `project` and the pure core never
+  // compared it, so two checkouts of one repo (a worktree) saving the same observation had the
+  // OLDER project's row tombstoned — `recent` there read "No recent observations". The exact
+  // channel already joins on project; CLAUDE.md: cross-project ops must compare both rows'
+  // projects first.
+  it('never supersedes a row because ANOTHER project holds a near-copy', () => {
+    const { db, dbPath } = initHomeDb(tmpHome);
+    const now = Date.now();
+    for (const [sess, proj] of [
+      ['xp-a', 'audit--t4'],
+      ['xp-b', 'audit--t4-worktree'],
+    ]) {
+      db.prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+         VALUES (?, ?, ?, ?, ?, 'active')`,
+      ).run(sess, `${sess}-mem`, proj, new Date().toISOString(), now);
+      db.prepare(
+        `INSERT INTO observations (memory_session_id, project, text, type, title, subtitle, narrative, concepts, facts,
+           files_read, files_modified, importance, compressed_into, access_count, created_at, created_at_epoch)
+         VALUES (?, ?, '', 'change', 'Added title validation to addTodo in server.js', '', 'same body', '', '',
+           '[]', '[]', 2, NULL, 0, ?, ?)`,
+      ).run(`${sess}-mem`, proj, new Date(now - DAY_MS).toISOString(), now - DAY_MS);
+    }
+    db.close();
+    runHookCmd('session-start', {
+      home: tmpHome,
+      cwd: projDir,
+      stdin: JSON.stringify({ session_id: 'cc-xp' }),
+    });
+    runHookCmd('auto-maintain', { home: tmpHome, cwd: projDir });
+    const db2 = new Database(dbPath, { readonly: true });
+    try {
+      const rows = db2.prepare('SELECT project, superseded_at FROM observations ORDER BY id').all();
+      expect(rows).toHaveLength(2); // premise: both near-copies are in the scan window
+      expect(rows.map((r) => r.superseded_at)).toEqual([null, null]);
+    } finally {
+      db2.close();
+    }
+  });
+
   it('respects CLAUDE_MEM_SKIP_AUTO_DEDUP_FUZZY env opt-out', () => {
     const { db, dbPath } = initHomeDb(tmpHome);
     const now = Date.now();

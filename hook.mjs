@@ -2087,7 +2087,7 @@ function runSessionStartAutoMaintain(db, project) {
         const recent = db
           .prepare(
             `
-          SELECT id, title, importance, created_at_epoch, narrative, text
+          SELECT id, project, title, importance, created_at_epoch, narrative, text
           FROM observations
           WHERE ${liveObsFilterSql('')}
             AND created_at_epoch > ?
@@ -2102,6 +2102,7 @@ function runSessionStartAutoMaintain(db, project) {
           // selection is the shared pure core in lib/maintain-core (unit-tested there).
           const rows = recent.map((r) => ({
             id: r.id,
+            project: r.project,
             title: r.title,
             importance: r.importance,
             body: (r.narrative && r.narrative.trim()) || (r.text && r.text.trim()) || '',

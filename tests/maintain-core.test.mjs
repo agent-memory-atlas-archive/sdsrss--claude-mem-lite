@@ -578,6 +578,17 @@ describe('selectFuzzyDedupeIds — title + body fuzzy dedup (audit #8)', () => {
     expect(selectFuzzyDedupeIds(rows)).toEqual([]);
   });
 
+  test('does NOT dedupe a near-copy held by another project', () => {
+    const body = 'identical body text shared by both candidate rows';
+    const rows = [
+      { ...row(1, TITLE_A, body), project: 'a--app' },
+      { ...row(2, TITLE_A, body), project: 'a--app-worktree' },
+    ];
+    expect(selectFuzzyDedupeIds(rows)).toEqual([]);
+    rows[1].project = 'a--app';
+    expect(selectFuzzyDedupeIds(rows)).toEqual([2]); // same project still dedupes
+  });
+
   test('keeps the higher-importance row and removes the lower-importance peer', () => {
     const rows = [
       row(1, 'Fix the auth bug in login', 'identical body text shared by both candidate rows', 1),

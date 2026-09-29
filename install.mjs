@@ -3441,9 +3441,61 @@ async function runLockedInstall() {
   }
 }
 
+/**
+ * The flags each install-family command reads — the whole of what `flags.has()` asks for.
+ *
+ * Every other flag used to be dropped in silence, so `uninstall --dry-run` and
+ * `uninstall --help` UNINSTALLED (MCP registration, CLI symlink, every hook) and
+ * `install --help` installed; `cleanup` honours `--dry-run`, which is why a user expects its
+ * siblings to. main() now prints usage for `--help` / `-h` and refuses an unknown flag on a
+ * command that writes. The two read-only commands only report it, the query CLI's
+ * "Unknown flag … ignored" rule. `--skip-repos` is inert and accepted: the test suite and
+ * older notes pass it to `install`.
+ */
+export const INSTALL_COMMAND_FLAGS = {
+  install: ['--dev', '--no-adopt', '--skip-repos'],
+  uninstall: ['--purge'],
+  status: ['--json'],
+  doctor: ['--json'],
+  cleanup: ['--dry-run'],
+  'cleanup-hooks': [],
+  'self-update': [],
+  update: [],
+  repair: [],
+  'rebuild-binding': [],
+  release: ['--no-lock'],
+};
+const READ_ONLY_INSTALL_COMMANDS = new Set(['status', 'doctor']);
+
+/** @returns {boolean} true when the command must not run */
+function rejectFlags(cmd, args) {
+  const known = INSTALL_COMMAND_FLAGS[cmd];
+  if (!known) return false;
+  // `--` is POSIX end-of-options, which `doctor --` has always accepted.
+  const given = args.filter((a) => a !== '--');
+  if (given.includes('--help') || given.includes('-h')) {
+    printUsage();
+    return true;
+  }
+  const unknown = given.filter((a) => !known.includes(a));
+  if (unknown.length === 0) return false;
+  const accepted = known.length ? `accepted: ${known.join(' ')}` : 'it takes no flags';
+  if (READ_ONLY_INSTALL_COMMANDS.has(cmd)) {
+    console.error(`[install] Unknown flag ${unknown.join(', ')} — ignored, it had no effect (${accepted}).`);
+    return false;
+  }
+  console.error(
+    `[install] Unknown flag ${unknown.join(', ')} for "${cmd}" — nothing was done (${accepted}; ` +
+      `--help prints usage).`,
+  );
+  process.exitCode = 1;
+  return true;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   cmd = argv[0];
   flags = new Set(argv.slice(1));
+  if (rejectFlags(cmd, argv.slice(1))) return;
 
   try {
     return await dispatch(cmd);
@@ -3507,7 +3559,13 @@ async function dispatch(cmd) {
           console.error(`[install] Unknown command: "${cmd}"`);
           process.exitCode = 1;
         }
-        console.log(`
+        printUsage();
+      }
+  }
+}
+
+function printUsage() {
+  console.log(`
 claude-mem-lite — Lightweight memory system for Claude Code
 
 Usage:
@@ -3526,8 +3584,6 @@ Usage:
 
   npx claude-mem-lite                 Install via npx (one-liner)
 `);
-      }
-  }
 }
 
 const IS_MAIN = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

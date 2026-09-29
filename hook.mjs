@@ -2647,6 +2647,28 @@ async function buildInjectedSteering() {
   }
 }
 
+// §9-A follow-up (user decision 2026-09-29): injected steering did not drive bugfix saves the
+// way the written CLAUDE.md block did (sandbox S3: 0/8 injected vs 7/12 written, p≈0.015). The
+// user, not the model, decides whether the plugin may write into the repository: offer the
+// block ONCE per project on the human systemMessage channel. A preserved runtime marker keeps
+// it to once; MEM_NO_ADOPT_HINT=1 (the existing adopt-hint switch) silences it.
+const ADOPT_OFFER_MARKER_PREFIX = '.adopt-offered-';
+function offerAdoptOnce(project) {
+  if (process.env.MEM_NO_ADOPT_HINT === '1') return;
+  try {
+    const marker = join(RUNTIME_DIR, `${ADOPT_OFFER_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    queueHookSystemMessage(
+      'claude-mem-lite: memory guidance for this project is injected at session start, and nothing is written to your repository. ' +
+        'Run /adopt (or `claude-mem-lite adopt`) to put it in CLAUDE.md instead — the agent then saves lessons after fixes more reliably. ' +
+        'Shown once per project; `claude-mem-lite adopt --disable` turns the guidance off for this project.',
+    );
+  } catch (e) {
+    debugCatch(e, 'session-start-adopt-offer');
+  }
+}
+
 async function handleSessionStart() {
   // GC stale per-session cooldown files. Cheap (<5ms typical) and idempotent;
   // moved here from pre-tool-recall.js's hot path.
@@ -2894,6 +2916,7 @@ async function handleSessionStart() {
     if (adoptAction === 'inject') {
       const steering = await buildInjectedSteering();
       if (steering) stdoutParts.push(steering);
+      offerAdoptOnce(project);
     }
 
     // Auto-update banner (audit P3d): NON-BLOCKING — read from cached state

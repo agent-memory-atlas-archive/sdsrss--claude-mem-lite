@@ -154,7 +154,7 @@ node install.mjs install
 1. **安装依赖** -- `npm install --omit=dev`（编译原生 `better-sqlite3`）
 2. **注册 MCP 服务器** -- `mem-lite` 服务器，包含 18 个工具（9 个核心通过 `tools/list` 暴露 + 9 个隐藏但可调；完整表见 Usage 段）。v2.78 前服务器名为通用的 `mem`，现已改名为 `mem-lite` 避免与用户其它 `.mcp.json` 冲突；工具名（`mem_search`/`mem_recall` 等）保持不变。
 
-> **自动 adopt 不再写进你的项目（6.19.4 之后的下一个版本起）。** 每次 SessionStart，插件把引导文本（提升 Claude 主动调用 `mem_recall` / `mem_save` 的触发表）**注入**会话上下文，`<cwd>` 下不写任何文件。旧版本会在你打开的每个项目里，未经询问就向项目自己的 `<cwd>/CLAUDE.md`（通常是会进 git 的文件）写入托管块，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件。注入文本指向的详情文件现在放在插件自己的数据目录（`~/.claude-mem-lite/`）。**任何安装路径都生效**（npm、npx、`/plugin`、手动），**无需手动跑 `/adopt`**。
+> **自动 adopt 不再写进你的项目（6.19.4 之后的下一个版本起）。** 每次 SessionStart，插件把引导文本（提升 Claude 主动调用 `mem_recall` / `mem_save` 的触发表）**注入**会话上下文，`<cwd>` 下不写任何文件。旧版本会在你打开的每个项目里，未经询问就向项目自己的 `<cwd>/CLAUDE.md`（通常是会进 git 的文件）写入托管块，外加 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件。注入文本指向的详情文件现在放在插件自己的数据目录（`~/.claude-mem-lite/`）。**任何安装路径都生效**（npm、npx、`/plugin`、手动）。项目第一次以注入方式被引导时，你会看到一条**一次性提示**，建议运行 `/adopt`：沙箱实测中，引导写在 `CLAUDE.md` 里时，模型修完 bug 后保存教训要可靠得多，所以是否允许插件写入由你决定（用 `MEM_NO_ADOPT_HINT=1` 关闭该提示）。
 >
 > **仍想把托管块写进 `CLAUDE.md`**（例如让子代理也能看到——子代理收不到 SessionStart 上下文）？运行 `claude-mem-lite adopt`：它向 `<cwd>/CLAUDE.md` 写入 slug 限定的托管块和详情文件，块以外的内容逐字保留。已带托管块的项目（显式 adopt，或旧版本写入的）在**每次 SessionStart** 都会同步，出货模板变了会刷新，且不会再叠加一份注入。关闭方式：项目级 `claude-mem-lite adopt --disable`（重新启用用 `--enable`）；全局 `export MEM_NO_AUTO_ADOPT=1`；只冻结模板刷新用 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。`claude-mem-lite unadopt` 可移除托管块与详情文件。
 3. **配置钩子** -- 全部七个生命周期事件：`SessionStart`、`PreCompact`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Stop`、`UserPromptSubmit`
@@ -786,7 +786,7 @@ npm run benchmark:gate    # CI 门控：指标回退超过 5% 容差时失败
 | `CLAUDE_MEM_LESSON_GROUNDING` | 自动捕获的 event 只有在教训引用了本窗口自己的诊断文字（失败输出行、编辑新增的注释或提交信息）时才保留教训；否则保留这一行但去掉教训，importance 降为 1，低于所有注入面的门槛。设为 `off` 保留未引用原文的教训。 | _(开启)_ |
 | `CLAUDE_MEM_LESSON_OUTPUT_CAP` | 自动捕获的教训如果和**工具输出**（命令打印的文字或工具返回的内容，能控制这段输出的人就能写它）有连续 4 个词相同，就不会进入注入面：event 保留这一行和教训、仍可搜索，importance 降为 1；`change` 类 observation 的 importance 之后会被读取次数抬高，所以改为去掉教训，没有教训的这一行随后会像其他同类行一样被丢弃（只有设了 `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` 才保留）。连续 4 个虚词（例如 "is not in the"）也算，所以引用你自己的注释或提交信息的教训，只要碰巧和同一窗口的输出共有这样一串词，也会被降级。这一行的标题不在检查范围内。设为 `off` 恢复模型给出的 importance 和教训。 | _(开启)_ |
 | `MEM_NO_AUTO_ADOPT` | auto-adopt 全局关闭开关（v2.82.0+）。设为 `1` 在**所有**项目停止每次 SessionStart 的引导——既不注入引导文本，也不同步已有的 `CLAUDE.md` 托管块。项目级关闭走 `claude-mem-lite adopt --disable`（写 `<memdir>/.mem-no-auto-adopt` 哨兵，存活于 marker 删除）。 | _(禁用)_ |
-| `MEM_NO_ADOPT_HINT` | 静音当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
+| `MEM_NO_ADOPT_HINT` | 静音项目第一次以注入方式被引导时给你的一次性 "运行 /adopt" 提示，以及当前项目未 adopt 时 SessionStart 追加的那一行 "Invited-memory 未启用…" 提示。v2.82.1 起任何安装路径每次 SessionStart 都自动 adopt，所以该提示一般只在你显式 opt out（`MEM_NO_AUTO_ADOPT=1` 或 `claude-mem-lite adopt --disable`）的项目才会出现。 | _(禁用)_ |
 
 ## 许可证
 

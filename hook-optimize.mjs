@@ -1250,7 +1250,9 @@ Return ONLY valid JSON:
     const factsText = facts.length ? facts.join(' ') : keeper.facts || '';
     // Scrub BEFORE truncate (see re-enrich note): keep the boundary cut on
     // already-scrubbed text so a straddling secret can't leak a sub-floor head.
-    const title = truncate(scrubSecrets(parsed.merged_title || ''), 120);
+    // Preserve-on-empty for the title too, like narrative/concepts/facts: `{"should_merge":true}`
+    // alone blanked the keeper's title and it listed as "(untitled)".
+    const title = truncate(scrubSecrets(parsed.merged_title || keeper.title || ''), 120);
     const narrative = truncate(scrubSecrets(parsed.merged_narrative || keeper.narrative || ''), 800);
     // Preserve-on-empty. The merge overwrites the keeper in place and hides every non-keeper
     // member (compressed_into=keeper.id), so if the LLM returns merged_lesson:null (the prompt

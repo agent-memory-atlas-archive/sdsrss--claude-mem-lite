@@ -1122,6 +1122,8 @@ server.registerTool(
     const msg = [`Deleted ${result.deleted} observation(s).`];
     if (result.recoveredChildren > 0)
       msg.push(`Recovered ${result.recoveredChildren} merged/compressed child observation(s) to live.`);
+    if (result.restoredSuperseded > 0)
+      msg.push(`Restored ${result.restoredSuperseded} observation(s) it had superseded to live.`);
     if (missing.length > 0) msg.push(`Note: ID(s) ${missing.join(', ')} not found.`);
     return { content: [{ type: 'text', text: msg.join(' ') }] };
   }),

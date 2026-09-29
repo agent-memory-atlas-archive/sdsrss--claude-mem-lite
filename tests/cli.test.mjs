@@ -1517,6 +1517,32 @@ describe('CLI delete command', () => {
     expect(child).toBeDefined(); // child row survived
     expect(child.compressed_into).toBeNull(); // and was resurfaced as live
   });
+
+  // E2E round 2026-09-29: deleting a CORRECTION left the row it retired behind
+  // "⚠ RETRACTED — superseded by #2. Read #2 instead" with #2 gone, hidden from search for
+  // good — the compressed-child dangle above, through the superseded_by pointer. Same
+  // remedy: bring the retired row back live and say so.
+  it('restores a row the deleted observation had superseded', async () => {
+    insertObs(testDb, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      type: 'decision',
+      title: 'Budget per request',
+    });
+    insertObs(testDb, {
+      sessionId: 'mem-s1',
+      project: 'test--project',
+      type: 'decision',
+      title: 'Budget per shard',
+    });
+    testDb
+      .prepare('UPDATE observations SET superseded_at = ?, superseded_by = 2 WHERE id = 1')
+      .run(Date.now());
+    const output = await captureStdout(() => run(['delete', '2', '--confirm']));
+    expect(output).toMatch(/Restored 1 observation\(s\) it had superseded/);
+    const old = testDb.prepare('SELECT superseded_at, superseded_by FROM observations WHERE id = 1').get();
+    expect(old).toEqual({ superseded_at: null, superseded_by: null });
+  });
 });
 
 // ─── update command ─────────────────────────────────────────────────────────

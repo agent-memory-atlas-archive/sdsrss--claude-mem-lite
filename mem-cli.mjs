@@ -2005,8 +2005,12 @@ function cmdDelete(db, args) {
     result.recoveredChildren > 0
       ? ` Recovered ${result.recoveredChildren} merged/compressed child observation(s) to live.`
       : '';
+  const restoredNote =
+    result.restoredSuperseded > 0
+      ? ` Restored ${result.restoredSuperseded} observation(s) it had superseded to live.`
+      : '';
   out(
-    `[mem] Deleted ${result.deleted} observation(s).${recoveredNote}${missing.length > 0 ? ` Note: ID(s) ${missing.join(', ')} not found.` : ''}`,
+    `[mem] Deleted ${result.deleted} observation(s).${recoveredNote}${restoredNote}${missing.length > 0 ? ` Note: ID(s) ${missing.join(', ')} not found.` : ''}`,
   );
 }
 

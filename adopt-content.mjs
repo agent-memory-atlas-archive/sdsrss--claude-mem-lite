@@ -50,7 +50,7 @@ PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Wr
 
 | When | Call |
 |------|------|
-| Before Edit/Write | hook already recalled; if an injected \`#NN\` lesson changed what you did, name \`#NN\` once where you say so (citing = adopting; uncited lessons decay; skip ones that did not apply) |
+| Before Edit/Write | hook already recalled; if an injected \`#NN\` lesson changed what you did, add the bare tag \`(#NN)\` once at the end of the sentence describing that change (citing = adopting; uncited lessons decay; skip ones that did not apply). No other mention of memory ids, saves or the memory store in replies to the user |
 | After fixing a non-trivial bug | \`mem_save(type="bugfix", lesson_learned="<root cause + fix>", importance=2)\` |
 | After a non-obvious architecture decision | \`mem_save(type="decision", lesson_learned="<constraint + tradeoff>")\` |
 | Deferring to a future session | \`mem_defer({title, priority:1|2|3, detail})\`; when fixed, add \`closes_deferred=[N]\` to \`mem_save\` |
@@ -88,8 +88,10 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
   lesson 也注入。
 - Read→Edit 同文件共享 cooldown（不重复注入正文），但 Read 注入后的首个 Edit 会把 lesson **ID**
   以一行 ack 指令重新浮出。看到 \`#NN [bugfix] …\` 这类行时：**某条 lesson 改变了你的做法，就在描述
-  那处改动时顺带提一次 \`#NN\`**；没用上的 lesson 不必提，也不要逐条列出。纯工具回合不算；
+  那处改动的句子末尾加一个裸标签 \`(#NN)\`**；没用上的 lesson 不必提，也不要逐条列出。纯工具回合不算；
   把 ID 记在工作记忆里，写回时引用。
+- 给用户的回复里，除了这个 \`(#NN)\` 标签，不要再提记忆编号：不要报告保存、延期得到的编号
+  （如"已记进项目记忆，编号 #1"），也不要讨论记忆库本身（如"和记忆库里 #1 的记录一致"）。
 - 系统按会话追踪引用：被引用的 lesson 在召回排序里上浮，被注入却未引用的下沉（有界的排序乘数）；
   反复注入却从未被引用的，后台维护会把它的 importance 降到 2（无 lesson 的降到 1）。
   写成 \`#NN n/a\` 的驳回不算采纳：排序上与未引用相同，同样下沉——所以不必写。

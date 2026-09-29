@@ -1150,6 +1150,38 @@ describe('re-enrich --scope wide (R-7)', () => {
     const obs = db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(id);
     expect(obs.compressed_into).toBe(-1); // COMPRESSED_AUTO — narrow auto-hide preserved
   });
+
+  // v6.21.0 pre-tag claims review: hiding a compression group's KEEPER hides every member
+  // compressed into it (2eb44d1 guarded the five maintenance writers, not this one). A weekly
+  // summary is exactly the thin row the narrow pool picks, and `optimize`'s default is narrow.
+  it('narrow re-enrich does not hide a compression keeper on importance:0; it floors it to 1', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Weekly summary: auth refactor', narrative: 'three changes to auth' });
+    const keeper = db.prepare('SELECT MAX(id) id FROM observations').get().id;
+    for (const t of ['token refresh', 'session store', 'logout path']) {
+      insertObs(db, { title: t, narrative: `${t} change`, compressedInto: keeper });
+    }
+    callModelJSONAsync.mockResolvedValue({
+      type: 'change',
+      title: 'Weekly summary',
+      narrative: 'x',
+      importance: 0,
+    });
+
+    const result = await executeReenrich(db, 10); // narrow scope (default)
+    expect(result.processed).toBe(1);
+    const row = db
+      .prepare('SELECT compressed_into, importance, optimized_at FROM observations WHERE id = ?')
+      .get(keeper);
+    expect(row.compressed_into ?? 0, 'the keeper, and with it its whole group, was hidden').toBe(0);
+    expect(row.importance).toBe(1);
+    expect(
+      row.optimized_at,
+      'left unstamped, the keeper would be re-sent to the model every run',
+    ).not.toBeNull();
+    const members = db.prepare('SELECT COUNT(*) n FROM observations WHERE compressed_into = ?').get(keeper).n;
+    expect(members).toBe(3);
+  });
 });
 
 describe('normalize', () => {

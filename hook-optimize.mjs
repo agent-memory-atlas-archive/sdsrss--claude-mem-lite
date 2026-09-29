@@ -13,6 +13,7 @@ import {
   debugLog,
   debugCatch,
   COMPRESSED_AUTO,
+  NOT_COMPRESSION_KEEPER_SQL,
   computeMinHash,
   estimateJaccardFromMinHash,
   jaccardSimilarity,
@@ -481,7 +482,13 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // reachable by no auto-recovery pass — so one Haiku "importance 0" misjudgment would
       // hide a real observation until manual surgery. In wide scope, fall through and let
       // clampImportance floor it to 1 (kept visible, low-ranked) instead of hiding.
-      if ((parsed.importance === 0 || parsed.importance === '0') && scope !== 'wide') {
+      // A compression keeper is never hidden: hiding it hides every member compressed into it
+      // (the same rule NOT_COMPRESSION_KEEPER_SQL enforces on the maintenance writers). It takes
+      // the wide path below instead — floored to importance 1 and stamped, so it is not re-sent.
+      const isKeeper = !!db
+        .prepare('SELECT 1 FROM observations WHERE compressed_into = ? LIMIT 1')
+        .get(cand.id);
+      if ((parsed.importance === 0 || parsed.importance === '0') && scope !== 'wide' && !isKeeper) {
         // D#12, and this one is not a stale-write guard — it is a POINTER guard.
         // `compressed_into` is the child -> keeper link, and COMPRESSED_AUTO is -1. If a
         // concurrent cluster-merge or smart-compress adopts this row during the 45 s Haiku
@@ -493,7 +500,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         const res = db
           .prepare(
             `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, optimized_at = ?
-             WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL`,
+             WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL AND ${NOT_COMPRESSION_KEEPER_SQL}`,
           )
           .run(Date.now(), cand.id);
         if (res.changes === 0) {

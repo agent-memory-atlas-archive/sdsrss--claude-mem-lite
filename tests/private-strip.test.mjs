@@ -127,6 +127,10 @@ describe('stripPrivate — fail-closed properties and linearity', () => {
     const inputs = [
       ['<private>'.repeat(28000), '[redacted]'], // ~252KB, the hook stdin cap; unclosed → to end
       ['</private>' + '<private>'.repeat(28000), '</private>[redacted]'],
+      // D13's attribute form made each `<private ` scan to the END of the input for a `>` that
+      // never comes: 360KB took 4.7s (pre-tag review). Not a tag, so nothing is redacted.
+      ['<private '.repeat(28000), '<private '.repeat(28000)],
+      ['</private '.repeat(25200), '</private '.repeat(25200)],
     ];
     for (const [input, want] of inputs) {
       const started = process.hrtime.bigint();

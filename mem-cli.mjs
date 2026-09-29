@@ -2405,6 +2405,11 @@ function cmdRestore(db, argv) {
         files,
         lesson_learned: r.lesson_learned || null,
         now: new Date(createdEpoch),
+        // A backup's rows all coexisted in the store it came from; the only duplicates restore
+        // may skip are rows the target already holds (dupCheck above). The near-duplicate
+        // window, run with this PAST `now`, had no upper bound: 25 distinct rows restored as
+        // 1, and an old row vanished for resembling a newer live one.
+        force: true,
         sessionId: isAutoWritten(r.memory_session_id)
           ? writerSessionId(RESTORE_SESSION_ID_PREFIX, project)
           : undefined,
@@ -2412,7 +2417,7 @@ function cmdRestore(db, argv) {
       if (res.kind !== 'saved') {
         skipped++;
         continue;
-      } // saveObservation Jaccard dedup
+      }
       // Re-apply the fields saveObservation zeros/derives so the backup is faithful.
       // `text` is the observation BODY and its own FTS5 column — import-jsonl / cold-start
       // rows keep the body there with an empty narrative, so saveObservation (content =
@@ -2469,17 +2474,6 @@ function cmdRestore(db, argv) {
       `, ${skipped} duplicate(s) ${dryRun ? 'would be skipped' : 'skipped'}${tombstoneNote}` +
       `, ${totalMalformed} malformed/failed from ${totalLines} row(s).`,
   );
-  if (dryRun) {
-    // The preview applies the durable exact-dup guard (project+title+created_at) but NOT
-    // saveObservation's Jaccard near-duplicate collapse, which only exists once rows are
-    // being written. Measured: a backup holding two same-titled weekly summaries previewed
-    // 10 and restored 9. Simulating Jaccard here would mean a second copy of the dedup rule
-    // — the drift class this codebase keeps paying for — so the number is labelled an upper
-    // bound instead. Run without --dry-run for the exact count.
-    out(
-      '[mem] Note: the preview does not simulate near-duplicate collapse, so the real run may restore fewer.',
-    );
-  }
   // Name the lossiness where the user meets it. Export omits related_ids and drops
   // superseded rows, and restore re-inserts under fresh AUTOINCREMENT ids — so no
   // cross-link can survive the round-trip. That is a deliberate format tradeoff (stored

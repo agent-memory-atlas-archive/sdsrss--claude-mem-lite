@@ -88,7 +88,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Observation relations** -- Bidirectional links between related observations based on file overlap
 - **User prompt capture** -- Records user prompts via UserPromptSubmit hook for intent tracking
 - **Read file tracking** -- Tracks files read during sessions for richer episode context
-- **Zero data loss** -- If LLM fails, observations are saved with degraded (inferred) metadata instead of being discarded
+- **Degraded fallback when the LLM fails** -- An episode the deterministic rules already rate notable (an error fixed, a config or schema file changed) is saved with inferred metadata instead of being discarded. A routine edit the rules rate as noise (`Modified a.js, b.js` with no lesson) is dropped — as it is when the model answers without a lesson — so a failing provider loses those episodes; `claude-mem-lite doctor` warns when the `claude` CLI it would call does not resolve
 - **Two-tier dedup** -- Jaccard similarity (5-minute window) + MinHash signatures (7-day cross-session window) prevent duplicates
 - **Synonym expansion** -- Abbreviations like `K8s`, `DB`, `auth` automatically expand to full forms in FTS5 search (100+ pairs including CJK↔EN cross-language mappings)
 - **CJK synonym extraction** -- Unsegmented Chinese text is scanned for known vocabulary words (数据库→database, 搜索→search, etc.) enabling cross-language memory recall

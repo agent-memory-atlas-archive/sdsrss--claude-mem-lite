@@ -98,6 +98,7 @@ import { sweepStaleTestFixtures } from './lib/tmp-fixture-sweep.mjs';
 import { acquireLock } from './lib/proc-lock.mjs';
 import { atomicWriteFileSync } from './lib/atomic-write.mjs';
 import { shellWord } from './cli-path.mjs';
+import { claudeStatePath } from './lib/data-paths.mjs';
 import { isMemHook, isMemHookCommand, stripMemHooks, launcherEntryPath } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
@@ -622,6 +623,43 @@ function createCliSymlink() {
 }
 
 /**
+ * `mem` is the pre-v2.78 name of our server — and a generic one: the MCP reference memory
+ * server is commonly registered under it. install, uninstall and the plugin's setup.sh removed
+ * a user-scope `mem` without looking at what it ran, so a user's own `mem` server vanished.
+ * A registration under that name is ours only when it runs our server; `mem-lite` always is.
+ * scripts/setup.sh carries this pattern inline (tests/mcp-legacy-name-ownership.test.mjs).
+ */
+export const OUR_MCP_SERVER_RE = /claude-mem-lite[\w.-]*[\\/]+(?:scripts[\\/]+launch|server)\.mjs/;
+
+export function isOurMcpRegistration(name, entry) {
+  if (name === 'mem-lite') return true;
+  if (!entry || typeof entry !== 'object') return false;
+  const args = Array.isArray(entry.args) ? entry.args : [];
+  return OUR_MCP_SERVER_RE.test([entry.command, ...args].join(' '));
+}
+
+/**
+ * User-scope names install/uninstall may remove: `mem-lite`, plus `mem` when its entry in
+ * Claude Code's state file runs our server. An unreadable file keeps `mem` off the list —
+ * a leftover legacy registration costs a duplicate tool prefix, a wrong removal costs the
+ * user's server. `foreignMem` reports a `mem` that was left alone, so the caller can say so.
+ */
+function ownedUserMcpNames() {
+  let entry;
+  try {
+    entry = JSON.parse(readFileSync(claudeStatePath(), 'utf8'))?.mcpServers?.mem;
+  } catch {
+    entry = undefined;
+  }
+  const memIsOurs = isOurMcpRegistration('mem', entry);
+  return { names: memIsOurs ? ['mem', 'mem-lite'] : ['mem-lite'], foreignMem: !!entry && !memIsOurs };
+}
+
+function noteForeignMem(foreignMem) {
+  if (foreignMem) log('User-scope MCP "mem" left in place — it does not run claude-mem-lite.');
+}
+
+/**
  * Which of our MCP names a PROJECT-scoped `.mcp.json` in `cwd` registers.
  *
  * This exists because the installer used to run `claude mcp remove -s project <name>` as
@@ -698,8 +736,10 @@ function registerMcpServer() {
 
   if (pluginHandlesMcp) {
     log('MCP server: plugin system handles registration (skipping global)');
-    // Clean up stale global registrations (both legacy "mem" and current "mem-lite")
-    for (const name of ['mem', 'mem-lite']) {
+    // Clean up stale global registrations (current "mem-lite", legacy "mem" when ours)
+    const owned = ownedUserMcpNames();
+    noteForeignMem(owned.foreignMem);
+    for (const name of owned.names) {
       try {
         execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
         ok(`Removed stale global MCP "${name}"`);
@@ -711,7 +751,9 @@ function registerMcpServer() {
       // Purge legacy "mem" and any pre-existing "mem-lite" from OUR scope before
       // re-registering. User scope only — see projectScopedMemRegistrations for why the
       // project-scope removal that used to sit here was a bug, not a cleanup.
-      for (const name of ['mem', 'mem-lite']) {
+      const owned = ownedUserMcpNames();
+      noteForeignMem(owned.foreignMem);
+      for (const name of owned.names) {
         try {
           execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
         } catch {}
@@ -1243,7 +1285,9 @@ async function uninstall() {
   // Try both the legacy "mem" (pre-v2.78) and current "mem-lite" names so a user
   // who installed in either era ends up clean.
   let removedAny = false;
-  for (const name of ['mem', 'mem-lite']) {
+  const owned = ownedUserMcpNames();
+  noteForeignMem(owned.foreignMem);
+  for (const name of owned.names) {
     try {
       execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
       ok(`MCP server removed: ${name}`);

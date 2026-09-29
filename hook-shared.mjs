@@ -31,6 +31,7 @@ import {
 import { isDbUnusableError, DB_UNUSABLE_MARKER_PREFIX } from './lib/db-unusable.mjs';
 import { shouldRecordOnce } from './lib/record-once.mjs';
 import { hookSessionId } from './lib/provenance.mjs';
+import { PROJECT_REKEY_MARKER_PREFIX } from './lib/project-rekey.mjs';
 // Audit 2026-09-05 P1-2 (carried from 2026-09-02 P2-9): `callLLM`, the quiet/adoption
 // predicates and the handoff constants moved into `lib/` because two lib modules
 // imported them from here and dragged this file's whole import graph — haiku-client,
@@ -265,6 +266,8 @@ export const GC_PRESERVED_MARKER_PREFIXES = Object.freeze([
   '.adopt-offered-',
   // r3: the one-time note that CLAUDE.local.md was written. Deleting it would repeat the note.
   '.local-steering-noted-',
+  // D9: the one-time re-key of a project's rows off its pre-D9 id, and its one-time note.
+  PROJECT_REKEY_MARKER_PREFIX,
   '.deferred-block-migrated-',
   '.legacy-claude-md-cleaned-',
   // v3.66.1: these two shipped in the GC list for one release and had to come

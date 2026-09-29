@@ -103,6 +103,11 @@ import {
 } from './hook-shared.mjs';
 import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook-llm.mjs';
 import {
+  legacyProjectNameFromDir,
+  rekeyLegacyProject,
+  PROJECT_REKEY_MARKER_PREFIX,
+} from './lib/project-rekey.mjs';
+import {
   readFastSummarySource,
   insertFastSummary,
   writeStopSummary,
@@ -2729,6 +2734,40 @@ function noteLocalSteeringOnce(project) {
 }
 
 /**
+ * D9: a project whose directory name is not all ASCII got a new id (project-utils.mjs
+ * projectNameFromDir). Once per project, move the rows its old id holds that provably came
+ * from this directory, and tell the user where the rest are. No-op for ASCII names, whose id
+ * did not change.
+ */
+function rekeyProjectOnce(db, project) {
+  try {
+    const dir = inferProjectDir();
+    const legacy = legacyProjectNameFromDir(dir);
+    if (legacy === project) return;
+    const marker = join(RUNTIME_DIR, `${PROJECT_REKEY_MARKER_PREFIX}${project}`);
+    if (existsSync(marker)) return;
+    const { moved, left } = rekeyLegacyProject(db, { dir, project, legacy });
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
+    if (moved === 0 && left === 0) return;
+    const rest =
+      left === 0
+        ? ''
+        : left === 1
+          ? ' 1 other stays under the old id because nothing shows which directory it came from; ' +
+            `list it with \`claude-mem-lite recent 50 --project ${legacy}\`.`
+          : ` ${left} others stay under the old id because nothing shows which directory they came from; ` +
+            `list them with \`claude-mem-lite recent 50 --project ${legacy}\`.`;
+    queueHookSystemMessage(
+      `claude-mem-lite: this project's memory now has its own id, ${project}. Its old id, ${legacy}, ` +
+        'could be shared with other directories whose names are not in Latin letters. ' +
+        `Moved ${moved} ${moved === 1 ? 'memory' : 'memories'} whose files are in this directory.${rest} Shown once.`,
+    );
+  } catch (e) {
+    debugCatch(e, 'session-start-rekey');
+  }
+}
+
+/**
  * Flush (or, past STALE_EPISODE_BUFFER_AGE_MS, discard) a buffer a previous session left at
  * `file`. `episode` is its parsed content, or null when there is none.
  */
@@ -2991,6 +3030,8 @@ async function handleSessionStart() {
 
   try {
     const now = new Date();
+
+    rekeyProjectOnce(db, project);
 
     runSessionStartDbMutations(db, { sessionId, project, prevSessionId, now });
 

@@ -2752,7 +2752,7 @@ function rekeyProjectOnce(db, project) {
     // When no stored path shows another directory using the old id, take all of it — sessions,
     // summaries, handoffs, deferred items — not only the memories a path proves. A sibling
     // whose rows carry no path is invisible to that test (see legacyIdIsExclusive).
-    const whole = legacyIdIsExclusive(db, { dir, legacy });
+    const whole = legacyIdIsExclusive(db, { dir, legacy, project });
     const r = whole
       ? moveProjectRows(db, { from: legacy, to: project })
       : rekeyLegacyProject(db, { dir, project, legacy });

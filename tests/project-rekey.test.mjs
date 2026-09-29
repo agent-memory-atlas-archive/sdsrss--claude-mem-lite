@@ -130,6 +130,13 @@ describe('an old id only this directory used', () => {
     expect(legacyIdIsExclusive(db, { dir: BLOG, legacy: OLD })).toBe(false);
   });
 
+  it('is not exclusive once a sibling has moved off the same old id (its new id maps back to it)', () => {
+    obs(db, 'shop', [`${SHOP}/src/cart.js`]);
+    expect(legacyIdIsExclusive(db, { dir: SHOP, legacy: OLD, project: 'projects--商城' })).toBe(true); // premise
+    insertSession(db, { id: 'blog-sess', project: 'projects--博客' }); // 博客 already re-keyed
+    expect(legacyIdIsExclusive(db, { dir: SHOP, legacy: OLD, project: 'projects--商城' })).toBe(false);
+  });
+
   it('reads backslash paths as Windows paths', () => {
     obs(db, 'win blog', ['C:\\Users\\u\\projects\\博客\\x.js']);
     expect(legacyIdIsExclusive(db, { dir: 'C:/Users/u/projects/博客', legacy: OLD })).toBe(true);
@@ -214,6 +221,33 @@ describe('at SessionStart', () => {
       readdirSync(join(home, '.claude-mem-lite', 'runtime')).some((f) => f.startsWith('.project-rekeyed-')),
     ).toBe(true);
     expect(start()).not.toContain(`--project ${OLD}`);
+  });
+
+  // Delta review P2-1: 博客 moves its path-proven rows first, which removes the only path evidence
+  // of 博客 from the old id; 商城 then saw "no other directory" and took 博客's pathless memories
+  // and deferred items.
+  it("a second sibling does not take the first one's leftovers", () => {
+    const db = new Database(join(home, '.claude-mem-lite', 'claude-mem-lite.db'));
+    insertObs(db, { project: OLD, title: 'blog pathless lesson' });
+    db.prepare(
+      `INSERT INTO deferred_work (project, title, priority, status, created_at_epoch) VALUES (?, 'BLOG todo', 2, 'open', ?)`,
+    ).run(OLD, Date.now());
+    db.close();
+    start(); // 博客: path-proven move only (商城's path is there)
+    const shop = join(dirname(dir), '商城');
+    mkdirSync(shop, { recursive: true });
+    start(shop);
+    const ro = new Database(join(home, '.claude-mem-lite', 'claude-mem-lite.db'), { readonly: true });
+    const blogLeft = ro
+      .prepare("SELECT project FROM observations WHERE title = 'blog pathless lesson'")
+      .get().project;
+    const todo = ro.prepare("SELECT project FROM deferred_work WHERE title = 'BLOG todo'").get().project;
+    const shopRow = ro
+      .prepare("SELECT project FROM observations WHERE title = 'shop cart lesson'")
+      .get().project;
+    ro.close();
+    expect([blogLeft, todo]).toEqual([OLD, OLD]); // still where 博客's notice says to look
+    expect(shopRow).toBe('projects--商城'); // 商城 still takes its own, by path
   });
 
   it('takes everything, deferred items included, when the old id was this directory alone', () => {

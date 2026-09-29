@@ -158,6 +158,7 @@ import { extractTailAssistantText, extractStructuredSummary } from './lib/summar
 import { searchRelevantMemories, formatMemoryLine, selectImperativeLesson } from './hook-memory.mjs';
 import { searchInjectableEvents, renderInjectableEvent } from './lib/events-injection.mjs';
 import { upsFtsQuery } from './lib/ups-query.mjs';
+import { isNoTopicShape, meetsRecallLengthFloor } from './lib/prompt-admission.mjs';
 import { formatTaskImperative } from './lib/task-imperative.mjs';
 import { gcOldMetricShards, recordMetric } from './lib/metrics.mjs';
 import { detectMemOverride } from './lib/mem-override.mjs';
@@ -3326,6 +3327,17 @@ async function injectSemanticMemory(db, { project, promptText, ccSessionId }) {
         /* file may not exist — that's fine */
       }
 
+      // Issue #39: a prompt with no topic by construction (continue / 继续 / ok / a slash
+      // command / git push / "why did you stop") searches nothing on this face — the shape
+      // rules path A's shouldSkip has applied since v2.43, from the one shared definition.
+      // HERE and not earlier: both marker reads above must still run, because
+      // touchKeyContextMarker's stamp is what keeps the Key Context exclude-set alive
+      // ("24h with no prompt in this session"), and a shape prompt is still a prompt. Every
+      // leg below is query-conditioned (imperative pick, meter arm B, both arms, the meter
+      // row), so one return covers all of them. The handoff injection, which ANSWERS
+      // continuation prompts, ran before this function and is untouched.
+      if (isNoTopicShape(promptText)) return;
+
       // Phase-2 task-imperative (EXPERIMENTAL, default OFF — CLAUDE_MEM_TASK_IMPERATIVE):
       // the single highest-value lesson relevant to THIS prompt, delivered at the prompt
       // position under an imperative template. Excluded from the <memory-context> list so it
@@ -3419,7 +3431,11 @@ async function injectSemanticMemory(db, { project, promptText, ccSessionId }) {
         // let it call the uncapped sanitizeFtsQuery. Measured here: a 250KB CJK prompt
         // (path B's stdin cap is 256KB) costs 356ms uncapped against 5.5ms capped, all of
         // it synchronous, before the model sees the turn.
-        const events = searchInjectableEvents(db, { ftsQuery: upsFtsQuery(promptText), project });
+        // The observation arm's own length floor, shared rather than copied: this leg had
+        // none, so a prompt of `1` reached the events search (issue #39).
+        const events = meetsRecallLengthFloor(promptText)
+          ? searchInjectableEvents(db, { ftsQuery: upsFtsQuery(promptText), project })
+          : [];
         if (events.length > 0) {
           const elines = ['<memory-context relevance="events">'];
           for (const e of events) elines.push(`- ${renderInjectableEvent(e)}`);

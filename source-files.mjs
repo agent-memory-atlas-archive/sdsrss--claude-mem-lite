@@ -228,6 +228,9 @@ export const SOURCE_FILES = [
   // Shared UserPromptSubmit query caps — imported by BOTH hooks that event fires
   // (scripts/user-prompt-search.js and hook.mjs user-prompt via hook-memory.mjs).
   'lib/ups-query.mjs',
+  // Shared UserPromptSubmit admission: no-topic shapes (path A's shouldSkip + path B) and
+  // path B's length floor (hook-memory.mjs + hook.mjs events arm). Issue #39.
+  'lib/prompt-admission.mjs',
   // P2-12 twin cores: get/browse shared data collection for the CLI/MCP pairs
   // (update lives in observation-write, delete-preview in delete-core).
   'lib/get-core.mjs',

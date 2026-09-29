@@ -3194,6 +3194,7 @@ Commands:
     --force             Save even if it looks like a near-duplicate of something
                         saved in the last 5 minutes (that guard is on by default)
     --closes-deferred 1,D#42  Close deferred items in same transaction
+    --supersedes 12,E#34 Retire memories this save corrects (E#<n> = an event)
 
   defer <action>        First-class deferred work (v2.70+)
     add "<title>"       Mark deferred work for next session (≤200 chars)

@@ -51,7 +51,8 @@ PreToolUse hooks already run \`mem_recall\` for past lessons before Read/Edit/Wr
 | When | Call |
 |------|------|
 | Before Edit/Write | hook already recalled; if an injected \`#NN\` lesson changed what you did, add the bare tag \`(#NN)\` once at the end of the sentence describing that change (citing = adopting; uncited lessons decay; skip ones that did not apply). No other mention of memory ids, saves or the memory store in replies to the user |
-| After fixing a non-trivial bug | \`mem_save(type="bugfix", lesson_learned="<root cause + fix>", importance=2)\` |
+| A recalled memory drives an answer or a design choice | check its claim in the code or \`git log\` first: \`#NN\` rows are saved notes, \`E#NN\` rows are automatic summaries of past sessions and can be wrong, and both describe the code as it was. If the code disagrees, trust the code and replace the note: \`mem_save(..., supersedes=[NN])\`, or \`supersedes=["E#NN"]\` for an event |
+| After fixing a non-trivial bug | \`mem_save(type="bugfix", lesson_learned="<root cause + fix, only what this change's diff shows>", importance=2)\` |
 | After a non-obvious architecture decision | \`mem_save(type="decision", lesson_learned="<constraint + tradeoff>")\` |
 | Deferring to a future session | \`mem_defer({title, priority:1|2|3, detail})\`; when fixed, add \`closes_deferred=[N]\` to \`mem_save\` |
 | Looking up past work / history | \`mem_search "keywords"\` · \`mem_recent\` · \`mem_timeline\` |
@@ -96,6 +97,16 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
   反复注入却从未被引用的，后台维护会把它的 importance 降到 2（无 lesson 的降到 1）。
   写成 \`#NN n/a\` 的驳回不算采纳：排序上与未引用相同，同样下沉——所以不必写。
   引用是给系统的反馈，不是合规仪式——注入池据此自调。
+
+## 记忆是旧笔记，不是现在的代码
+
+- \`E#NN\` 是后台根据会话自动写的摘要，可能写错：2026-09 的沙箱实测里 43 条中有 6 条事实错误、13 条部分错误。
+  \`#NN\` 是 agent 主动保存的笔记，更可靠，但也可能说得超出当时那次改动的实际范围。两者描述的都是保存那一刻的代码。
+- 用一条记忆回答"之前做了什么、为什么"，或据此做设计决定之前，先在代码或 \`git log -S\` / \`git show\` 里核对它的具体说法。
+- 代码与记忆矛盾时，以代码为准，回复里按代码说；然后用
+  \`mem_save(type=<原类型>, title=..., lesson_learned="<按代码更正后的说法>", supersedes=[NN])\`
+  替换那条记忆（事件写 \`supersedes=["E#NN"]\`），被替换的记录不再被召回。只更正你在代码里亲眼核实过的那一点；拿不准就不写。
+- 保存教训时只写这次 diff 能证明的内容：修了什么、为什么这样修；之后才做的或打算做的，不写进去。
 
 ## 何时主动调用 MCP 工具
 
@@ -174,7 +185,7 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 
 | 命令 | 签名（含硬约束） |
 |------|------------------|
-| 存观测 | \`${CLI} save "<text>" --type bugfix\\|decision --lesson "<≤500 字符>" [--importance 1-3] [--closes-deferred N]\` — \`<text>\` **必填定位参数**；\`--lesson\` 超 500 直接 fail |
+| 存观测 | \`${CLI} save "<text>" --type bugfix\\|decision --lesson "<≤500 字符>" [--importance 1-3] [--closes-deferred N] [--supersedes 12,E#34]\` — \`<text>\` **必填定位参数**；\`--lesson\` 超 500 直接 fail；\`--supersedes\` 替换代码已推翻的旧记忆 |
 | 推迟工作 | \`${CLI} defer add "<title ≤200>" [--priority 1\\|2\\|3] [--detail "<约束+为何推迟>"]\` — 标题 >200 挪到 \`--detail\` |
 | 改某条 | \`${CLI} update <id> [--lesson "<≤500>"] [--title T] [--type T] [--importance 1-3] [--narrative T] [--concepts "a b c"]\` |
 | 事件日志 | \`${CLI} activity save --type <bugfix\\|lesson\\|bug\\|discovery\\|refactor\\|feature\\|observation\\|decision> "<title>" [--body T] [--files f1,f2]\` |

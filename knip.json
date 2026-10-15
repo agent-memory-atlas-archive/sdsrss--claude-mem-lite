@@ -22,6 +22,7 @@
     "benchmark/deep-search-holdout.mjs",
     "benchmark/hook-latency.mjs",
     "benchmark/haiku-model-ab.mjs",
+    "benchmark/lesson-blind-read.mjs",
     "scripts/*.mjs",
     "scripts/*.js",
     "tests/**/*.test.mjs"

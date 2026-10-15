@@ -128,8 +128,7 @@ import {
 import { writePlainHookText, resetPlainHookText, idsShownWhole } from './lib/hook-text-cap.mjs';
 import { shouldRecallOnFailure } from './lib/tool-refusal.mjs';
 import {
-  entryInputTags,
-  extractDiagnosis,
+  workerEntryFields,
   filterSummaryInput,
   episodeInputFilterEnabled,
 } from './lib/episode-input-filter.mjs';
@@ -781,28 +780,16 @@ async function handlePostToolUse() {
   // Tier 1 B: Detect significant Bash commands
   const bashSig = tool_name === 'Bash' ? detectBashSignificance(toolInput, resp) : null;
 
-  // D#69: tags and diagnosis lines need the FULL command and output, which the entry
-  // does not keep, so they are computed here once. The output is windowed head + tail:
-  // a runner prints its failures at the END, and a multi-megabyte stdout should not be
-  // regex-scanned on every PostToolUse.
-  const respWindow = resp.length > 65536 ? resp.slice(0, 32768) + '\n' + resp.slice(-32768) : resp;
-
-  // `diagOut` = the diagnosis lines read from tool OUTPUT: a lesson quoting one stays
-  // under every injection floor (D#100(3)). Always present on a Bash entry, [] included, so
-  // the worker can tell a new entry with no output lines from one buffered before the field.
-  const diagnosis = extractDiagnosis(tool_name, toolInput, respWindow, {
-    isError: bashSig?.isError || false,
-    writesFiles: tool_name === 'Bash' && bashWrites.length > 0,
-    scrub: scrubSecrets,
-  });
-
-  // Build episode entry
+  // Build episode entry. The worker fields (input tags, DIAGNOSIS lines, Bash's diagOut)
+  // need the full command and output, which the entry does not keep (D#69).
   const entry = {
     tool: tool_name,
     desc: scrubSecrets(makeEntryDesc(tool_name, toolInput, resp, bashSig)),
-    inputTags: entryInputTags(tool_name, toolInput, respWindow),
-    diag: diagnosis.lines,
-    ...(tool_name === 'Bash' ? { diagOut: diagnosis.output } : {}),
+    ...workerEntryFields(tool_name, toolInput, resp, {
+      isError: bashSig?.isError || false,
+      writesFiles: tool_name === 'Bash' && bashWrites.length > 0,
+      scrub: scrubSecrets,
+    }),
     files,
     ...(tool_name === 'Bash' && bashWrites.length ? { bashWrites } : {}),
     ts: Date.now(),

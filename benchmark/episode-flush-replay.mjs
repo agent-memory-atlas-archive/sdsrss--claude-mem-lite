@@ -66,8 +66,7 @@ import { EPISODE_BUFFER_SIZE, EPISODE_TIME_GAP_MS } from '../hook-shared.mjs';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
 import { scrubSecrets } from '../secret-scrub.mjs';
 import {
-  entryInputTags,
-  extractDiagnosis,
+  workerEntryFields,
   filterSummaryInput,
   episodeInputFilterEnabled,
 } from '../lib/episode-input-filter.mjs';
@@ -190,24 +189,16 @@ function eventsFromTranscript(path) {
 }
 
 /**
- * The entry fields hook.mjs handlePostToolUse computes for the llm-episode worker (the
- * prompt's DIAGNOSIS block and the input filter's tags), with the same calls on the same
- * windowed output. A twin of those lines, kept next to them in shape on purpose: the
- * caller of this replay is a model A/B, which must see the prompt production builds.
+ * The entry fields hook.mjs handlePostToolUse computes for the llm-episode worker, through
+ * the same function with the same options: the caller of this replay is a model A/B,
+ * which must see the prompt production builds. (It was a copy of hook.mjs's lines, D#326.)
  */
 function workerFields(ev, bashSig, bashWrites) {
-  const resp = ev.response;
-  const respWindow = resp.length > 65536 ? resp.slice(0, 32768) + '\n' + resp.slice(-32768) : resp;
-  const diagnosis = extractDiagnosis(ev.tool, ev.input || {}, respWindow, {
+  return workerEntryFields(ev.tool, ev.input || {}, ev.response, {
     isError: bashSig?.isError || false,
     writesFiles: ev.tool === 'Bash' && bashWrites.length > 0,
     scrub: scrubSecrets,
   });
-  return {
-    inputTags: entryInputTags(ev.tool, ev.input || {}, respWindow),
-    diag: diagnosis.lines,
-    ...(ev.tool === 'Bash' ? { diagOut: diagnosis.output } : {}),
-  };
 }
 
 /** Every event in the corpus, bucketed by the project name the hooks would compute. */

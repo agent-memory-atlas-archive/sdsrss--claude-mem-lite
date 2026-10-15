@@ -271,9 +271,9 @@ export const REWRITE_SYSTEM =
 
 /**
  * The rewrite's output as a structured-output schema. Sent only to models that get the
- * strict body (haiku-client's STRICT_BODY_MODELS): with thinking off, Claude Haiku 5.5's
- * answer gave fewer than two variants on 7 of 72 replays (the ones printed were prose
- * questions about a bare one-word query, "React"), and on 0 of 72 with this schema
+ * strict body (haiku-client's STRICT_BODY_MODELS / _SLUGS): with thinking off, Claude
+ * Haiku 5.5's answer gave fewer than two variants on 7 of 72 replays (the ones printed were
+ * prose questions about a bare one-word query, "React"), and on 0 of 72 with this schema
  * (2026-10-15, docs/audits/20261015-v6.26.0-replays.md).
  */
 export const REWRITE_JSON_SCHEMA = {

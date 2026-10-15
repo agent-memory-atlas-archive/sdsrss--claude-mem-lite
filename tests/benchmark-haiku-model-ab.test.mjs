@@ -105,7 +105,11 @@ describe('enterArm', () => {
   // equal under toEqual, and on process.env that assignment stores the string "undefined".
   // The slug arm starts WITHOUT CLAUDE_CODE_PATH, so only the arm itself can set the block.
   const base = () => ({ OPENROUTER_API_KEY: 'sk-or', OTHER: 'x' });
-  const withCli = () => ({ ...base(), CLAUDE_CODE_PATH: '/usr/bin/claude' });
+  const withCli = () => ({
+    ...base(),
+    CLAUDE_CODE_PATH: '/usr/bin/claude',
+    OPENROUTER_MODEL: 'anthropic/x',
+  });
   it('a slug arm names the slug and keeps the CLI fallback blocked, then restores', () => {
     const env = base();
     const reset = vi.fn();
@@ -118,7 +122,7 @@ describe('enterArm', () => {
     expect(env).toStrictEqual(base());
     expect(reset).toHaveBeenCalledTimes(2);
   });
-  it('the cli arm drops the OpenRouter key and CLAUDE_CODE_PATH, then puts both back', () => {
+  it('the cli arm drops the OpenRouter key, model and CLAUDE_CODE_PATH, then puts them back', () => {
     const env = withCli();
     const restore = enterArm(CLI_ARM, env);
     expect(env.OPENROUTER_API_KEY).toBeUndefined();

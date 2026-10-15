@@ -13,7 +13,12 @@ vi.mock('../haiku-client.mjs', () => ({
 }));
 
 import { callModelJSONAsync } from '../haiku-client.mjs';
-import { deepSearch, _resetAutoDeepState, AUTO_DEEP_TIMEOUT_MS } from '../deep-search.mjs';
+import {
+  deepSearch,
+  _resetAutoDeepState,
+  AUTO_DEEP_TIMEOUT_MS,
+  REWRITE_JSON_SCHEMA,
+} from '../deep-search.mjs';
 
 // Trivial search: each variant returns one row keyed by the query text, so
 // rrfFuseN has lists to fuse and deepSearch never touches a real db.
@@ -33,7 +38,7 @@ describe('deepSearch auto path — non-blocking dispatch + fail-fast + throttle 
     expect(callModelJSONAsync).toHaveBeenCalledWith(
       expect.objectContaining({ user: 'orchestration' }),
       'haiku',
-      { timeout: AUTO_DEEP_TIMEOUT_MS, maxTokens: 400 },
+      { timeout: AUTO_DEEP_TIMEOUT_MS, maxTokens: 400, jsonSchema: REWRITE_JSON_SCHEMA },
     );
     expect(variants[0]).toBe('orchestration'); // original always first
     expect(variants.length).toBeGreaterThan(1); // rewrite applied
@@ -70,7 +75,34 @@ describe('deepSearch auto path — non-blocking dispatch + fail-fast + throttle 
     expect(callModelJSONAsync).toHaveBeenCalledWith(
       expect.objectContaining({ user: 'explicit q' }),
       'haiku',
-      { timeout: 12000, maxTokens: 400 },
+      { timeout: 12000, maxTokens: 400, jsonSchema: REWRITE_JSON_SCHEMA },
     );
+  });
+});
+
+// The schema is what keeps Claude Haiku 5.5 from answering a one-word query ("React") with a
+// prose question (7/72 replays without it, 0/72 with it, 2026-10-15). Structured outputs
+// reject an object that does not set additionalProperties: false, and a 400 on every rewrite
+// would fall to the CLI unnoticed — so the shape is pinned here.
+describe('REWRITE_JSON_SCHEMA', () => {
+  const objects = (node, out = []) => {
+    if (node && typeof node === 'object') {
+      if (node.type === 'object') out.push(node);
+      for (const v of Object.values(node)) objects(v, out);
+    }
+    return out;
+  };
+  it('describes {variants: string[]}, the shape assembleVariants reads', () => {
+    expect(REWRITE_JSON_SCHEMA.name).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(REWRITE_JSON_SCHEMA.schema.required).toEqual(['variants']);
+    expect(REWRITE_JSON_SCHEMA.schema.properties.variants).toEqual({
+      type: 'array',
+      items: { type: 'string' },
+    });
+  });
+  it('sets additionalProperties: false on every object', () => {
+    const objs = objects(REWRITE_JSON_SCHEMA.schema);
+    expect(objs.length).toBeGreaterThan(0);
+    for (const o of objs) expect(o.additionalProperties).toBe(false);
   });
 });

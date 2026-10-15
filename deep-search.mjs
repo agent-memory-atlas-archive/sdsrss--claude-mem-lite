@@ -270,6 +270,22 @@ export const REWRITE_SYSTEM =
   INJECTION_GUARD;
 
 /**
+ * The rewrite's output as a structured-output schema. Sent only to models that get the
+ * strict body (haiku-client's STRICT_BODY_MODELS): with thinking off, Claude Haiku 5.5
+ * answered a bare one-word query ("React") with a prose question on 7 of 72 replays, and
+ * on 0 of 72 with this schema (2026-10-15).
+ */
+export const REWRITE_JSON_SCHEMA = {
+  name: 'rewrite_variants',
+  schema: {
+    type: 'object',
+    properties: { variants: { type: 'array', items: { type: 'string' } } },
+    required: ['variants'],
+    additionalProperties: false,
+  },
+};
+
+/**
  * Build the split-form rewrite prompt. The constant instructions live in the
  * system slot; the untrusted query goes verbatim into the user/data slot so an
  * injection inside it can never be read as an instruction.
@@ -372,7 +388,7 @@ export function makeThrottled(llm, { intervalMs = AUTO_DEEP_THROTTLE_MS } = {}) 
 // never load the LLM client.
 async function callRewriteLLM(prompt, { timeout }) {
   const { callModelJSONAsync } = await import('./haiku-client.mjs');
-  return callModelJSONAsync(prompt, 'haiku', { timeout, maxTokens: 400 });
+  return callModelJSONAsync(prompt, 'haiku', { timeout, maxTokens: 400, jsonSchema: REWRITE_JSON_SCHEMA });
 }
 
 // Default (explicit deep=true) provider: patient timeout, no throttle/cache.

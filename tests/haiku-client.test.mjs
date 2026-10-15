@@ -53,6 +53,7 @@ import {
   callHaikuJSON,
   callHaikuJSONAsync,
   callLLMWithModel,
+  callLLMWithModelAsync,
   callModelJSON,
   callModelCLIAsync,
   callModelJSONAsync,
@@ -1774,6 +1775,117 @@ describe('haiku-client.mjs', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       for (const call of fetchMock.mock.calls) expect(JSON.parse(call[1].body).reasoning).toBeUndefined();
+    });
+  });
+
+  // A caller's JSON schema becomes a structured output only for the models that get the
+  // strict body (Claude Haiku 5.5); every other model's request stays byte-for-byte as it was.
+  describe('structured output for strict-body models', () => {
+    const SCHEMA = {
+      name: 'probe',
+      schema: {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        required: ['a'],
+        additionalProperties: false,
+      },
+    };
+    const okAPI = () => ({
+      ok: true,
+      json: async () => ({ content: [{ type: 'text', text: '{"a":"x"}' }] }),
+    });
+    const okOR = () => ({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '{"a":"x"}' } }] }),
+    });
+
+    it('direct API: claude-haiku-5-5 gets output_config.format', async () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-5-5');
+      _resetMode();
+      const fetchMock = vi.fn().mockResolvedValue(okAPI());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.output_config).toEqual({ format: { type: 'json_schema', schema: SCHEMA.schema } });
+    });
+
+    it('direct API: another model is sent no schema', async () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      _resetMode();
+      const fetchMock = vi.fn().mockResolvedValue(okAPI());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).not.toBe('claude-haiku-5-5');
+      expect(body.output_config).toBeUndefined();
+    });
+
+    it('OpenRouter: the 5.5 slug gets response_format json_schema, strict', async () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-key');
+      vi.stubEnv('OPENROUTER_MODEL', 'anthropic/claude-haiku-5.5');
+      _resetMode();
+      const fetchMock = vi.fn().mockResolvedValue(okOR());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.response_format).toEqual({
+        type: 'json_schema',
+        json_schema: { name: 'probe', strict: true, schema: SCHEMA.schema },
+      });
+    });
+
+    it('OpenRouter: another slug is sent no response_format', async () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-key');
+      vi.stubEnv('OPENROUTER_MODEL', 'qwen/qwen-2.5-72b-instruct');
+      _resetMode();
+      const fetchMock = vi.fn().mockResolvedValue(okOR());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).response_format).toBeUndefined();
+    });
+
+    // One case per dispatcher and keyed leg: a dispatcher that drops the option on either leg
+    // sends no schema there, and the model answers unconstrained with nothing to show for it.
+    const DISPATCHERS = [
+      ['callHaiku', (o) => callHaiku('p', o)],
+      ['callHaikuJSON', (o) => callHaikuJSON('p', o)],
+      ['callHaikuJSONAsync', (o) => callHaikuJSONAsync('p', o)],
+      ['callLLMWithModel', (o) => callLLMWithModel('p', 'haiku', o)],
+      ['callLLMWithModelAsync', (o) => callLLMWithModelAsync('p', 'haiku', o)],
+      ['callModelJSON', (o) => callModelJSON('p', 'haiku', o)],
+      ['callModelJSONAsync', (o) => callModelJSONAsync('p', 'haiku', o)],
+    ];
+    it.each(DISPATCHERS)('%s forwards jsonSchema on OpenRouter', async (_name, run) => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-key');
+      vi.stubEnv('OPENROUTER_MODEL', 'anthropic/claude-haiku-5.5');
+      _resetMode();
+      const fetchMock = vi.fn().mockResolvedValue(okOR());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await run({ jsonSchema: SCHEMA });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).response_format?.json_schema?.name).toBe('probe');
+    });
+    it.each(DISPATCHERS)('%s forwards jsonSchema on the direct API', async (_name, run) => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-5-5');
+      _resetMode();
+      const fetchMock = vi.fn().mockResolvedValue(okAPI());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await run({ jsonSchema: SCHEMA });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).output_config?.format?.schema).toEqual(
+        SCHEMA.schema,
+      );
     });
   });
 

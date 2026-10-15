@@ -60,14 +60,16 @@ const MODEL_MAP = {
   sonnet: 'claude-sonnet-4-5-20250929',
 };
 
-// Claude Haiku 5.5 answers any non-default `temperature` with a 400 and thinks unless told
-// not to, so a reply can open with a thinking block, and thinking spends the max_tokens these
-// short fixed-schema extractions are sized for. Every leg runs it with thinking off: the CLI
-// sets MAX_THINKING_TOKENS=0, OpenRouter gets `reasoning: {enabled: false}`
-// (OPENROUTER_REASONING_OFF), and the direct leg sends no sampling field and thinking
-// disabled. Keyed by the ID actually sent, so an override naming another model keeps the
-// old body.
-const NO_SAMPLING_THINKING_OFF = new Set(['claude-haiku-5-5']);
+// Models that get the STRICT body. Claude Haiku 5.5 answers any non-default `temperature`
+// with a 400 and thinks unless told not to, so a reply can open with a thinking block, and
+// thinking spends the max_tokens these short fixed-schema extractions are sized for. Every
+// leg runs it with thinking off: the CLI sets MAX_THINKING_TOKENS=0, OpenRouter gets
+// `reasoning: {enabled: false}` (STRICT_BODY_SLUGS), and the direct leg sends no sampling
+// field and thinking disabled. With thinking off it can answer a bare one-word query with a
+// prose question instead of JSON, so a caller's `jsonSchema` becomes a structured output on
+// these models (rewrite replays 2026-10-15: 7/72 prose without it, 0/72 with it). Keyed by
+// the ID actually sent, so an override naming another model keeps the old body.
+const STRICT_BODY_MODELS = new Set(['claude-haiku-5-5']);
 
 // Claude Code's tier-alias override vars, honored on the direct-API leg too:
 // gateway deployments route on the DEPLOYMENT name (Azure Foundry rejects the
@@ -153,12 +155,11 @@ const OPENROUTER_MODEL_MAP = {
   sonnet: 'anthropic/claude-sonnet-4.5',
 };
 
-// Slugs that think unless told not to. Measured 2026-10-15 on rerank prompts (300-token
-// budget): Claude Haiku 5.5 spent 259-275 tokens thinking and the JSON came back cut off
-// (finish_reason "length") on 8 of 18 calls, 0 of 18 with reasoning off. A one-line
-// extraction did not think at all, so a single easy probe reads this as fine. Keyed by the
-// slug actually sent, like NO_SAMPLING_THINKING_OFF on the direct leg.
-const OPENROUTER_REASONING_OFF = new Set(['anthropic/claude-haiku-5.5']);
+// STRICT_BODY_MODELS on OpenRouter's slug namespace. Measured 2026-10-15 on rerank prompts
+// (300-token budget): Claude Haiku 5.5 spent 259-275 tokens thinking and the JSON came back
+// cut off (finish_reason "length") on 8 of 18 calls, 0 of 18 with reasoning off. A one-line
+// extraction did not think at all, so a single easy probe reads this as fine.
+const STRICT_BODY_SLUGS = new Set(['anthropic/claude-haiku-5.5']);
 
 /**
  * Resolve the OpenRouter model slug for a given tier.
@@ -261,11 +262,13 @@ export function flattenForCLI(input) {
  * @param {object} [opts] Options
  * @param {number} [opts.timeout=10000] Timeout in milliseconds
  * @param {number} [opts.maxTokens=500] Max tokens in response
+ * @param {{name: string, schema: object}|null} [opts.jsonSchema] structured output for the
+ *   models that get the strict body (STRICT_BODY_MODELS / _SLUGS); ignored elsewhere and on the CLI
  * @returns {Promise<{text: string}|null>} Response or null on failure
  */
 export async function callHaiku(
   prompt,
-  { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+  { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE, jsonSchema = null } = {},
 ) {
   if (!prompt) return null;
 
@@ -294,8 +297,13 @@ export async function callHaiku(
     // the difference between 1.4s and 13.5s.
     primary =
       mode === 'api'
-        ? await callModelAPI(prompt, resolveModel().cli, { timeout, maxTokens, temperature })
-        : await callOpenRouterAPI(prompt, resolveModel().cli, { timeout, maxTokens, temperature });
+        ? await callModelAPI(prompt, resolveModel().cli, { timeout, maxTokens, temperature, jsonSchema })
+        : await callOpenRouterAPI(prompt, resolveModel().cli, {
+            timeout,
+            maxTokens,
+            temperature,
+            jsonSchema,
+          });
   } catch (e) {
     debugCatch(e, `callHaiku:${mode}`);
   }
@@ -347,9 +355,9 @@ export async function callHaikuJSON(prompt, opts) {
  */
 export async function callHaikuJSONAsync(
   prompt,
-  { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+  { timeout = 10000, maxTokens = 500, temperature = DEFAULT_LLM_TEMPERATURE, jsonSchema = null } = {},
 ) {
-  return callModelJSONAsync(prompt, resolveModel().cli, { timeout, maxTokens, temperature });
+  return callModelJSONAsync(prompt, resolveModel().cli, { timeout, maxTokens, temperature, jsonSchema });
 }
 
 // ─── Model-Selectable API ────────────────────────────────────────────────────
@@ -364,12 +372,14 @@ export async function callHaikuJSONAsync(
  * @param {object} [opts] Options
  * @param {number} [opts.timeout=15000] Timeout in milliseconds
  * @param {number} [opts.maxTokens=1000] Max tokens in response
+ * @param {{name: string, schema: object}|null} [opts.jsonSchema] structured output for the
+ *   models that get the strict body (STRICT_BODY_MODELS / _SLUGS); ignored elsewhere and on the CLI
  * @returns {Promise<{text: string}|null>} Response or null on failure
  */
 export async function callLLMWithModel(
   prompt,
   model = 'haiku',
-  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE, jsonSchema = null } = {},
 ) {
   if (!prompt) return null;
   const resolvedModel = MODEL_MAP[model] ? model : 'haiku';
@@ -391,8 +401,8 @@ export async function callLLMWithModel(
   try {
     primary =
       mode === 'api'
-        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
-        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
+        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature, jsonSchema })
+        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature, jsonSchema });
   } catch (e) {
     debugCatch(e, `callLLMWithModel:${mode}:${resolvedModel}`);
   }
@@ -426,7 +436,7 @@ export async function callLLMWithModel(
 export async function callLLMWithModelAsync(
   prompt,
   model = 'haiku',
-  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE, jsonSchema = null } = {},
 ) {
   if (!prompt) return null;
   const resolvedModel = MODEL_MAP[model] ? model : 'haiku';
@@ -439,8 +449,8 @@ export async function callLLMWithModelAsync(
   try {
     primary =
       mode === 'api'
-        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
-        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
+        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature, jsonSchema })
+        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature, jsonSchema });
   } catch (e) {
     debugCatch(e, `callLLMWithModelAsync:${mode}:${resolvedModel}`);
   }
@@ -482,7 +492,7 @@ export async function callModelJSON(prompt, model = 'haiku', opts) {
 export async function callModelJSONAsync(
   prompt,
   model = 'haiku',
-  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE } = {},
+  { timeout = 15000, maxTokens = 1000, temperature = DEFAULT_LLM_TEMPERATURE, jsonSchema = null } = {},
 ) {
   if (!prompt) return null;
   const resolvedModel = MODEL_MAP[model] ? model : 'haiku';
@@ -499,8 +509,8 @@ export async function callModelJSONAsync(
   try {
     primary =
       mode === 'api'
-        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature })
-        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature });
+        ? await callModelAPI(prompt, resolvedModel, { timeout, maxTokens, temperature, jsonSchema })
+        : await callOpenRouterAPI(prompt, resolvedModel, { timeout, maxTokens, temperature, jsonSchema });
   } catch (e) {
     debugCatch(e, `callModelJSONAsync:${mode}:${resolvedModel}`);
   }
@@ -520,7 +530,11 @@ export function _resetTemperatureCompat() {
   _temperatureDeprecated.clear();
 }
 
-async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = DEFAULT_LLM_TEMPERATURE }) {
+async function callModelAPI(
+  prompt,
+  model,
+  { timeout, maxTokens, temperature = DEFAULT_LLM_TEMPERATURE, jsonSchema = null },
+) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
@@ -555,8 +569,10 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     // "`temperature` is deprecated for this model."). Keep sending it until a
     // model refuses, then drop it for that model only - the retry at the bottom
     // pays for itself once. A model known to refuse it never gets it.
-    if (NO_SAMPLING_THINKING_OFF.has(modelId)) body.thinking = { type: 'disabled' };
-    else if (!_temperatureDeprecated.has(modelId)) body.temperature = temperature;
+    if (STRICT_BODY_MODELS.has(modelId)) {
+      body.thinking = { type: 'disabled' };
+      if (jsonSchema) body.output_config = { format: { type: 'json_schema', schema: jsonSchema.schema } };
+    } else if (!_temperatureDeprecated.has(modelId)) body.temperature = temperature;
     // System slot is constant per call type (instructions, schema, type taxonomy)
     // — mark it cache_control:ephemeral so repeated calls within the 5-min cache
     // window pay the cached-input rate (~0.10× base). Sub-1024-token systems still
@@ -1043,7 +1059,7 @@ export async function callModelCLIAsync(prompt, model, { timeout }) {
 async function callOpenRouterAPI(
   prompt,
   tier,
-  { timeout, maxTokens, temperature = DEFAULT_LLM_TEMPERATURE },
+  { timeout, maxTokens, temperature = DEFAULT_LLM_TEMPERATURE, jsonSchema = null },
 ) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
@@ -1066,7 +1082,15 @@ async function callOpenRouterAPI(
       'X-Title': 'claude-mem-lite',
     };
     const payload = { model, max_tokens: maxTokens, temperature, messages };
-    if (OPENROUTER_REASONING_OFF.has(model)) payload.reasoning = { enabled: false };
+    if (STRICT_BODY_SLUGS.has(model)) {
+      payload.reasoning = { enabled: false };
+      if (jsonSchema) {
+        payload.response_format = {
+          type: 'json_schema',
+          json_schema: { name: jsonSchema.name, strict: true, schema: jsonSchema.schema },
+        };
+      }
+    }
     const reqBody = JSON.stringify(payload);
     // Native fetch ignores HTTP(S)_PROXY; when a proxy is configured, tunnel the
     // request through it — a direct fetch to openrouter.ai times out behind one.

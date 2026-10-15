@@ -680,10 +680,20 @@ async function callModelAPI(
       debugLog('WARN', `${model}-api`, `refusal (${data.stop_details?.category ?? 'no category'})`);
       return null;
     }
-    // By content, not position: a thinking block (no `text`) can come first.
+    // Every caller parses a fixed-schema JSON answer out of this text, so a reply cut off at
+    // max_tokens is a failed call too: the CLI fallback has no such cap. (D#322)
+    if (data.stop_reason === 'max_tokens') {
+      debugLog('WARN', `${model}-api`, 'reply cut off at max_tokens');
+      return null;
+    }
+    // By content, not position: a thinking block (no `text`) can come first. Every text
+    // block, joined, so an empty one cannot hide the answer after it (D#324).
     const text = Array.isArray(data.content)
-      ? data.content.find((b) => typeof b?.text === 'string')?.text
-      : undefined;
+      ? data.content
+          .filter((b) => typeof b?.text === 'string')
+          .map((b) => b.text)
+          .join('')
+      : '';
     return text ? { text } : null;
   } finally {
     clearTimeout(timer);
@@ -1119,7 +1129,27 @@ async function callOpenRouterAPI(
     }
 
     const data = await res.json();
-    const text = data.choices?.[0]?.message?.content;
+    const choice = data.choices?.[0];
+    // OpenRouter normalises finish_reason to stop / length / content_filter / tool_calls /
+    // error and passes the provider's own value as native_finish_reason. A cut-off, filtered
+    // or refused reply can still carry part of an answer; none is one. (D#322, D#323)
+    const finish = choice?.finish_reason;
+    const native = choice?.native_finish_reason;
+    if (
+      finish === 'length' ||
+      finish === 'content_filter' ||
+      finish === 'error' ||
+      native === 'refusal' ||
+      choice?.error
+    ) {
+      debugLog(
+        'WARN',
+        `${tier}-openrouter`,
+        `no answer (finish_reason ${finish}, native ${native ?? 'none'})`,
+      );
+      return null;
+    }
+    const text = choice?.message?.content;
     return text ? { text } : null;
   } finally {
     clearTimeout(timer);

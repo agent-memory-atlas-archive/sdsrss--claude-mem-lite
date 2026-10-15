@@ -44,8 +44,18 @@
 //   node benchmark/haiku-model-ab.mjs --n 24 --since 2026-10-01 --sites episode,rerank
 //   node benchmark/haiku-model-ab.mjs --arms anthropic/claude-haiku-4.5,anthropic/claude-haiku-5.5
 //   node benchmark/haiku-model-ab.mjs --json
+//   node benchmark/haiku-model-ab.mjs --sites episode --n 72 \
+//        --arms anthropic/claude-haiku-4.5,anthropic/claude-haiku-5.5,cli --dump rows.json
+//
+// THE `cli` ARM is the leg default users run: no key, `claude -p --model haiku`, whatever
+// model Claude Code's alias resolves to (the report records `claude --version`). It removes
+// OPENROUTER_API_KEY and the CLI block for its own calls only, so the shipped dispatchers
+// take their cli-mode branch. It costs subscription quota, not OpenRouter credit.
+// --dump writes the episode rows with lesson text and the prompt's user part (the evidence
+// the model saw) — the input for a blind correctness read (D#320).
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -54,6 +64,7 @@ const FIXTURES = join(HERE, 'fixtures');
 const DEFAULT_ARMS = ['anthropic/claude-haiku-4.5', 'anthropic/claude-haiku-5.5'];
 const CONTROL_SLUG = 'anthropic/claude-haiku-0-0-no-such-model';
 export const MISSING_CLI = join(HERE, '.no-such-claude-cli');
+export const CLI_ARM = 'cli';
 const CONTROL_ITEMS = 2;
 
 /** `n` items evenly spaced over `items` (deterministic; all of them when n >= length). */
@@ -90,6 +101,32 @@ export async function runSite(items, arms, call) {
     }
   }
   return out;
+}
+
+/**
+ * Point the shipped dispatchers at one arm, in `env` (process.env in a run). A slug arm keeps
+ * the OpenRouter leg with the CLI fallback blocked; the `cli` arm drops the OpenRouter key and
+ * the block, so detectMode() answers 'cli' and the real `claude -p` runs. Returns the function
+ * that puts `env` back exactly; `resetMode` (haiku-client's _resetMode) runs on both edges
+ * because detectMode() caches its answer.
+ */
+export function enterArm(arm, env, resetMode = () => {}) {
+  const keys = ['OPENROUTER_MODEL', 'OPENROUTER_API_KEY', 'CLAUDE_CODE_PATH'];
+  const saved = Object.fromEntries(keys.map((k) => [k, env[k]]));
+  if (arm === CLI_ARM) {
+    for (const k of keys) delete env[k];
+  } else {
+    env.OPENROUTER_MODEL = arm;
+    env.CLAUDE_CODE_PATH = MISSING_CLI;
+  }
+  resetMode();
+  return () => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete env[k];
+      else env[k] = saved[k];
+    }
+    resetMode();
+  };
 }
 
 /** SC1: the candidate may lose at most `slack` usable items against the baseline. */
@@ -194,13 +231,25 @@ async function main() {
     hasEnrichmentContent: hl.hasEnrichmentContent,
   };
   const withModel = async (arm, fn) => {
-    process.env.OPENROUTER_MODEL = arm;
+    const restore = enterArm(arm, process.env, hc._resetMode);
     try {
       return await fn();
     } finally {
-      delete process.env.OPENROUTER_MODEL;
+      restore();
     }
   };
+  let cliVersion = null;
+  if (arms.includes(CLI_ARM)) {
+    const restore = enterArm(CLI_ARM, process.env, hc._resetMode);
+    try {
+      cliVersion = execFileSync(hc.getClaudePath(), ['--version'], {
+        encoding: 'utf8',
+        timeout: 30000,
+      }).trim();
+    } finally {
+      restore();
+    }
+  }
 
   // ── populations ──
   const pops = {};
@@ -255,6 +304,7 @@ async function main() {
           lesson: !!lesson && !hl.isLowSignalLesson(lesson),
           grounded: !!lesson && isLessonGrounded(lesson, hl.episodeDiagnosis(sub)),
           type: p?.type,
+          lessonText: lesson,
           rawHead: v.usable ? undefined : String(raw ?? '').slice(0, 160),
         };
       }),
@@ -281,7 +331,8 @@ async function main() {
   );
   assertFallbackBlocked(hc.getClaudePath(), control);
 
-  const report = { arms, gate: 'usable(candidate) >= usable(baseline) - 1', control, sites: {} };
+  const report = { arms, cliVersion, gate: 'usable(candidate) >= usable(baseline) - 1', control, sites: {} };
+  const dumpPath = arg('--dump', null);
   for (const s of sites) {
     const res = await runSite(pops[s].items, arms, calls[s]);
     const perArm = Object.fromEntries(
@@ -305,15 +356,33 @@ async function main() {
         },
       ]),
     );
-    const verdict = gateVerdict(res.get(arms[0]), res.get(arms[arms.length - 1]));
-    report.sites[s] = { population: pops[s].total, sampled: pops[s].items.length, perArm, verdict };
+    const verdicts = arms.slice(1).map((a) => ({ arm: a, ...gateVerdict(res.get(arms[0]), res.get(a)) }));
+    report.sites[s] = { population: pops[s].total, sampled: pops[s].items.length, perArm, verdicts };
+    if (s === 'episode' && dumpPath) {
+      const items = pops.episode.items.map((sub, i) => ({
+        item: i,
+        context: hl.buildEpisodePrompt(sub).user,
+      }));
+      const rows = [...res].flatMap(([a, r]) =>
+        r.rows.map((x) => ({
+          item: x.item,
+          arm: a,
+          usable: x.usable,
+          type: x.type ?? null,
+          lesson: x.lessonText ?? null,
+          grounded: x.grounded,
+          kept: lessonKept(x, eventTypes),
+        })),
+      );
+      writeFileSync(dumpPath, JSON.stringify({ arms, cliVersion, items, rows }));
+    }
   }
   if (db) db.close();
 
   if (json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    console.log(`Haiku-tier model A/B — ${arms.join(' vs ')}`);
+    console.log(`Haiku-tier model A/B — ${arms.join(' vs ')}${cliVersion ? ` (cli: ${cliVersion})` : ''}`);
     console.log(
       `control ${CONTROL_SLUG}: ${control.usable}/${control.n} usable, ${control.errors} errors (must be 0 usable)`,
     );
@@ -328,12 +397,12 @@ async function main() {
           `  ${a.padEnd(32)} usable ${x.usable}/${x.n}  errors ${x.errors}  median ${x.medianMs}ms${extra}`,
         );
       }
-      console.log(
-        `  gate: ${r.verdict.candidate} vs ${r.verdict.baseline} → ${r.verdict.pass ? 'PASS' : 'FAIL'}`,
-      );
+      for (const v of r.verdicts) {
+        console.log(`  gate ${v.arm}: ${v.candidate} vs ${v.baseline} → ${v.pass ? 'PASS' : 'FAIL'}`);
+      }
     }
   }
-  process.exit(Object.values(report.sites).every((r) => r.verdict.pass) ? 0 : 1);
+  process.exit(Object.values(report.sites).every((r) => r.verdicts.every((v) => v.pass)) ? 0 : 1);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

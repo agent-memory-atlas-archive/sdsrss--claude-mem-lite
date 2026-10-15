@@ -1,7 +1,7 @@
 // benchmark/haiku-model-ab.mjs decides a released default (the haiku-tier model), so each
 // of its verdicts must be able to say NO: the gate, the fallback/control guard, and the
 // episode classifier that mirrors handleLLMEpisode's enrichment gate.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   pickEvenly,
   runSite,
@@ -9,6 +9,8 @@ import {
   assertFallbackBlocked,
   classifyEpisode,
   lessonKept,
+  enterArm,
+  CLI_ARM,
   MISSING_CLI,
 } from '../benchmark/haiku-model-ab.mjs';
 import { parseJsonFromLLM } from '../utils.mjs';
@@ -95,5 +97,30 @@ describe('lessonKept', () => {
   });
   it('no lesson is never kept', () => {
     expect(lessonKept({ type: 'change', lesson: false, grounded: false }, EV)).toBe(false);
+  });
+});
+
+describe('enterArm', () => {
+  const base = () => ({ OPENROUTER_API_KEY: 'sk-or', CLAUDE_CODE_PATH: MISSING_CLI, OTHER: 'x' });
+  it('a slug arm names the slug and keeps the CLI fallback blocked, then restores', () => {
+    const env = base();
+    const reset = vi.fn();
+    const restore = enterArm('anthropic/claude-haiku-5.5', env, reset);
+    expect(env).toMatchObject({
+      OPENROUTER_MODEL: 'anthropic/claude-haiku-5.5',
+      CLAUDE_CODE_PATH: MISSING_CLI,
+    });
+    restore();
+    expect(env).toEqual(base());
+    expect(reset).toHaveBeenCalledTimes(2);
+  });
+  it('the cli arm drops the OpenRouter key and the block, then puts both back', () => {
+    const env = base();
+    const restore = enterArm(CLI_ARM, env);
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_PATH).toBeUndefined();
+    expect(env.OPENROUTER_MODEL).toBeUndefined();
+    restore();
+    expect(env).toEqual(base());
   });
 });

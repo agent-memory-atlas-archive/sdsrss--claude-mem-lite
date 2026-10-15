@@ -367,6 +367,13 @@ describe('handleLLMEpisode', () => {
         { ...ONE, entries: [{ ...ONE.entries[0], isError: false }] },
         'episode-prompt-one-entry-ok.txt',
       ],
+      // No DIAGNOSIS line at all: the prompt's other branch, which tells the model the lesson
+      // must be null.
+      [
+        'one entry, no diagnosis',
+        { ...ONE, entries: [{ ...ONE.entries[0], isError: false, diag: [] }] },
+        'episode-prompt-no-diagnosis.txt',
+      ],
       ['several entries', MANY, 'episode-prompt-several-entries.txt'],
     ])('the %s prompt text is pinned', async (_label, episode, file) => {
       const { system, user } = buildEpisodePrompt(episode);

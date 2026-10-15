@@ -2052,6 +2052,23 @@ describe('haiku-client.mjs', () => {
       await expect(callHaiku('p')).resolves.toEqual({ text: 'cli answer' });
       expect(vi.mocked(debugLog).mock.calls.some((c) => /refusal \(cyber\)/.test(String(c[2])))).toBe(true);
     });
+
+    // The case above returns no content, so it reads null with or without the refusal
+    // branch. A refusal can arrive after part of an answer; that text must not pass as one.
+    it('a refusal that carries partial text is not returned as the answer', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          ok([{ type: 'text', text: '{"title":"half' }], {
+            stop_reason: 'refusal',
+            stop_details: { type: 'refusal', category: 'general_harms' },
+          }),
+        ),
+      );
+      vi.mocked(execFileSync).mockReturnValue('cli answer');
+
+      await expect(callHaiku('p')).resolves.toEqual({ text: 'cli answer' });
+    });
   });
 
   // ─── Provider failure → CLI fallback ─────────────────────────────────────

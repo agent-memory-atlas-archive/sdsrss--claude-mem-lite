@@ -338,6 +338,12 @@ describe('handleLLMEpisode', () => {
       entries: [
         { tool: 'Read', desc: 'x.mjs', files: ['/w/a/x.mjs'] },
         { tool: 'Edit', desc: 'y.mjs: swap order', files: ['/w/a/y.mjs'], diag: ['// lock before read'] },
+        {
+          tool: 'Bash',
+          desc: 'npx vitest run → 1 failed',
+          isError: true,
+          diag: ['AssertionError: expected 1'],
+        },
       ],
     };
     it.each([
@@ -348,6 +354,25 @@ describe('handleLLMEpisode', () => {
       await handleLLMEpisode();
       expect(callLLM.mock.calls[0][0]).toEqual(buildEpisodePrompt(episode));
       expect(callLLM.mock.calls[0][0].user).toContain('DIAGNOSIS (verbatim');
+    });
+
+    // The case above holds only the wiring: it compares the handler with buildEpisodePrompt
+    // itself, so `Error: yes` -> `YES` left every episode test green. The model A/B readings
+    // were taken on this exact text, so an edit to it must show up as a diff here (D#325);
+    // after a deliberate prompt change, refresh with `npx vitest run tests/hook-llm.test.mjs -u`.
+    it.each([
+      ['one entry', ONE, 'episode-prompt-one-entry.txt'],
+      [
+        'one entry, no error',
+        { ...ONE, entries: [{ ...ONE.entries[0], isError: false }] },
+        'episode-prompt-one-entry-ok.txt',
+      ],
+      ['several entries', MANY, 'episode-prompt-several-entries.txt'],
+    ])('the %s prompt text is pinned', async (_label, episode, file) => {
+      const { system, user } = buildEpisodePrompt(episode);
+      await expect(`=== system ===\n${system}\n=== user ===\n${user}\n`).toMatchFileSnapshot(
+        `./fixtures/${file}`,
+      );
     });
   });
 

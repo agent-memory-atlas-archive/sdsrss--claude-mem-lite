@@ -60,6 +60,15 @@ const MODEL_MAP = {
   sonnet: 'claude-sonnet-4-5-20250929',
 };
 
+// Claude Haiku 5.5 answers any non-default `temperature` with a 400 and thinks unless told
+// not to, so a reply can open with a thinking block, and thinking spends the max_tokens these
+// short fixed-schema extractions are sized for. Every leg runs it with thinking off: the CLI
+// sets MAX_THINKING_TOKENS=0, OpenRouter gets `reasoning: {enabled: false}`
+// (OPENROUTER_REASONING_OFF), and the direct leg sends no sampling field and thinking
+// disabled. Keyed by the ID actually sent, so an override naming another model keeps the
+// old body.
+const NO_SAMPLING_THINKING_OFF = new Set(['claude-haiku-5-5']);
+
 // Claude Code's tier-alias override vars, honored on the direct-API leg too:
 // gateway deployments route on the DEPLOYMENT name (Azure Foundry rejects the
 // Anthropic model ID when it differs), and one env set then covers both the
@@ -94,6 +103,9 @@ function apiModelId(tier, base = resolveAnthropicBaseUrl()) {
 // to 0 so the provider default (~1.0) doesn't inject wording variance that breaks
 // JSON parsing or defeats the wording-sensitive MinHash near-duplicate detector.
 // A call that genuinely needs sampling can pass opts.temperature to override.
+// The pin holds only where the model takes it: Claude Haiku 5.5 accepts no sampling
+// field (the direct leg omits it, OpenRouter drops it, the CLI never sent one), so on
+// that model the extraction runs at its default sampling.
 const DEFAULT_LLM_TEMPERATURE = 0;
 
 /**
@@ -140,6 +152,13 @@ const OPENROUTER_MODEL_MAP = {
   haiku: 'anthropic/claude-haiku-4.5',
   sonnet: 'anthropic/claude-sonnet-4.5',
 };
+
+// Slugs that think unless told not to. Measured 2026-10-15 on rerank prompts (300-token
+// budget): Claude Haiku 5.5 spent 259-275 tokens thinking and the JSON came back cut off
+// (finish_reason "length") on 8 of 18 calls, 0 of 18 with reasoning off. A one-line
+// extraction did not think at all, so a single easy probe reads this as fine. Keyed by the
+// slug actually sent, like NO_SAMPLING_THINKING_OFF on the direct leg.
+const OPENROUTER_REASONING_OFF = new Set(['anthropic/claude-haiku-5.5']);
 
 /**
  * Resolve the OpenRouter model slug for a given tier.
@@ -535,8 +554,9 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     // field outright (Azure Foundry's claude-sonnet-5 answers 400
     // "`temperature` is deprecated for this model."). Keep sending it until a
     // model refuses, then drop it for that model only - the retry at the bottom
-    // pays for itself once.
-    if (!_temperatureDeprecated.has(modelId)) body.temperature = temperature;
+    // pays for itself once. A model known to refuse it never gets it.
+    if (NO_SAMPLING_THINKING_OFF.has(modelId)) body.thinking = { type: 'disabled' };
+    else if (!_temperatureDeprecated.has(modelId)) body.temperature = temperature;
     // System slot is constant per call type (instructions, schema, type taxonomy)
     // — mark it cache_control:ephemeral so repeated calls within the 5-min cache
     // window pay the cached-input rate (~0.10× base). Sub-1024-token systems still
@@ -624,7 +644,16 @@ async function callModelAPI(prompt, model, { timeout, maxTokens, temperature = D
     }
 
     const data = await res.json();
-    const text = data.content?.[0]?.text;
+    // A safety classifier's decline is a 200 with no text. null hands it to the CLI fallback
+    // like any other failure; the category is the only trace of why.
+    if (data.stop_reason === 'refusal') {
+      debugLog('WARN', `${model}-api`, `refusal (${data.stop_details?.category ?? 'no category'})`);
+      return null;
+    }
+    // By content, not position: a thinking block (no `text`) can come first.
+    const text = Array.isArray(data.content)
+      ? data.content.find((b) => typeof b?.text === 'string')?.text
+      : undefined;
     return text ? { text } : null;
   } finally {
     clearTimeout(timer);
@@ -1036,7 +1065,9 @@ async function callOpenRouterAPI(
       // Optional OpenRouter attribution headers (ignored by the API if absent).
       'X-Title': 'claude-mem-lite',
     };
-    const reqBody = JSON.stringify({ model, max_tokens: maxTokens, temperature, messages });
+    const payload = { model, max_tokens: maxTokens, temperature, messages };
+    if (OPENROUTER_REASONING_OFF.has(model)) payload.reasoning = { enabled: false };
+    const reqBody = JSON.stringify(payload);
     // Native fetch ignores HTTP(S)_PROXY; when a proxy is configured, tunnel the
     // request through it — a direct fetch to openrouter.ai times out behind one.
     const proxy = httpConnectProxyFor(url);

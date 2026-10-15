@@ -40,6 +40,7 @@ vi.mock('../utils.mjs', () => ({
 
 import { execFileSync, spawn } from 'child_process';
 import { EventEmitter } from 'node:events';
+import { debugLog } from '../utils.mjs';
 import {
   detectMode,
   _resetMode,
@@ -1213,6 +1214,9 @@ describe('haiku-client.mjs', () => {
 
     beforeEach(() => {
       vi.stubEnv('ANTHROPIC_API_KEY', 'sk-gateway-key');
+      // The mechanism needs a model that is sent `temperature` at all; the haiku tier's
+      // Claude Haiku 5.5 never is, so these cases run on the sonnet tier.
+      vi.stubEnv('CLAUDE_MEM_MODEL', 'sonnet');
       _resetMode();
     });
 
@@ -1741,6 +1745,38 @@ describe('haiku-client.mjs', () => {
     });
   });
 
+  describe('OpenRouter reasoning off for slugs that think by default', () => {
+    const okOR = () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
+    beforeEach(() => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-key');
+      _resetMode();
+    });
+
+    it('anthropic/claude-haiku-5.5 is sent reasoning: {enabled: false}', async () => {
+      vi.stubEnv('OPENROUTER_MODEL', 'anthropic/claude-haiku-5.5');
+      const fetchMock = vi.fn().mockResolvedValue(okOR());
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('p');
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('anthropic/claude-haiku-5.5');
+      expect(body.reasoning).toEqual({ enabled: false });
+    });
+
+    it('other slugs get no reasoning field', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(okOR());
+      vi.stubGlobal('fetch', fetchMock);
+      vi.stubEnv('OPENROUTER_MODEL', 'qwen/qwen-2.5-72b-instruct');
+      await callHaiku('p');
+      vi.stubEnv('OPENROUTER_MODEL', '');
+      await callLLMWithModel('p', 'sonnet');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const call of fetchMock.mock.calls) expect(JSON.parse(call[1].body).reasoning).toBeUndefined();
+    });
+  });
+
   describe('callLLMWithModel — OpenRouter mode', () => {
     it('routes to OpenRouter with the per-call model tier slug', async () => {
       vi.stubEnv('ANTHROPIC_API_KEY', '');
@@ -1782,8 +1818,9 @@ describe('haiku-client.mjs', () => {
   // request bodies pin temperature: 0 so the provider default (~1.0) does not
   // inject wording variance that defeats dedup or destabilizes JSON parsing.
   describe('temperature (deterministic extraction)', () => {
-    it('callHaiku (Anthropic API) sends temperature: 0', async () => {
+    it('callHaiku (Anthropic API) sends temperature: 0 to a model that accepts it', async () => {
       vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      vi.stubEnv('CLAUDE_MEM_MODEL', 'sonnet');
       _resetMode();
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
@@ -1823,6 +1860,86 @@ describe('haiku-client.mjs', () => {
       await callHaiku('p');
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.temperature).toBe(0);
+    });
+  });
+
+  // ─── Claude Haiku 5.5 on the direct API ──────────────────────────────────
+  // Haiku 5.5 400s on any non-default `temperature` and thinks unless told not to, so a
+  // response can open with a thinking block. The other two legs run it with thinking off
+  // (OpenRouter returned 0 reasoning tokens; the CLI leg sets MAX_THINKING_TOKENS=0).
+  describe('Claude Haiku 5.5 on the direct API', () => {
+    const ok = (content, extra = {}) => ({ ok: true, json: async () => ({ content, ...extra }) });
+
+    // Reached through the gateway override until the built-in default moves to 5.5.
+    beforeEach(() => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-5-5');
+      _resetMode();
+    });
+
+    it('the haiku tier sends claude-haiku-5-5 with thinking disabled and no temperature', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(ok([{ type: 'text', text: 'ok' }]));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('p');
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('claude-haiku-5-5');
+      expect(body.temperature).toBeUndefined();
+      expect(body.thinking).toEqual({ type: 'disabled' });
+    });
+
+    it('the sonnet tier keeps its body: temperature 0, no thinking field', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(ok([{ type: 'text', text: 'ok' }]));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callLLMWithModel('p', 'sonnet');
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('claude-sonnet-4-5-20250929');
+      expect(body.temperature).toBe(0);
+      expect(body.thinking).toBeUndefined();
+    });
+
+    it('a gateway override naming another model keeps the old body', async () => {
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-4-5');
+      const fetchMock = vi.fn().mockResolvedValue(ok([{ type: 'text', text: 'ok' }]));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callHaiku('p');
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe('claude-haiku-4-5');
+      expect(body.temperature).toBe(0);
+      expect(body.thinking).toBeUndefined();
+    });
+
+    it('reads the text block that follows a thinking block', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          ok([
+            { type: 'thinking', thinking: '', signature: 'sig' },
+            { type: 'text', text: '{"title":"x"}' },
+          ]),
+        ),
+      );
+
+      await expect(callHaiku('p')).resolves.toEqual({ text: '{"title":"x"}' });
+      expect(execFileSync).not.toHaveBeenCalled();
+    });
+
+    it('a refusal is logged with its category and handed to the CLI fallback', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValue(
+            ok([], { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } }),
+          ),
+      );
+      vi.mocked(execFileSync).mockReturnValue('cli answer');
+
+      await expect(callHaiku('p')).resolves.toEqual({ text: 'cli answer' });
+      expect(vi.mocked(debugLog).mock.calls.some((c) => /refusal \(cyber\)/.test(String(c[2])))).toBe(true);
     });
   });
 

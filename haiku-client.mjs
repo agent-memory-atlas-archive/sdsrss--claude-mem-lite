@@ -75,9 +75,25 @@ const MODEL_MAP = {
 // field and thinking disabled. With thinking off it can answer a bare one-word query with a
 // prose question instead of JSON, so a caller's `jsonSchema` becomes a structured output on
 // these models (rewrite replays 2026-10-15: 7/72 below two variants without it, 0/72 with
-// it; docs/audits/20261015-v6.26.0-replays.md). Keyed by the ID actually sent, so an
-// override naming another model keeps the old body.
+// it; docs/audits/20261015-v6.26.0-replays.md). Keyed by the ID actually sent, read through
+// strictBodyKey, so an override naming another model keeps the old body.
 const STRICT_BODY_MODELS = new Set(['claude-haiku-5-5']);
+
+/**
+ * The model's own name inside the routing decoration around it, for the STRICT_BODY_*
+ * lookups: an OpenRouter variant suffix (`anthropic/claude-haiku-5.5:nitro`, `:floor`) and
+ * the Bedrock form a gateway may take (`anthropic.claude-haiku-5-5`, with or without a
+ * cross-region prefix such as `us.` or `global.`). Haiku 5.5 named either way was sent the
+ * old body: temperature 0, which it answers with a 400, and thinking on. A gateway
+ * deployment name says nothing about the model behind it and is not guessed at. (D#321)
+ * @param {string} id model ID or OpenRouter slug as sent
+ * @returns {string}
+ */
+function strictBodyKey(id) {
+  return String(id)
+    .replace(/:[a-z0-9-]+$/, '')
+    .replace(/^(?:[a-z]{2,6}\.)?anthropic\./, '');
+}
 
 // Claude Code's tier-alias override vars, honored on the direct-API leg too:
 // gateway deployments route on the DEPLOYMENT name (Azure Foundry rejects the
@@ -582,7 +598,7 @@ async function callModelAPI(
     // "`temperature` is deprecated for this model."). Keep sending it until a
     // model refuses, then drop it for that model only - the retry at the bottom
     // pays for itself once. A model known to refuse it never gets it.
-    if (STRICT_BODY_MODELS.has(modelId)) {
+    if (STRICT_BODY_MODELS.has(strictBodyKey(modelId))) {
       body.thinking = { type: 'disabled' };
       if (jsonSchema) body.output_config = { format: { type: 'json_schema', schema: jsonSchema.schema } };
     } else if (!_temperatureDeprecated.has(modelId)) body.temperature = temperature;
@@ -1106,7 +1122,7 @@ async function callOpenRouterAPI(
       'X-Title': 'claude-mem-lite',
     };
     const payload = { model, max_tokens: maxTokens, temperature, messages };
-    if (STRICT_BODY_SLUGS.has(model)) {
+    if (STRICT_BODY_SLUGS.has(strictBodyKey(model))) {
       payload.reasoning = { enabled: false };
       if (jsonSchema) {
         payload.response_format = {

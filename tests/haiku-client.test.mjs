@@ -1905,6 +1905,95 @@ describe('haiku-client.mjs', () => {
     });
   });
 
+  // Claude Haiku 5.5 named with routing decoration around its own ID must still get the
+  // strict body: with the old one it is sent temperature 0 (a 400 on the direct API) and
+  // thinks on budgets sized for no thinking. A deployment name is not guessed at. (D#321)
+  describe('Claude Haiku 5.5 under another name', () => {
+    const SCHEMA = { name: 'probe', schema: { type: 'object', properties: {}, additionalProperties: false } };
+
+    it.each(['anthropic/claude-haiku-5.5:nitro', 'anthropic/claude-haiku-5.5:floor'])(
+      'OpenRouter %s gets reasoning off and the schema',
+      async (slug) => {
+        vi.stubEnv('ANTHROPIC_API_KEY', '');
+        vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-key');
+        vi.stubEnv('OPENROUTER_MODEL', slug);
+        _resetMode();
+        const fetchMock = vi
+          .fn()
+          .mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: '{}' } }] }) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.model).toBe(slug);
+        expect(body.reasoning).toEqual({ enabled: false });
+        expect(body.response_format?.json_schema?.name).toBe('probe');
+      },
+    );
+
+    it.each([
+      'anthropic.claude-haiku-5-5',
+      'us.anthropic.claude-haiku-5-5',
+      'global.anthropic.claude-haiku-5-5',
+    ])('gateway model %s gets thinking disabled, no temperature, and the schema', async (id) => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', id);
+      _resetMode();
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({ content: [{ type: 'text', text: '{}' }] }) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.model).toBe(id);
+      expect(body.temperature).toBeUndefined();
+      expect(body.thinking).toEqual({ type: 'disabled' });
+      expect(body.output_config?.format?.schema).toEqual(SCHEMA.schema);
+    });
+
+    it.each(['anthropic/claude-haiku-4.5:nitro', 'anthropic/claude-haiku-5.5-preview'])(
+      'OpenRouter %s keeps the old body',
+      async (slug) => {
+        vi.stubEnv('ANTHROPIC_API_KEY', '');
+        vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-key');
+        vi.stubEnv('OPENROUTER_MODEL', slug);
+        _resetMode();
+        const fetchMock = vi
+          .fn()
+          .mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: '{}' } }] }) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.reasoning).toBeUndefined();
+        expect(body.response_format).toBeUndefined();
+      },
+    );
+
+    it.each([
+      'anthropic.claude-haiku-4-5-20251001-v1:0',
+      'my-haiku-55-deployment',
+      'xanthropic.claude-haiku-5-5',
+    ])('gateway model %s keeps the old body', async (id) => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');
+      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', id);
+      _resetMode();
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({ content: [{ type: 'text', text: '{}' }] }) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.temperature).toBe(0);
+      expect(body.thinking).toBeUndefined();
+      expect(body.output_config).toBeUndefined();
+    });
+  });
+
   describe('callLLMWithModel — OpenRouter mode', () => {
     it('routes to OpenRouter with the per-call model tier slug', async () => {
       vi.stubEnv('ANTHROPIC_API_KEY', '');

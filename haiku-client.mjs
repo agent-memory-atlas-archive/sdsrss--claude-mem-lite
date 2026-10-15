@@ -55,8 +55,13 @@ function cliSpawnCwd() {
 // ─── Model Resolution ────────────────────────────────────────────────────────
 
 // CLI name → API model ID mapping
+// haiku moved from claude-haiku-4-5-20251001 on 2026-10-15, after
+// benchmark/haiku-model-ab.mjs read usability parity on the haiku-tier sites and a blind
+// read of the kept lessons put 5.5 ahead (docs/measurement/rulers.md, "haiku-tier model
+// A/B"). It is also what `claude -p --model haiku` resolves to since Claude Code 2.1.293,
+// so all three legs now run the same model.
 const MODEL_MAP = {
-  haiku: 'claude-haiku-4-5-20251001',
+  haiku: 'claude-haiku-5-5',
   sonnet: 'claude-sonnet-4-5-20250929',
 };
 
@@ -148,10 +153,10 @@ export function resolveModel() {
 // OpenRouter uses its own slug namespace (OpenAI-compatible API). Map the
 // project's haiku/sonnet tiers to the matching anthropic/* slugs so the quality
 // tiering is preserved when routing through OpenRouter. Slugs verified against
-// openrouter.ai (2026-06): claude-haiku-4.5 / claude-sonnet-4.5 mirror the
-// native MODEL_MAP IDs above.
+// openrouter.ai: claude-sonnet-4.5 (2026-06) and claude-haiku-5.5 (2026-10-15) mirror
+// the native MODEL_MAP IDs above.
 const OPENROUTER_MODEL_MAP = {
-  haiku: 'anthropic/claude-haiku-4.5',
+  haiku: 'anthropic/claude-haiku-5.5',
   sonnet: 'anthropic/claude-sonnet-4.5',
 };
 

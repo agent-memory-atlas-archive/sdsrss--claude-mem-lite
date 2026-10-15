@@ -1113,7 +1113,7 @@ describe('haiku-client.mjs', () => {
       await callHaiku('test prompt');
 
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.model).toBe('claude-haiku-4-5-20251001');
+      expect(body.model).toBe('claude-haiku-5-5');
     });
 
     it('skips the direct API leg when the base URL is set but unusable', async () => {
@@ -1200,7 +1200,7 @@ describe('haiku-client.mjs', () => {
 
       expect(fetchMock.mock.calls[0][0]).toBe('https://api.anthropic.com/v1/messages');
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.model).toBe('claude-haiku-4-5-20251001');
+      expect(body.model).toBe('claude-haiku-5-5');
     });
   });
 
@@ -1656,12 +1656,12 @@ describe('haiku-client.mjs', () => {
 
   describe('resolveOpenRouterModel', () => {
     it('maps haiku/sonnet tiers to anthropic OpenRouter slugs by default', () => {
-      expect(resolveOpenRouterModel('haiku')).toBe('anthropic/claude-haiku-4.5');
+      expect(resolveOpenRouterModel('haiku')).toBe('anthropic/claude-haiku-5.5');
       expect(resolveOpenRouterModel('sonnet')).toBe('anthropic/claude-sonnet-4.5');
     });
 
     it('falls back to the haiku slug for an unknown tier', () => {
-      expect(resolveOpenRouterModel('bogus')).toBe('anthropic/claude-haiku-4.5');
+      expect(resolveOpenRouterModel('bogus')).toBe('anthropic/claude-haiku-5.5');
     });
 
     it('OPENROUTER_MODEL overrides every tier with the explicit slug', () => {
@@ -1672,7 +1672,7 @@ describe('haiku-client.mjs', () => {
 
     it('treats whitespace-only OPENROUTER_MODEL as unset (default slug)', () => {
       vi.stubEnv('OPENROUTER_MODEL', '   ');
-      expect(resolveOpenRouterModel('haiku')).toBe('anthropic/claude-haiku-4.5');
+      expect(resolveOpenRouterModel('haiku')).toBe('anthropic/claude-haiku-5.5');
     });
   });
 
@@ -1697,7 +1697,7 @@ describe('haiku-client.mjs', () => {
         }),
       );
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.model).toBe('anthropic/claude-haiku-4.5');
+      expect(body.model).toBe('anthropic/claude-haiku-5.5');
       expect(body.messages).toEqual([{ role: 'user', content: 'test prompt' }]);
     });
 
@@ -1818,9 +1818,9 @@ describe('haiku-client.mjs', () => {
       const fetchMock = vi.fn().mockResolvedValue(okAPI());
       vi.stubGlobal('fetch', fetchMock);
 
-      await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
+      await callModelJSONAsync('p', 'sonnet', { jsonSchema: SCHEMA });
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.model).not.toBe('claude-haiku-5-5');
+      expect(body.model).toBe('claude-sonnet-4-5-20250929');
       expect(body.output_config).toBeUndefined();
     });
 
@@ -1977,16 +1977,14 @@ describe('haiku-client.mjs', () => {
 
   // ─── Claude Haiku 5.5 on the direct API ──────────────────────────────────
   // Haiku 5.5 400s on any non-default `temperature` and thinks unless told not to, so a
-  // response can open with a thinking block. The other two legs run it with thinking off
-  // (OpenRouter returned 0 reasoning tokens; the CLI leg sets MAX_THINKING_TOKENS=0).
+  // response can open with a thinking block. Every leg runs it with thinking off (OpenRouter
+  // gets reasoning off; the CLI leg sets MAX_THINKING_TOKENS=0).
   describe('Claude Haiku 5.5 on the direct API', () => {
     const ok = (content, extra = {}) => ({ ok: true, json: async () => ({ content, ...extra }) });
 
-    // Reached through the gateway override until the built-in default moves to 5.5.
+    // The built-in haiku default, no override.
     beforeEach(() => {
       vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
-      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');
-      vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-5-5');
       _resetMode();
     });
 
@@ -2013,6 +2011,7 @@ describe('haiku-client.mjs', () => {
     });
 
     it('a gateway override naming another model keeps the old body', async () => {
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');
       vi.stubEnv('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'claude-haiku-4-5');
       const fetchMock = vi.fn().mockResolvedValue(ok([{ type: 'text', text: 'ok' }]));
       vi.stubGlobal('fetch', fetchMock);

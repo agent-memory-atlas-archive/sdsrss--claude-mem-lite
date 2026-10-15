@@ -86,6 +86,8 @@ describe('Anthropic API paths honour the proxy', () => {
 // timeout, so the temperature retry bought a second budget (a 1000ms call took
 // ~1633ms). The fetch path shared one AbortController; the tunnel must share one
 // deadline too.
+// The retry exists only for a model that is sent `temperature`: the haiku tier's Claude
+// Haiku 5.5 never is (STRICT_BODY_MODELS), so these cases run on the sonnet tier.
 describe('temperature retry shares ONE deadline over the tunnel', () => {
   beforeEach(() => {
     _resetMode();
@@ -117,7 +119,7 @@ describe('temperature retry shares ONE deadline over the tunnel', () => {
       })
       .mockImplementationOnce(async () => ({ ok: true, status: 200, json: () => REPLY }));
 
-    const out = await callModelJSON('hello', 'haiku', { timeout: 1000, maxTokens: 50 });
+    const out = await callModelJSON('hello', 'sonnet', { timeout: 1000, maxTokens: 50 });
     expect(out).toEqual({ ok: true });
 
     const first = postViaConnectProxy.mock.calls[0][2].timeout;
@@ -139,7 +141,7 @@ describe('temperature retry shares ONE deadline over the tunnel', () => {
       };
     });
 
-    const out = await callModelJSON('hello', 'haiku', { timeout: 1000, maxTokens: 50 });
+    const out = await callModelJSON('hello', 'sonnet', { timeout: 1000, maxTokens: 50 });
     expect(out).toBeNull();
     // 100ms left < RETRY_MIN_BUDGET_MS: no second POST the client would abort.
     expect(postViaConnectProxy).toHaveBeenCalledTimes(1);

@@ -81,9 +81,9 @@ describe('deepSearch auto path — non-blocking dispatch + fail-fast + throttle 
 });
 
 // The schema is what keeps Claude Haiku 5.5 from answering a one-word query ("React") with a
-// prose question (7/72 replays without it, 0/72 with it, 2026-10-15). Structured outputs
-// reject an object that does not set additionalProperties: false, and a 400 on every rewrite
-// would fall to the CLI unnoticed — so the shape is pinned here.
+// prose question (7/72 replays below two variants without it, 0/72 with it, 2026-10-15).
+// Structured outputs reject an object that does not set additionalProperties: false, and a
+// 400 on every rewrite would fall to the CLI unnoticed — so the shape is pinned here.
 describe('REWRITE_JSON_SCHEMA', () => {
   const objects = (node, out = []) => {
     if (node && typeof node === 'object') {

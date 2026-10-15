@@ -56,10 +56,12 @@ function cliSpawnCwd() {
 
 // CLI name → API model ID mapping
 // haiku moved from claude-haiku-4-5-20251001 on 2026-10-15, after
-// benchmark/haiku-model-ab.mjs read usability parity on the haiku-tier sites and a blind
-// read of the kept lessons put 5.5 ahead (docs/measurement/rulers.md, "haiku-tier model
-// A/B"). It is also what `claude -p --model haiku` resolves to since Claude Code 2.1.293,
-// so all three legs now run the same model.
+// benchmark/haiku-model-ab.mjs read usability parity on the three haiku-tier sites it
+// samples (episode, rewrite, rerank) and a blind read of the kept lessons put 5.5 ahead
+// (docs/measurement/rulers.md, "haiku-tier model A/B"). It is also what
+// `claude -p --model haiku` resolves to on the Anthropic API since Claude Code 2.1.293
+// (Bedrock, Vertex, Foundry and Claude Platform on AWS still resolve it to 4.5), so there
+// all three legs run the same model.
 const MODEL_MAP = {
   haiku: 'claude-haiku-5-5',
   sonnet: 'claude-sonnet-4-5-20250929',
@@ -72,8 +74,9 @@ const MODEL_MAP = {
 // `reasoning: {enabled: false}` (STRICT_BODY_SLUGS), and the direct leg sends no sampling
 // field and thinking disabled. With thinking off it can answer a bare one-word query with a
 // prose question instead of JSON, so a caller's `jsonSchema` becomes a structured output on
-// these models (rewrite replays 2026-10-15: 7/72 prose without it, 0/72 with it). Keyed by
-// the ID actually sent, so an override naming another model keeps the old body.
+// these models (rewrite replays 2026-10-15: 7/72 below two variants without it, 0/72 with
+// it; docs/audits/20261015-v6.26.0-replays.md). Keyed by the ID actually sent, so an
+// override naming another model keeps the old body.
 const STRICT_BODY_MODELS = new Set(['claude-haiku-5-5']);
 
 // Claude Code's tier-alias override vars, honored on the direct-API leg too:
@@ -110,9 +113,9 @@ function apiModelId(tier, base = resolveAnthropicBaseUrl()) {
 // to 0 so the provider default (~1.0) doesn't inject wording variance that breaks
 // JSON parsing or defeats the wording-sensitive MinHash near-duplicate detector.
 // A call that genuinely needs sampling can pass opts.temperature to override.
-// The pin holds only where the model takes it: Claude Haiku 5.5 accepts no sampling
-// field (the direct leg omits it, OpenRouter drops it, the CLI never sent one), so on
-// that model the extraction runs at its default sampling.
+// The pin holds only where the model takes it: Claude Haiku 5.5 accepts no temperature
+// but its default (the direct leg omits the field, OpenRouter drops it, the CLI never sent
+// one), so on that model the extraction runs at its default sampling.
 const DEFAULT_LLM_TEMPERATURE = 0;
 
 /**
@@ -160,10 +163,12 @@ const OPENROUTER_MODEL_MAP = {
   sonnet: 'anthropic/claude-sonnet-4.5',
 };
 
-// STRICT_BODY_MODELS on OpenRouter's slug namespace. Measured 2026-10-15 on rerank prompts
-// (300-token budget): Claude Haiku 5.5 spent 259-275 tokens thinking and the JSON came back
-// cut off (finish_reason "length") on 8 of 18 calls, 0 of 18 with reasoning off. A one-line
-// extraction did not think at all, so a single easy probe reads this as fine.
+// STRICT_BODY_MODELS on OpenRouter's slug namespace. Measured 2026-10-15 on six rerank
+// prompts, three of them picked because they had failed, three calls each (300-token
+// budget): the JSON came back cut off (finish_reason "length"; the two printed spent 259 and
+// 275 tokens thinking) on 8 of 18 calls, 0 of 18 with reasoning off
+// (docs/audits/20261015-v6.26.0-replays.md). A one-line extraction did not think at all, so
+// a single easy probe reads this as fine.
 const STRICT_BODY_SLUGS = new Set(['anthropic/claude-haiku-5.5']);
 
 /**
@@ -668,8 +673,9 @@ async function callModelAPI(
     }
 
     const data = await res.json();
-    // A safety classifier's decline is a 200 with no text. null hands it to the CLI fallback
-    // like any other failure; the category is the only trace of why.
+    // A safety classifier's decline is a 200 that may carry no text or part of an answer.
+    // null hands it to the CLI fallback like any other failure; the category, logged only
+    // under CLAUDE_MEM_DEBUG, is the only trace of why.
     if (data.stop_reason === 'refusal') {
       debugLog('WARN', `${model}-api`, `refusal (${data.stop_details?.category ?? 'no category'})`);
       return null;

@@ -69,10 +69,13 @@ const MODEL_MAP = {
 
 // Models that get the STRICT body. Claude Haiku 5.5 answers any non-default `temperature`
 // with a 400 and thinks unless told not to, so a reply can open with a thinking block, and
-// thinking spends the max_tokens these short fixed-schema extractions are sized for. Every
-// leg runs it with thinking off: the CLI sets MAX_THINKING_TOKENS=0, OpenRouter gets
-// `reasoning: {enabled: false}` (STRICT_BODY_SLUGS), and the direct leg sends no sampling
-// field and thinking disabled. With thinking off it can answer a bare one-word query with a
+// thinking spends the max_tokens these short fixed-schema extractions are sized for. The
+// keyed legs run it with thinking off: OpenRouter gets `reasoning: {enabled: false}`
+// (STRICT_BODY_SLUGS), and the direct leg sends no sampling field and thinking disabled.
+// The CLI leg does NOT: Claude Code 2.1.301 sends `thinking: {type: "adaptive"}` and effort
+// medium for `--model haiku` whether or not MAX_THINKING_TOKENS=0 is set (request bodies
+// captured at a stub base URL, 2026-10-15; D#334). Its max_tokens is Claude Code's own, so
+// nothing is cut off there. With thinking off it can answer a bare one-word query with a
 // prose question instead of JSON, so a caller's `jsonSchema` becomes a structured output on
 // these models (rewrite replays 2026-10-15: 7/72 below two variants without it, 0/72 with
 // it; docs/audits/20261015-v6.26.0-replays.md). Keyed by the ID actually sent, read through
@@ -783,7 +786,9 @@ function claudeArgs(modelName) {
 /**
  * The environment every headless spawn runs with. MAX_THINKING_TOKENS=0: these are
  * structured extraction calls, and the thinking the CLI enables by default was most of
- * their output tokens and latency (measured above).
+ * their output tokens and latency (measured above, 2026-09-29). Claude Code 2.1.301 no longer
+ * changes its request for Claude Haiku 5.5 on this variable: the body carries adaptive
+ * thinking either way (D#334).
  */
 function cliSpawnEnv() {
   return {

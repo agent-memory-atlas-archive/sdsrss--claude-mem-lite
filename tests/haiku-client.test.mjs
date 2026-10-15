@@ -1939,6 +1939,8 @@ describe('haiku-client.mjs', () => {
       'anthropic.claude-haiku-5-5',
       'us.anthropic.claude-haiku-5-5',
       'global.anthropic.claude-haiku-5-5',
+      // GovCloud's cross-region prefix carries a hyphen.
+      'us-gov.anthropic.claude-haiku-5-5',
     ])('gateway model %s gets thinking disabled, no temperature, and the schema', async (id) => {
       vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
       vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gw.example.com');

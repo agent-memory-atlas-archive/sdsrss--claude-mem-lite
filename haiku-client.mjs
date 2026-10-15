@@ -86,16 +86,18 @@ const STRICT_BODY_MODELS = new Set(['claude-haiku-5-5']);
  * The model's own name inside the routing decoration around it, for the STRICT_BODY_*
  * lookups: an OpenRouter variant suffix (`anthropic/claude-haiku-5.5:nitro`, `:floor`) and
  * the Bedrock form a gateway may take (`anthropic.claude-haiku-5-5`, with or without a
- * cross-region prefix such as `us.` or `global.`). Haiku 5.5 named either way was sent the
- * old body: temperature 0, which it answers with a 400, and thinking on. A gateway
- * deployment name says nothing about the model behind it and is not guessed at. (D#321)
+ * cross-region prefix such as `us.`, `global.` or GovCloud's `us-gov.`). Haiku 5.5 named
+ * either way was sent the old body: thinking on, no structured output and, on the direct
+ * leg, temperature 0, which it answers with a 400 (OpenRouter drops the field in transit).
+ * A gateway deployment name says nothing about the model behind it and is not guessed at.
+ * (D#321)
  * @param {string} id model ID or OpenRouter slug as sent
  * @returns {string}
  */
 function strictBodyKey(id) {
   return String(id)
     .replace(/:[a-z0-9-]+$/, '')
-    .replace(/^(?:[a-z]{2,6}\.)?anthropic\./, '');
+    .replace(/^(?:[a-z]{2,6}(?:-[a-z]+)?\.)?anthropic\./, '');
 }
 
 // Claude Code's tier-alias override vars, honored on the direct-API leg too:

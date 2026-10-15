@@ -933,6 +933,64 @@ ${diagnosisBlock(diag)}`;
 
 // ─── Background: LLM Episode Extraction (Tier 2 F) ──────────────────────────
 
+/**
+ * The episode-extraction prompt, `{ system, user }`. Exported so
+ * benchmark/haiku-model-ab.mjs sends the SHIPPED prompt rather than a retyped copy
+ * (buildCompressPrompt was extracted for the same reason).
+ * @param {object} episode
+ * @param {string[]} [diag] episodeDiagnosis(episode); the handler passes the one it keeps
+ * @returns {{system: string, user: string}}
+ */
+export function buildEpisodePrompt(episode, diag = episodeDiagnosis(episode)) {
+  // Same guard as the handler: an older-format tmp file can omit `files`.
+  const episodeFiles = Array.isArray(episode.files) ? episode.files : [];
+  const fileList = episodeFiles.map((f) => basename(f)).join(', ') || '(multiple)';
+
+  // Defense-in-depth (cso F#4): split static instructions (system) from
+  // per-call data (user). Episode descriptions and file paths come from tool
+  // events; treating them as a separate role + boundary marker reduces the
+  // attack surface for memory poisoning via crafted file content.
+  const SHARED_OBS_SCHEMA_TAIL = `${MEMORY_INPUT_GUARD}
+Grounding: state only outcomes the user message shows. An action description may be cut short ("…"); if its result is not visible, say what was run, not how it turned out. Never write that something passed, failed, was verified or confirmed unless that result appears in the user message.
+type: pick by strongest signal. decision = explicit tradeoff / "chose X over Y because Z" / rejected an approach (e.g. "Rejected schema migration — single-source module + sync test instead"; "Heterogeneous hook events → heterogeneous context budgets"). bugfix = prior-failing path fixed with a named root cause; a test that failed only until this episode's implementation landed (written first, then made to pass) is TDD, not a bugfix — type that feature or refactor. feature = new user-visible capability. refactor = behavior unchanged but structure improved. discovery = learned how a system works (read-heavy, no writes). change = routine edit with no new principle (default if unsure and nothing else fits).
+Facts: each MUST be (1) atomic—one claim, (2) self-contained—no pronouns, include file/function name, (3) specific—"refreshToken() in auth.ts:45 uses 1h TTL" not "handles tokens"
+importance: Be strict — default to 1. 0=pure browsing with zero learning value. 1=routine file edits, standard changes, normal workflow (MOST episodes). 2=notable ONLY if it reveals something non-obvious: error fix with discovered root cause, architectural decision with explicit tradeoff, config change with unexpected side effects. 3=critical: breaking change affecting users, security vulnerability fix, data migration. Ask yourself: "would a future session benefit from knowing this?" — if not, it's importance=1.
+lesson_learned: The non-obvious insight a future session would benefit from, resting ONLY on the DIAGNOSIS lines: copy at least 4 consecutive words verbatim, in double quotes, from one DIAGNOSIS line, and claim no mechanism that line does not state. Example: FTS5's "default tokenizer doesn't split CJK" — index bigrams instead. No DIAGNOSIS line, or none that states a cause → output JSON null; a lesson without such a quote is discarded. Do NOT invent a lesson. A mutation/probe run (a file changed on purpose, a checksum, a restore) and the agent's own script errors are not product bugs. Do NOT write the strings "none"/"n/a"/"todo"/"tbd"/"-" — those will be discarded as noise.
+scope: ${SCOPE_PROMPT_LEGEND}
+search_aliases: 2-6 alternative search terms someone might use to find this memory later (include CJK if project uses Chinese)`;
+
+  if (episode.entries.length === 1) {
+    const e = episode.entries[0];
+    const system = `Extract a structured observation from this code change. Return ONLY valid JSON, no markdown fences.
+
+JSON: {"type":"decision|bugfix|feature|refactor|discovery|change","title":"concise ≤80 char description","narrative":"what changed, why, and outcome (2-3 sentences)","concepts":["kw1","kw2"],"facts":["fact1","fact2"],"importance":1,"lesson_learned":"non-obvious insight a future session needs, or null","scope":"file|module|project|environment","search_aliases":["alt query 1","alt query 2"]}
+${SHARED_OBS_SCHEMA_TAIL}`;
+    const user = `Tool: ${e.tool}
+File: ${episodeFiles.join(', ') || 'unknown'}
+Action: ${e.desc}
+Error: ${e.isError ? 'yes' : 'no'}
+
+${diagnosisBlock(diag)}`;
+    return { system, user };
+  }
+
+  const actionList = episode.entries
+    .map((e, i) => `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`)
+    .join('\n');
+
+  const system = `Summarize this coding episode as ONE coherent observation. Return ONLY valid JSON, no markdown fences.
+
+JSON: {"type":"decision|bugfix|feature|refactor|discovery|change","title":"coherent ≤80 char summary","narrative":"what was done, why, and outcome (3-5 sentences)","concepts":["keyword1","keyword2"],"facts":["specific fact 1","specific fact 2"],"importance":1,"lesson_learned":"non-obvious insight a future session needs, or null","scope":"file|module|project|environment","search_aliases":["alt query 1","alt query 2"]}
+${SHARED_OBS_SCHEMA_TAIL}`;
+  const user = `Project: ${episode.project}
+Files: ${fileList}
+Actions (${episode.entries.length} total):
+${actionList}
+
+${diagnosisBlock(diag)}`;
+  return { system, user };
+}
+
 export async function handleLLMEpisode() {
   const tmpFile = process.argv[3];
   if (!tmpFile) return;
@@ -974,51 +1032,8 @@ export async function handleLLMEpisode() {
   const fileList = episodeFiles.map((f) => basename(f)).join(', ') || '(multiple)';
   const edgeFiles = splitEpisodeFiles(episode);
 
-  // Defense-in-depth (cso F#4): split static instructions (system) from
-  // per-call data (user). Episode descriptions and file paths come from tool
-  // events; treating them as a separate role + boundary marker reduces the
-  // attack surface for memory poisoning via crafted file content.
-  const SHARED_OBS_SCHEMA_TAIL = `${MEMORY_INPUT_GUARD}
-Grounding: state only outcomes the user message shows. An action description may be cut short ("…"); if its result is not visible, say what was run, not how it turned out. Never write that something passed, failed, was verified or confirmed unless that result appears in the user message.
-type: pick by strongest signal. decision = explicit tradeoff / "chose X over Y because Z" / rejected an approach (e.g. "Rejected schema migration — single-source module + sync test instead"; "Heterogeneous hook events → heterogeneous context budgets"). bugfix = prior-failing path fixed with a named root cause; a test that failed only until this episode's implementation landed (written first, then made to pass) is TDD, not a bugfix — type that feature or refactor. feature = new user-visible capability. refactor = behavior unchanged but structure improved. discovery = learned how a system works (read-heavy, no writes). change = routine edit with no new principle (default if unsure and nothing else fits).
-Facts: each MUST be (1) atomic—one claim, (2) self-contained—no pronouns, include file/function name, (3) specific—"refreshToken() in auth.ts:45 uses 1h TTL" not "handles tokens"
-importance: Be strict — default to 1. 0=pure browsing with zero learning value. 1=routine file edits, standard changes, normal workflow (MOST episodes). 2=notable ONLY if it reveals something non-obvious: error fix with discovered root cause, architectural decision with explicit tradeoff, config change with unexpected side effects. 3=critical: breaking change affecting users, security vulnerability fix, data migration. Ask yourself: "would a future session benefit from knowing this?" — if not, it's importance=1.
-lesson_learned: The non-obvious insight a future session would benefit from, resting ONLY on the DIAGNOSIS lines: copy at least 4 consecutive words verbatim, in double quotes, from one DIAGNOSIS line, and claim no mechanism that line does not state. Example: FTS5's "default tokenizer doesn't split CJK" — index bigrams instead. No DIAGNOSIS line, or none that states a cause → output JSON null; a lesson without such a quote is discarded. Do NOT invent a lesson. A mutation/probe run (a file changed on purpose, a checksum, a restore) and the agent's own script errors are not product bugs. Do NOT write the strings "none"/"n/a"/"todo"/"tbd"/"-" — those will be discarded as noise.
-scope: ${SCOPE_PROMPT_LEGEND}
-search_aliases: 2-6 alternative search terms someone might use to find this memory later (include CJK if project uses Chinese)`;
-
   const diag = episodeDiagnosis(episode);
-  let prompt;
-  if (episode.entries.length === 1) {
-    const e = episode.entries[0];
-    const system = `Extract a structured observation from this code change. Return ONLY valid JSON, no markdown fences.
-
-JSON: {"type":"decision|bugfix|feature|refactor|discovery|change","title":"concise ≤80 char description","narrative":"what changed, why, and outcome (2-3 sentences)","concepts":["kw1","kw2"],"facts":["fact1","fact2"],"importance":1,"lesson_learned":"non-obvious insight a future session needs, or null","scope":"file|module|project|environment","search_aliases":["alt query 1","alt query 2"]}
-${SHARED_OBS_SCHEMA_TAIL}`;
-    const user = `Tool: ${e.tool}
-File: ${episodeFiles.join(', ') || 'unknown'}
-Action: ${e.desc}
-Error: ${e.isError ? 'yes' : 'no'}
-
-${diagnosisBlock(diag)}`;
-    prompt = { system, user };
-  } else {
-    const actionList = episode.entries
-      .map((e, i) => `${i + 1}. [${e.tool}] ${e.desc}${e.isError ? ' (ERROR)' : ''}`)
-      .join('\n');
-
-    const system = `Summarize this coding episode as ONE coherent observation. Return ONLY valid JSON, no markdown fences.
-
-JSON: {"type":"decision|bugfix|feature|refactor|discovery|change","title":"coherent ≤80 char summary","narrative":"what was done, why, and outcome (3-5 sentences)","concepts":["keyword1","keyword2"],"facts":["specific fact 1","specific fact 2"],"importance":1,"lesson_learned":"non-obvious insight a future session needs, or null","scope":"file|module|project|environment","search_aliases":["alt query 1","alt query 2"]}
-${SHARED_OBS_SCHEMA_TAIL}`;
-    const user = `Project: ${episode.project}
-Files: ${fileList}
-Actions (${episode.entries.length} total):
-${actionList}
-
-${diagnosisBlock(diag)}`;
-    prompt = { system, user };
-  }
+  const prompt = buildEpisodePrompt(episode, diag);
 
   const ruleImportance = computeRuleImportance(episode);
 

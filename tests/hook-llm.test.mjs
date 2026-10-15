@@ -38,6 +38,7 @@ import {
   unwrapObservationEnvelope,
   isLowSignalLesson,
   hasEnrichmentContent,
+  buildEpisodePrompt,
 } from '../hook-llm.mjs';
 import { splitEpisodeFiles } from '../utils.mjs';
 import { openDb, callLLM } from '../hook-shared.mjs';
@@ -317,6 +318,37 @@ describe('handleLLMEpisode', () => {
       } catch {}
     }
     vi.clearAllMocks();
+  });
+
+  // benchmark/haiku-model-ab.mjs measures models on buildEpisodePrompt's output as the
+  // shipped prompt, which it is only while the handler sends that same object.
+  describe('sends buildEpisodePrompt(episode)', () => {
+    const ONE = {
+      sessionId: 's',
+      project: 'p',
+      files: ['/w/a/parser.mjs'],
+      filesRead: [],
+      entries: [{ tool: 'Bash', desc: 'npx vitest run → 1 failed', isError: true, diag: ['TypeError: x'] }],
+    };
+    const MANY = {
+      sessionId: 's',
+      project: 'p',
+      files: ['/w/a/x.mjs', '/w/a/y.mjs'],
+      filesRead: [],
+      entries: [
+        { tool: 'Read', desc: 'x.mjs', files: ['/w/a/x.mjs'] },
+        { tool: 'Edit', desc: 'y.mjs: swap order', files: ['/w/a/y.mjs'], diag: ['// lock before read'] },
+      ],
+    };
+    it.each([
+      ['one entry', ONE],
+      ['several entries', MANY],
+    ])('%s', async (_label, episode) => {
+      writeFileSync(tmpFile, JSON.stringify(episode));
+      await handleLLMEpisode();
+      expect(callLLM.mock.calls[0][0]).toEqual(buildEpisodePrompt(episode));
+      expect(callLLM.mock.calls[0][0].user).toContain('DIAGNOSIS (verbatim');
+    });
   });
 
   // Sandbox usage evaluation 2026-09-29: the summarizer stored every file the episode

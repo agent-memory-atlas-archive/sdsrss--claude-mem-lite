@@ -355,7 +355,8 @@ export async function callHaikuJSON(prompt, opts) {
  * Defaults also mirror callHaiku (10s / 500 tokens), not callModelJSONAsync's
  * 15s / 1000: a caller that omits opts must get the sync twin's budget.
  * @param {string|{system?:string,user:string}} prompt
- * @param {{timeout?:number,maxTokens?:number,temperature?:number}} [opts]
+ * @param {{timeout?:number,maxTokens?:number,temperature?:number,jsonSchema?:{name:string,schema:object}|null}} [opts]
+ *   jsonSchema: structured output for strict-body models (see callLLMWithModel)
  * @returns {Promise<object|null>} Parsed JSON or null
  */
 export async function callHaikuJSONAsync(
@@ -435,7 +436,8 @@ export async function callLLMWithModel(
  * salvage. Only the CLI transport differs.
  * @param {string|{system?:string,user:string}} prompt
  * @param {'haiku'|'sonnet'} model
- * @param {{timeout?:number,maxTokens?:number,temperature?:number}} [opts]
+ * @param {{timeout?:number,maxTokens?:number,temperature?:number,jsonSchema?:{name:string,schema:object}|null}} [opts]
+ *   jsonSchema: structured output for strict-body models (see callLLMWithModel)
  * @returns {Promise<{text: string}|null>} Response or null on failure
  */
 export async function callLLMWithModelAsync(
@@ -491,7 +493,8 @@ export async function callModelJSON(prompt, model = 'haiku', opts) {
  * throws; returns parsed JSON or null.
  * @param {string|{system?:string,user:string}} prompt
  * @param {'haiku'|'sonnet'} model
- * @param {{timeout?:number,maxTokens?:number,temperature?:number}} [opts]
+ * @param {{timeout?:number,maxTokens?:number,temperature?:number,jsonSchema?:{name:string,schema:object}|null}} [opts]
+ *   jsonSchema: structured output for strict-body models (see callLLMWithModel)
  * @returns {Promise<object|null>}
  */
 export async function callModelJSONAsync(

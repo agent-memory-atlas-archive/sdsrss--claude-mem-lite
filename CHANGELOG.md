@@ -2,6 +2,76 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.26.0 — haiku-tier LLM calls made with an API key move to Claude Haiku 5.5
+
+**Upgrade note: with `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` set, the `haiku` tier now
+calls Claude Haiku 5.5**, unless you already choose the model yourself: `OPENROUTER_MODEL` when
+OpenRouter is the provider in use (`ANTHROPIC_API_KEY` unset; with both keys set the direct API
+is used), or `ANTHROPIC_DEFAULT_HAIKU_MODEL` together with `ANTHROPIC_BASE_URL`. No schema
+change, no migration, no new setting.
+
+- **What changes.** The `haiku` tier carries every LLM call the plugin makes except normalize's
+  synonym grouping, cluster merging and smart-compress, which run on the `sonnet` tier and are
+  unchanged. That includes background work (episode extraction and its lesson retry, session
+  summaries, save-time enrichment, optimize's re-enrich pass) and deep search's query rewrite
+  and rerank, which run while a search waits. `CLAUDE_MEM_MODEL=sonnet` still moves the calls
+  that follow that setting, episode extraction among them, to the `sonnet` tier. Until now the
+  direct Anthropic API was sent `claude-haiku-4-5-20251001` and OpenRouter
+  `anthropic/claude-haiku-4.5`; they are now sent `claude-haiku-5-5` and
+  `anthropic/claude-haiku-5.5`. Without a key nothing changes: the `claude -p --model haiku`
+  fallback already ran Claude Haiku 5.5, because Claude Code 2.1.293 and later resolves that
+  alias to it on the Anthropic API (on Bedrock, Vertex, Foundry and Claude Platform on AWS it
+  stays on 4.5). On the Anthropic API with Claude Code 2.1.293 or later, all three paths now
+  run the same model.
+- **Why.** Measured through OpenRouter before switching (`docs/measurement/rulers.md`,
+  "haiku-tier model A/B", 2026-10-15). With the request changes below, Claude Haiku 5.5 gave a
+  usable answer as often as 4.5, 24 of 24 for both, on 24 episodes from this machine's
+  sessions and on 24 query-rewrite and 24 rerank prompts from the repository's test fixtures.
+  On 72 episodes it wrote fewer lessons that the plugin keeps (28 against 40), but more of them
+  were accurate: two Claude judges, blind to which model wrote each lesson, both called 19 of
+  the 28 accurate to the session evidence the model was shown, against 16 of the 40 (and 31 of
+  34 for the `claude -p` path). Not measured: the other `haiku`-tier calls listed above, the
+  opt-in lesson bridge (`CLAUDE_MEM_SALIENCE=bridge`), and the direct API, whose request was
+  checked against a stub, not sent.
+- **What the plugin sends to Claude Haiku 5.5.** The model rejects any `temperature` other than
+  its default, including the `0` the plugin sent, and thinks before answering unless told not
+  to, which spends the small token budgets these calls have. The direct API now gets no
+  `temperature` and `thinking: {type: "disabled"}`; OpenRouter gets
+  `reasoning: {enabled: false}`. The `temperature: 0` pin therefore no longer applies on the
+  `haiku` tier. With thinking off, the model answered some one-word deep-search queries
+  ("React", "API") with a question in prose instead of JSON, so the query rewrite now asks it
+  for a JSON-schema structured output. A refusal from the direct API is treated like any
+  failed call, so the `claude -p` fallback is tried; its category is written to stderr only
+  with `CLAUDE_MEM_DEBUG=1`, and the background workers discard stderr. A model ID you set
+  yourself that is not exactly `claude-haiku-5-5` or `anthropic/claude-haiku-5.5` gets the same
+  request as before, even when it names Claude Haiku 5.5 another way (an OpenRouter variant
+  such as `anthropic/claude-haiku-5.5:nitro`, a gateway deployment name).
+- **Gateways.** With `ANTHROPIC_BASE_URL` set and `ANTHROPIC_DEFAULT_HAIKU_MODEL` unset, your
+  gateway now receives `claude-haiku-5-5`. If it does not serve that model, every `haiku`-tier
+  call fails there and falls back to `claude -p`, which sends its requests to the same
+  `ANTHROPIC_BASE_URL`. Set `ANTHROPIC_DEFAULT_HAIKU_MODEL` to the model or deployment the
+  gateway routes to. If that deployment is Claude Haiku 5.5 under another name, the plugin
+  sends it the request written for 4.5, with `temperature: 0`, which Claude Haiku 5.5 rejects;
+  name the deployment `claude-haiku-5-5`, or route to 4.5.
+- **To stay on Claude Haiku 4.5:**
+  - Direct API: set `ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5-20251001` together with
+    `ANTHROPIC_BASE_URL=https://api.anthropic.com`; the plugin reads that model variable on the
+    direct API only when a base URL is set. Both are Claude Code settings too: where Claude Code
+    sees them, its `haiku` alias, and with it the `claude -p` fallback, runs 4.5 as well, and
+    Claude Code itself runs with a base URL set. With a base URL set, the plugin also sends
+    `ANTHROPIC_DEFAULT_SONNET_MODEL`, if you set one for Claude Code, on its three
+    `sonnet`-tier calls, so it must then be a model ID the Anthropic API accepts.
+  - OpenRouter: set `OPENROUTER_MODEL=anthropic/claude-haiku-4.5`. That variable picks the
+    model for every tier, so the three `sonnet`-tier calls above then run Claude Haiku 4.5 too.
+    A failed call still falls back to `claude -p` on its own tier: `--model haiku` for the
+    `haiku`-tier calls, which runs Claude Haiku 5.5 on the Anthropic API unless
+    `ANTHROPIC_DEFAULT_HAIKU_MODEL` points Claude Code's alias elsewhere, and `--model sonnet`
+    for the three `sonnet`-tier calls.
+- Not in the npm package (plugin installs copy the repository and carry them; nothing runs
+  them): `benchmark/haiku-model-ab.mjs` compares models on three of the shipped `haiku`-tier
+  prompts (episode, query rewrite, rerank), and `benchmark/lesson-blind-read.mjs` prepares and
+  scores a blind two-judge read of the lessons such a run kept.
+
 ## v6.25.3 — the self-heal recognises better-sqlite3 13's missing binding; a lock nobody can take is named
 
 Fixes only; no schema change, no migration, no new setting.

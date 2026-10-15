@@ -11,8 +11,12 @@
  *
  * NO LLM. The replay rebuilds each historical window from the transcripts through the
  * SHIPPED batcher (isRelatedToEpisode / EPISODE_BUFFER_SIZE / EPISODE_TIME_GAP_MS /
- * planEpisodeFlush / explainSignificance) and the SHIPPED gates (entryInputTags,
- * filterSummaryInput, extractDiagnosisLines, isLessonGrounded) — imported, never copied.
+ * planEpisodeFlush / explainSignificance) and the SHIPPED gates (workerEntryFields,
+ * filterSummaryInput, isLessonGrounded) — imported, never copied. Each entry's worker
+ * fields come from the call hook.mjs makes, with its options: the 64 KiB output window and
+ * the secret scrub included (D#332; until then this file built them its own way, on the
+ * full output and unscrubbed, so readings taken before that commit were not of the shipped
+ * gates — docs/audits/20261015-d332-keyevents-ruler-parity.md has the before/after).
  * It then matches each `events` row to the window that produced it (same file set, row
  * created 0-600 s after the flush) and reports the row's fate under the new gates:
  *   no-event:subagent-only   every call in the window came from a subagent
@@ -57,12 +61,8 @@ import { extractFileTargets, detectBashSignificance } from '../bash-utils.mjs';
 import { toolEditPath } from '../lib/file-edge-match.mjs';
 import { createEpisode, planEpisodeFlush, explainSignificance } from '../hook-episode.mjs';
 import { EPISODE_BUFFER_SIZE, EPISODE_TIME_GAP_MS } from '../hook-shared.mjs';
-import {
-  entryInputTags,
-  extractDiagnosisLines,
-  filterSummaryInput,
-  isLessonGrounded,
-} from '../lib/episode-input-filter.mjs';
+import { filterSummaryInput, isLessonGrounded, workerEntryFields } from '../lib/episode-input-filter.mjs';
+import { scrubSecrets } from '../secret-scrub.mjs';
 
 const argv = process.argv.slice(2);
 const argOf = (f) => {
@@ -187,8 +187,12 @@ export function collectStream(dir) {
   return { stream: all, subagentFiles };
 }
 
-/** The OLD windows (subagent calls included), one record per significant sub-episode. */
-export function replayWindows(stream, project) {
+/**
+ * The OLD windows (subagent calls included), one record per significant sub-episode.
+ * `projectDir` is what hook.mjs passes extractFileTargets (inferProjectDir): a /tmp write
+ * counts only inside a project that lives under /tmp.
+ */
+export function replayWindows(stream, project, { projectDir = null } = {}) {
   const windows = [];
   let episode = null;
   const flush = (ts) => {
@@ -213,23 +217,26 @@ export function replayWindows(stream, project) {
     const bashSig = ev.tool === 'Bash' ? detectBashSignificance(ev.input || {}, ev.response) : null;
     // What the CURRENT hook would record for this call (hook.mjs handlePostToolUse).
     const bashWrites =
-      ev.tool === 'Bash' ? extractFileTargets(ev.input || {}, { cwd: ev.cwd || null }).writes : [];
+      ev.tool === 'Bash'
+        ? extractFileTargets(ev.input || {}, { cwd: ev.cwd || null, projectDir }).writes
+        : [];
     episode.entries.push({
       tool: ev.tool,
-      desc: makeEntryDesc(ev.tool, ev.input || {}, ev.response, bashSig),
+      desc: scrubSecrets(makeEntryDesc(ev.tool, ev.input || {}, ev.response, bashSig)),
       files,
       ts: ev.ts,
       isError: bashSig?.isError || false,
       bashSig,
       ccSession: ev.session,
       agentId: ev.agentId,
-      inputTags: entryInputTags(ev.tool, ev.input || {}, ev.response),
-      ...(bashWrites.length ? { bashWrites } : {}),
-      diag: extractDiagnosisLines(ev.tool, ev.input || {}, ev.response, {
+      ...workerEntryFields(ev.tool, ev.input || {}, ev.response, {
         isError: bashSig?.isError || false,
         writesFiles: bashWrites.length > 0,
+        scrub: scrubSecrets,
       }),
-      command: ev.tool === 'Bash' ? String(ev.input?.command || '') : '',
+      ...(bashWrites.length ? { bashWrites } : {}),
+      // Not an entry field: the --names listings print it, and those get pasted into audits.
+      command: ev.tool === 'Bash' ? scrubSecrets(String(ev.input?.command || '')) : '',
     });
     episode.lastAt = ev.ts;
     for (const f of files) if (!episode.files.includes(f)) episode.files.push(f);
@@ -302,7 +309,7 @@ function main() {
     if (e.kind === 'tool' && !e.agentId && e.cwd) cwdCount.set(e.cwd, (cwdCount.get(e.cwd) || 0) + 1);
   const projectDir =
     argOf('--project-dir') || [...cwdCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-  const windows = replayWindows(stream, project);
+  const windows = replayWindows(stream, project, { projectDir });
   const db = new Database(dbPath, { readonly: true });
   const rows = db
     .prepare(

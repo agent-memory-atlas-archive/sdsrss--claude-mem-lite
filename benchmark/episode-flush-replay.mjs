@@ -64,6 +64,13 @@ import { projectNameFromDir } from '../project-utils.mjs';
 import { createEpisode, planEpisodeFlush, explainSignificance } from '../hook-episode.mjs';
 import { EPISODE_BUFFER_SIZE, EPISODE_TIME_GAP_MS } from '../hook-shared.mjs';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
+import { scrubSecrets } from '../secret-scrub.mjs';
+import {
+  entryInputTags,
+  extractDiagnosis,
+  filterSummaryInput,
+  episodeInputFilterEnabled,
+} from '../lib/episode-input-filter.mjs';
 
 const argv = process.argv.slice(2);
 const argOf = (flag) => {
@@ -182,6 +189,27 @@ function eventsFromTranscript(path) {
   return out;
 }
 
+/**
+ * The entry fields hook.mjs handlePostToolUse computes for the llm-episode worker (the
+ * prompt's DIAGNOSIS block and the input filter's tags), with the same calls on the same
+ * windowed output. A twin of those lines, kept next to them in shape on purpose: the
+ * caller of this replay is a model A/B, which must see the prompt production builds.
+ */
+function workerFields(ev, bashSig, bashWrites) {
+  const resp = ev.response;
+  const respWindow = resp.length > 65536 ? resp.slice(0, 32768) + '\n' + resp.slice(-32768) : resp;
+  const diagnosis = extractDiagnosis(ev.tool, ev.input || {}, respWindow, {
+    isError: bashSig?.isError || false,
+    writesFiles: ev.tool === 'Bash' && bashWrites.length > 0,
+    scrub: scrubSecrets,
+  });
+  return {
+    inputTags: entryInputTags(ev.tool, ev.input || {}, respWindow),
+    diag: diagnosis.lines,
+    ...(ev.tool === 'Bash' ? { diagOut: diagnosis.output } : {}),
+  };
+}
+
 /** Every event in the corpus, bucketed by the project name the hooks would compute. */
 export function collectEvents({ since = null, projectFilter = null } = {}) {
   const byProject = new Map();
@@ -219,9 +247,13 @@ export function collectEvents({ since = null, projectFilter = null } = {}) {
  * @param {object[]} events chronological, one project
  * @param {string} project
  * @param {null|boolean} forceSignificance
+ * @param {object[]|null} llmSubs when an array, each sub-episode the shipped flush would hand
+ *   the llm-episode worker is pushed onto it (benchmark/haiku-model-ab.mjs's population),
+ *   and entries carry the fields hook.mjs handlePostToolUse adds for that worker: scrubbed
+ *   `desc`, `inputTags`, `diag`, `diagOut`. Off (null), entries and every row stay as they were.
  * @returns {{flushes: object[], readsSeen: number}}
  */
-export function replayProject(events, project, { forceSignificance = null } = {}) {
+export function replayProject(events, project, { forceSignificance = null, llmSubs = null } = {}) {
   const flushes = [];
   // path -> first ts it was appended at, so the counterfactual can price staleness.
   let readsPending = new Map();
@@ -257,6 +289,16 @@ export function replayProject(events, project, { forceSignificance = null } = {}
     for (const [k, v] of consumed) if (!cfPending.has(k)) cfPending.set(k, v);
     episode.filesRead = [...consumed.keys()];
     const subs = planEpisodeFlush(episode);
+    // hook.mjs flushEpisodeWithDb → summaryInputSubs → flushEpisodeGroup: the input filter,
+    // then one significance verdict per sub decides the llm-episode spawn.
+    if (llmSubs) {
+      for (const sub of subs) {
+        const ep = episodeInputFilterEnabled()
+          ? filterSummaryInput(sub, { projectDir: episode.cwd || null }).episode
+          : sub;
+        if (ep.entries.length && explainSignificance(ep).significant) llmSubs.push(ep);
+      }
+    }
     const significant =
       forceSignificance === null ? subs.some((s) => explainSignificance(s).significant) : forceSignificance;
     const ages = [...consumed.values()].map((t) => ts - t);
@@ -336,15 +378,18 @@ export function replayProject(events, project, { forceSignificance = null } = {}
     if (!episode) {
       episode = createEpisode('replay', project);
       episode.startedAt = ev.ts;
+      if (llmSubs) episode.cwd = ev.cwd || null;
     }
     const bashSig = ev.tool === 'Bash' ? detectBashSignificance(ev.input || {}, ev.response) : null;
+    const desc = makeEntryDesc(ev.tool, ev.input || {}, ev.response, bashSig);
     episode.entries.push({
       tool: ev.tool,
       // The narrative buildImmediateObservation joins, and it is load-bearing for the
       // landing gates: isNoiseObservation reads the narrative's shape (tool-output
       // passthrough / `Error:` prefix) and its length. Entries without `desc` would
       // make every episode look like an empty narrative and over-report drops.
-      desc: makeEntryDesc(ev.tool, ev.input || {}, ev.response, bashSig),
+      desc: llmSubs ? scrubSecrets(desc) : desc,
+      ...(llmSubs ? workerFields(ev, bashSig, bashWrites) : {}),
       files,
       ...(ev.tool === 'Bash' && bashWrites.length ? { bashWrites } : {}),
       ts: ev.ts,

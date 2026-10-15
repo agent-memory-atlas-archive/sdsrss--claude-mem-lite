@@ -1770,7 +1770,7 @@ describe('haiku-client.mjs', () => {
       _resetMode();
     });
 
-    it('anthropic/claude-haiku-5.5 is sent reasoning: {enabled: false}', async () => {
+    it('anthropic/claude-haiku-5.5 is sent reasoning: {enabled: false} and no temperature', async () => {
       vi.stubEnv('OPENROUTER_MODEL', 'anthropic/claude-haiku-5.5');
       const fetchMock = vi.fn().mockResolvedValue(okOR());
       vi.stubGlobal('fetch', fetchMock);
@@ -1779,6 +1779,9 @@ describe('haiku-client.mjs', () => {
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.model).toBe('anthropic/claude-haiku-5.5');
       expect(body.reasoning).toEqual({ enabled: false });
+      // No endpoint serving it lists `temperature`; with it, `provider.require_parameters`
+      // matched none (D#330 probe, 72/72 HTTP 404).
+      expect(body).not.toHaveProperty('temperature');
     });
 
     it('other slugs get no reasoning field', async () => {
@@ -1927,6 +1930,7 @@ describe('haiku-client.mjs', () => {
         const body = JSON.parse(fetchMock.mock.calls[0][1].body);
         expect(body.model).toBe(slug);
         expect(body.reasoning).toEqual({ enabled: false });
+        expect(body).not.toHaveProperty('temperature');
         expect(body.response_format?.json_schema?.name).toBe('probe');
       },
     );
@@ -1968,6 +1972,7 @@ describe('haiku-client.mjs', () => {
         await callModelJSONAsync('p', 'haiku', { jsonSchema: SCHEMA });
         const body = JSON.parse(fetchMock.mock.calls[0][1].body);
         expect(body.reasoning).toBeUndefined();
+        expect(body.temperature).toBe(0);
         expect(body.response_format).toBeUndefined();
       },
     );
@@ -2064,9 +2069,10 @@ describe('haiku-client.mjs', () => {
       expect(body.temperature).toBe(0);
     });
 
-    it('callHaiku (OpenRouter) sends temperature: 0', async () => {
+    it('callHaiku (OpenRouter) sends temperature: 0 to a slug that is not strict', async () => {
       vi.stubEnv('ANTHROPIC_API_KEY', '');
       vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-key');
+      vi.stubEnv('OPENROUTER_MODEL', 'anthropic/claude-haiku-4.5');
       _resetMode();
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,

@@ -1121,8 +1121,15 @@ async function callOpenRouterAPI(
       // Optional OpenRouter attribution headers (ignored by the API if absent).
       'X-Title': 'claude-mem-lite',
     };
-    const payload = { model, max_tokens: maxTokens, temperature, messages };
-    if (STRICT_BODY_SLUGS.has(strictBodyKey(model))) {
+    // A strict slug gets no temperature, as on the direct leg. No OpenRouter endpoint serving
+    // Claude Haiku 5.5 lists it (endpoints API, 2026-10-15), so it was dropped in transit,
+    // and it made `provider.require_parameters` match no endpoint at all (72/72 HTTP 404 on
+    // the rewrite prompts, 0/72 without it; docs/audits/20261015-d330-openrouter-routing.md).
+    const strict = STRICT_BODY_SLUGS.has(strictBodyKey(model));
+    const payload = strict
+      ? { model, max_tokens: maxTokens, messages }
+      : { model, max_tokens: maxTokens, temperature, messages };
+    if (strict) {
       payload.reasoning = { enabled: false };
       if (jsonSchema) {
         payload.response_format = {

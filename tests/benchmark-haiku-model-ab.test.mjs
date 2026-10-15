@@ -8,6 +8,7 @@ import {
   gateVerdict,
   assertFallbackBlocked,
   classifyEpisode,
+  lessonKept,
   MISSING_CLI,
 } from '../benchmark/haiku-model-ab.mjs';
 import { parseJsonFromLLM } from '../utils.mjs';
@@ -80,5 +81,19 @@ describe('classifyEpisode', () => {
   it('prose and bare arrays are not usable', () => {
     expect(classifyEpisode('I could not find a change worth recording.', parsers).usable).toBe(false);
     expect(classifyEpisode('["a","b"]', parsers).usable).toBe(false);
+  });
+});
+
+describe('lessonKept', () => {
+  const EV = new Set(['bugfix', 'decision']);
+  it('an event type keeps only a grounded lesson', () => {
+    expect(lessonKept({ type: 'bugfix', lesson: true, grounded: true }, EV)).toBe(true);
+    expect(lessonKept({ type: 'bugfix', lesson: true, grounded: false }, EV)).toBe(false);
+  });
+  it('a change row keeps its lesson ungrounded', () => {
+    expect(lessonKept({ type: 'change', lesson: true, grounded: false }, EV)).toBe(true);
+  });
+  it('no lesson is never kept', () => {
+    expect(lessonKept({ type: 'change', lesson: false, grounded: false }, EV)).toBe(false);
   });
 });

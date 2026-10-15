@@ -138,6 +138,18 @@ export function classifyEpisode(raw, { parseJsonFromLLM, unwrapObservationEnvelo
   };
 }
 
+/**
+ * Would handleLLMEpisode KEEP this first-pass lesson? An event type's lesson survives only
+ * when it quotes the window's DIAGNOSIS (D#69 grounding, on by default); a `change` row's
+ * lesson is kept as written. The bugfix/decision lesson retry is not modelled.
+ * @param {{type?: string, lesson: boolean, grounded: boolean}} row
+ * @param {Set<string>} eventTypes
+ */
+export function lessonKept(row, eventTypes) {
+  if (!row.lesson) return false;
+  return eventTypes.has(row.type) ? row.grounded : true;
+}
+
 function median(xs) {
   if (!xs.length) return 0;
   const s = [...xs].sort((a, b) => a - b);
@@ -173,6 +185,8 @@ async function main() {
   const hl = await import('../hook-llm.mjs');
   const { isLessonGrounded } = await import('../lib/episode-input-filter.mjs');
   const { OBS_TYPE_SET } = await import('../lib/obs-types.mjs');
+  const { EVENT_TYPES } = await import('../lib/activity.mjs');
+  const eventTypes = new Set(EVENT_TYPES);
   const { rewriteQuery, deepSearch } = await import('../deep-search.mjs');
   const parsers = {
     parseJsonFromLLM,
@@ -240,6 +254,7 @@ async function main() {
           typeOk: !!p && OBS_TYPE_SET.has(p.type),
           lesson: !!lesson && !hl.isLowSignalLesson(lesson),
           grounded: !!lesson && isLessonGrounded(lesson, hl.episodeDiagnosis(sub)),
+          type: p?.type,
           rawHead: v.usable ? undefined : String(raw ?? '').slice(0, 160),
         };
       }),
@@ -283,6 +298,7 @@ async function main() {
                 typeOk: r.rows.filter((x) => x.typeOk).length,
                 lesson: r.rows.filter((x) => x.lesson).length,
                 grounded: r.rows.filter((x) => x.grounded).length,
+                kept: r.rows.filter((x) => lessonKept(x, eventTypes)).length,
                 unusable: r.rows.filter((x) => !x.usable).map((x) => ({ item: x.item, head: x.rawHead })),
               }
             : {}),
@@ -306,7 +322,7 @@ async function main() {
       for (const [a, x] of Object.entries(r.perArm)) {
         const extra =
           s === 'episode'
-            ? `  fenced ${x.fenced}  type-ok ${x.typeOk}  lesson ${x.lesson}  grounded ${x.grounded}`
+            ? `  fenced ${x.fenced}  type-ok ${x.typeOk}  lesson ${x.lesson}  grounded ${x.grounded}  kept ${x.kept}`
             : '';
         console.log(
           `  ${a.padEnd(32)} usable ${x.usable}/${x.n}  errors ${x.errors}  median ${x.medianMs}ms${extra}`,

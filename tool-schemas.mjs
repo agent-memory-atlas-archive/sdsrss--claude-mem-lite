@@ -1062,7 +1062,7 @@ export const tools = [
       '\n' +
       'DO NOT use when:\n' +
       '  - The SessionStart `### Deferred Work` block already shows the items (reuse that — same data)\n' +
-      '  - You only need one item by id (use mem_get on the obs that closed it, or look up the row directly)\n' +
+      '  - You need one item\'s full detail (use mem_get ids=["D#N"])\n' +
       '\n' +
       'USE when:\n' +
       '  - User asks "what was on the deferred list" / "what did I leave for next time"\n' +

@@ -28,3 +28,10 @@ describe('mem_recent (P2-20)', () => {
     expect(descriptionOf('mem_recent')).toMatch(/filters by type and date, not by words/);
   });
 });
+
+describe('mem_defer_list (P2-20)', () => {
+  it('points a single item at mem_get D#N', () => {
+    expect(descriptionOf('mem_defer_list')).not.toMatch(/look up the row directly/);
+    expect(descriptionOf('mem_defer_list')).toContain('mem_get ids=["D#N"]');
+  });
+});

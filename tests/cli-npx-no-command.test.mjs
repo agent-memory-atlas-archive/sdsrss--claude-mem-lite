@@ -86,6 +86,36 @@ describe('cli.mjs with no command', () => {
     const out = run({ npm_command: 'exec' });
     expect(out).toMatch(/claude-mem-lite CLI/);
     expect(out).not.toMatch(/settings\.json/);
+    // What a Claude Code launched with npx hands its children (npm's run-script env).
+    const inherited = run({
+      npm_command: 'exec',
+      npm_lifecycle_event: 'npx',
+      npm_lifecycle_script: "'claude'",
+    });
+    expect(inherited).toMatch(/claude-mem-lite CLI/);
+  });
+
+  // E2E round 3 (install STILL-BROKEN-1): with no database yet the bare command goes to the
+  // installer, whose own npx test still took the inherited npm_command=exec as npx and ran a full
+  // install over a plugin-only machine. One predicate now decides both.
+  it('no database: an inherited npm_command=exec does not run an install', () => {
+    rmSync(join(env.CLAUDE_MEM_DIR, 'claude-mem-lite.db'));
+    const out = run({ npm_command: 'exec', npm_lifecycle_event: 'npx', npm_lifecycle_script: "'claude'" });
+    // The installer's usage, not an install attempt (which the unparseable settings.json stops).
+    expect(out).toMatch(/Usage:/);
+  });
+
+  // E2E round 3 (install REGRESSION-1): with the package also installed by npm -g, npx runs the
+  // GLOBAL bin, whose path holds no _npx, so a path-only test printed the help again. npm's
+  // run-script names the bin npx launched in npm_lifecycle_script (event "npx").
+  it('npx running the global bin still routes to install', () => {
+    const out = run({
+      npm_command: 'exec',
+      npm_lifecycle_event: 'npx',
+      npm_lifecycle_script: "'claude-mem-lite'",
+    });
+    expect(out).not.toMatch(/claude-mem-lite CLI/);
+    expect(out).toMatch(/settings\.json/);
   });
 
   it('outside npx, with a database, prints the CLI help', () => {

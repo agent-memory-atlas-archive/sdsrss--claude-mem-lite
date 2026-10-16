@@ -241,14 +241,14 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   const { existsSync } = await import('fs');
   const { dirname, join } = await import('path');
   const { fileURLToPath } = await import('url');
-  const { isNpxCachePath } = await import('./lib/npx-run.mjs');
+  const { isNpxRun } = await import('./lib/npx-run.mjs');
   // D#29: honor CLAUDE_MEM_DIR so the install-vs-CLI help routing is correct on
   // relocated installs (matches schema.mjs DB_DIR via the shared resolver, which
   // also fixes the HOME-unset relative-path fallback this branch used to have).
   const { resolveDataDir } = await import('./lib/resolve-data-dir.mjs');
   const dataDir = resolveDataDir(process.env.CLAUDE_MEM_DIR);
   const dbPath = join(dataDir, 'claude-mem-lite.db');
-  if (existsSync(dbPath) && !isNpxCachePath(dirname(fileURLToPath(import.meta.url)))) {
+  if (existsSync(dbPath) && !isNpxRun(dirname(fileURLToPath(import.meta.url)))) {
     const { run } = await import('./mem-cli.mjs');
     await run(['help']);
   } else {

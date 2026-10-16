@@ -253,6 +253,46 @@ describe('search says which operators it ignored', () => {
   });
 });
 
+// E2E 2026-10-16 (cli F10): the content writers took any flag, applied what they read and said
+// nothing about the rest (`update --files` left files alone, exit 0), or said it in read-command
+// words ("the results above are UNFILTERED"), or suggested another command's flag.
+describe('a content writer refuses a flag it does not take, before writing', () => {
+  it('update --files', () => {
+    const r = cli('update', '1', '--files', 'Dockerfile', '--title', 'Retitled by update');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/update does not take --files — nothing was written/);
+    expect(cli('get', '1').stdout).not.toMatch(/Retitled by update/);
+  });
+  it('save --tags, with no suggestion from another command', () => {
+    const r = cli('save', 'Tagging note about infra', '--tags', 'infra');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/save does not take --tags/);
+    expect(r.stderr).not.toMatch(/--days/);
+    expect(cli('search', 'Tagging note').stdout).not.toMatch(/Tagging note about infra/);
+  });
+  it('defer add --importance names the flags it takes', () => {
+    const r = cli('defer', 'add', 'Look at image size', '--importance', '3');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/defer add does not take --importance.*--priority/);
+  });
+  it('a near-miss gets a suggestion from the command itself', () => {
+    expect(cli('save', 'Near miss note', '--titel', 'x').stderr).toMatch(/did you mean --title\?/);
+  });
+  it('control: the flags a writer takes still work', () => {
+    const r = cli(
+      'save',
+      'Control writer note',
+      '--type',
+      'bugfix',
+      '--title',
+      'Control',
+      '--importance',
+      '2',
+    );
+    expect(r.status, r.stderr).toBe(0);
+  });
+});
+
 // E2E 2026-10-16 (cli F13): the section key was derived from the heading text, so the Recent
 // table's key carried today's date ("recent_(2026-10-16)") and changed every day.
 describe('context --json section keys are stable', () => {

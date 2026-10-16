@@ -16,6 +16,7 @@ import {
 } from './utils.mjs';
 import { isBlankText } from './lib/blank-text.mjs';
 import { resolveProject, checkWriteProject, unknownProjectNote } from './project-utils.mjs';
+import { editDistance } from './lib/edit-distance.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
 // falls back to the enclosing work-tree root, so `cd src/auth && … recent` reads what the
 // session's hooks wrote. WRITE commands (save / defer add / restore / import-jsonl) keep
@@ -3820,6 +3821,30 @@ const SEARCH_SOURCE_SPELLINGS = {
   event: 'events',
 };
 const GET_SOURCE_SPELLINGS = { observations: 'obs', sessions: 'session', prompts: 'prompt', events: 'event' };
+// The flags each content writer takes (canonical names, after parseArgs' alias mapping). A flag
+// added to one of these commands and not here is refused, so the omission fails loudly in that
+// flag's own test rather than being dropped in silence. `json` is taken and ignored with the
+// generic --json note, so a script passing it does not lose its write.
+const CONTENT_WRITER_FLAGS = {
+  save: [
+    'text',
+    'content',
+    'type',
+    'title',
+    'importance',
+    'project',
+    'files',
+    'lesson',
+    'lesson-learned',
+    'closes-deferred',
+    'supersedes',
+    'force',
+    'json',
+  ],
+  update: ['id', 'title', 'narrative', 'lesson', 'lesson-learned', 'concepts', 'importance', 'type', 'json'],
+  'defer add': ['title', 'priority', 'detail', 'files', 'project', 'json'],
+  'activity save': ['type', 'title', 'body', 'files', 'file', 'project', 'importance', 'json'],
+};
 // Commands whose --project names where rows are WRITTEN (a new project is theirs to create).
 const PROJECT_WRITE_CMDS = new Set(['save', 'defer add', 'activity save', 'import-jsonl', 'verify-apply']);
 // Commands whose first argument is free text, so a bare `--word` there may be text, not a flag.
@@ -3960,6 +3985,11 @@ async function runDispatch(argv) {
   // when a flag looks like a misspelling of a real one; stdout + exit code stay untouched,
   // so JSON/text consumers are unaffected. Mirrors the unknown-COMMAND suggester in cli.mjs.
   const parsedForTypos = parseArgs(cmdArgs, { track: false });
+  const writeKey = cmd === 'defer' || cmd === 'activity' ? `${cmd} ${cmdArgs[0]}` : cmd;
+  const writerAccepts = CONTENT_WRITER_FLAGS[writeKey];
+  // Tokens the hints below read as a value or text, not a flag; the writer check leaves them to
+  // the command's own refusal, which names the --name="…" form.
+  const valueLike = new Set();
   for (const { flag, suggestion, owner } of suggestUnknownFlags(parsedForTypos.flags, cmd)) {
     // The words before the first flag, so a subcommand keeps its place: `defer add -- "…"`, not
     // `defer -- "…"`, which fails (E2E 2026-10-16 round 4).
@@ -3968,6 +3998,7 @@ async function runDispatch(argv) {
     // No flag name holds a space: this is a value or text that starts with `-`, and "Unknown
     // flag … ignored" before the refusal that follows contradicted it (E2E 2026-10-16 round 3).
     if (/\s/.test(flag)) {
+      valueLike.add(flag);
       process.stderr.write(
         `[mem] "--${flag}" was read as a flag. A value that starts with - is written --name="…"; ` +
           `text that starts with - goes after a bare --: ${dashLead} -- "…"\n`,
@@ -3984,6 +4015,7 @@ async function runDispatch(argv) {
       const prevKey = prev.startsWith('--') && !prev.includes('=') ? prev.slice(2) : null;
       const asFlag = suggestion ? ` As a flag, did you mean --${suggestion}?` : ' As a flag it is unknown.';
       if (prevKey && KNOWN_CLI_FLAGS.has(prevKey) && parsedForTypos.flags[prevKey] === true) {
+        valueLike.add(flag);
         process.stderr.write(
           `[mem] "--${flag}" right after --${prevKey} was read as a flag, not as its value. A value ` +
             `that starts with - is written --${prevKey}="--${flag}".${asFlag}\n`,
@@ -3991,6 +4023,7 @@ async function runDispatch(argv) {
         continue;
       }
       if (at === firstFlag && parsedForTypos.positional.length === 0 && TEXT_COMMANDS.has(dashLead)) {
+        valueLike.add(flag);
         process.stderr.write(
           `[mem] "--${flag}" was read as a flag. Text that starts with - goes after a bare --: ` +
             `${dashLead} -- "--${flag}".${asFlag}\n`,
@@ -3998,6 +4031,8 @@ async function runDispatch(argv) {
         continue;
       }
     }
+    // A content writer refuses its unknown flags below, with suggestions from its own flags.
+    if (writerAccepts) continue;
     process.stderr.write(
       owner
         ? `[mem] --${flag} is read only by ${owner}; ${cmd} does not read it.\n`
@@ -4005,6 +4040,28 @@ async function runDispatch(argv) {
           ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
           : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,
     );
+  }
+
+  // The content writers refuse a flag they do not take, BEFORE writing. Read-tracking reported
+  // these after the row was written, in read-command words ("the results above are
+  // UNFILTERED"), or not at all for a flag another command reads (`update --files` left the
+  // files alone, exit 0), and the typo hint suggested other commands' flags (`save --tags` →
+  // "did you mean --days?") (E2E 2026-10-16, cli F10).
+  if (writerAccepts) {
+    const refused = Object.keys(parsedForTypos.flags).filter(
+      (f) => f && !valueLike.has(f) && !writerAccepts.includes(f),
+    );
+    if (refused.length > 0) {
+      const named = refused.map((f) => {
+        const near = writerAccepts.find((a) => editDistance(f, a) <= 2);
+        return near ? `--${f} (did you mean --${near}?)` : `--${f}`;
+      });
+      fail(
+        `[mem] ${writeKey} does not take ${named.join(', ')} — nothing was written. ` +
+          `It takes: ${writerAccepts.map((a) => `--${a}`).join(' ')}`,
+      );
+      return;
+    }
   }
 
   // adopt / unadopt do pure filesystem work on ~/.claude/projects/<encoded>/memory/ —

@@ -141,6 +141,9 @@ describe('resolution base is the command, not the caller (R9 review, adversarial
     const other = join(root, 'other-install');
     mkdirSync(join(other, 'scripts'), { recursive: true });
     writeFileSync(join(other, 'scripts', 'hook-launcher.mjs'), '// launcher');
+    // Our package, as every install root has: without it the hook is not ours at all (an entry
+    // name not on the list, round 2 B16) and this case passes without resolving anything.
+    writeFileSync(join(other, 'package.json'), '{"name":"claude-mem-lite"}');
     // An entry name that exists ONLY under `other`. Using a name the beforeEach fixture
     // also creates under installDir makes this case pass for the wrong reason — which is
     // how the reviewer's first attempt at it went green, and mine after it.
@@ -218,6 +221,8 @@ describe('collectOrphanHookPaths sees the launcher entry argument', () => {
   it('reports BOTH when the launcher and the entry are missing', () => {
     const empty = join(root, 'nothing-here');
     mkdirSync(empty, { recursive: true });
+    // What marks the root ours once its scripts are gone; `gone.js` is on no entry list (round 2 B16).
+    writeFileSync(join(empty, 'package.json'), '{"name":"claude-mem-lite"}');
     const cmd = `node "${join(empty, 'scripts', 'hook-launcher.mjs')}" scripts/gone.js`;
     const s = { hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: cmd }] }] } };
     expect(collectOrphanHookPaths(s, empty).sort()).toEqual(

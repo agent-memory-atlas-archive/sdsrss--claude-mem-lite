@@ -97,6 +97,8 @@ describe('isMemHook leaves user hooks that share a script NAME with ours', () =>
       process.chdir(REPO); // holds scripts/hook-launcher.mjs and scripts/post-tool-use.sh
       expect(isMemHook(mk('bash scripts/post-tool-use.sh --fmt'))).toBe(false);
       expect(isMemHook(mk('bash ./scripts/pre-agent-inject.sh'))).toBe(false);
+      // Nor is a relative launcher's root the repo the installer stands in (round 2, B16).
+      expect(isMemHook(mk('node scripts/hook-launcher.mjs scripts/prettier.js'))).toBe(false);
     } finally {
       process.chdir(prev);
     }
@@ -204,13 +206,15 @@ describe('isMemHook leaves user hooks that share a script NAME with ours', () =>
     );
   });
   it('still matches an install outside a claude-mem-lite directory', () => {
-    // Launcher commands carry our entry shape whatever the directory is called.
+    // Launcher commands running one of our entries are ours whatever the directory is called.
     expect(isMemHook(mk('node "/data/mem/scripts/hook-launcher.mjs" hook.mjs session-start'))).toBe(true);
     expect(isMemHook(mk('node "/data/mem/scripts/hook-launcher.mjs" scripts/pre-tool-recall.js'))).toBe(true);
-    // A prefilter is ours when our launcher sits beside it — every install ships both.
+    // A prefilter is ours in a root that carries the product: every install root has our
+    // package.json beside the launcher (round 2, B16: a launcher alone is the user's too).
     const root = mkdtempSync(join(tmpdir(), 'cml-reloc-'));
     try {
       mkdirSync(join(root, 'scripts'));
+      writeFileSync(join(root, 'package.json'), '{"name":"claude-mem-lite"}');
       writeFileSync(join(root, 'scripts', 'hook-launcher.mjs'), '// stub');
       writeFileSync(join(root, 'scripts', 'post-tool-use.sh'), '# stub');
       expect(isMemHook(mk(`bash "${join(root, 'scripts', 'post-tool-use.sh')}"`))).toBe(true);
@@ -219,6 +223,71 @@ describe('isMemHook leaves user hooks that share a script NAME with ours', () =>
       rmSync(root, { recursive: true, force: true });
     }
     expect(isMemHook(mk('bash "${CLAUDE_PLUGIN_ROOT}/scripts/post-tool-use.sh"'))).toBe(true);
+  });
+});
+
+// E2E 2026-10-16 round 2 (install B16): the launcher clause was a shape test with no product
+// anchor, so on a machine that never installed the product cleanup-hooks removed a user's own
+// launcher-routed formatter and notifier, and a formatter sitting beside their own launcher.
+describe('a hook is ours only when the product or one of OUR entries anchors it', () => {
+  const withRoot = (fn) => {
+    const root = mkdtempSync(join(tmpdir(), 'cml-anchor-'));
+    try {
+      mkdirSync(join(root, 'scripts'));
+      writeFileSync(join(root, 'scripts', 'hook-launcher.mjs'), '// a launcher');
+      fn(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const ourPackage = (root) => writeFileSync(join(root, 'package.json'), '{"name":"claude-mem-lite"}');
+
+  it("a user's launcher of our layout running the user's own entry is not ours", () => {
+    expect(isMemHook(mk('node "$HOME/.claude/hooks/scripts/hook-launcher.mjs" scripts/prettier.js'))).toBe(
+      false,
+    );
+    expect(isMemHook(mk('node ~/.claude/hooks/scripts/hook-launcher.mjs hook.mjs notify'))).toBe(false);
+    withRoot((root) => {
+      writeFileSync(join(root, 'scripts', 'prettier.js'), '// mine');
+      const cmd = `node "${join(root, 'scripts', 'hook-launcher.mjs')}" scripts/prettier.js`;
+      expect(isMemHook(mk(cmd))).toBe(false);
+      // Nor does a settings file holding it vouch for that root.
+      expect(ourInstallRoots({ hooks: { Stop: [mk(cmd)] } }, {}).has(root)).toBe(false);
+    });
+  });
+
+  it('a launcher whose root carries our package is ours, whatever entry it runs', () => {
+    withRoot((root) => {
+      const cmd = `node "${join(root, 'scripts', 'hook-launcher.mjs')}" scripts/a-later-entry.js`;
+      writeFileSync(join(root, 'package.json'), '{"name":"someone-elses-tool"}');
+      expect(isMemHook(mk(cmd)), 'another package is not ours').toBe(false);
+      ourPackage(root);
+      expect(isMemHook(mk(cmd))).toBe(true);
+    });
+  });
+
+  it("a prefilter-named script beside the user's own launcher is not ours", () => {
+    withRoot((root) => {
+      writeFileSync(join(root, 'scripts', 'post-tool-use.sh'), '# mine');
+      const cmd = `bash "${join(root, 'scripts', 'post-tool-use.sh')}"`;
+      expect(isMemHook(mk(cmd))).toBe(false);
+      ourPackage(root);
+      expect(isMemHook(mk(cmd)), 'the same file in a root carrying our package').toBe(true);
+    });
+  });
+
+  // The entry list is what recognises a relocated install whose directory is gone, so every
+  // entry a release writes must be on it — read from the plugin manifest, whose entries
+  // install.mjs writes too (tests/audit-silent-20260814.test.mjs diffs the two).
+  it('every hooks/hooks.json launcher entry is ours under a root that is gone', () => {
+    const manifest = JSON.parse(readFileSync(join(REPO, 'hooks', 'hooks.json'), 'utf8'));
+    const cmds = Object.values(manifest.hooks)
+      .flat()
+      .flatMap((g) => g.hooks.map((h) => h.command))
+      .filter((c) => c.includes('hook-launcher.mjs'))
+      .map((c) => c.replaceAll('${CLAUDE_PLUGIN_ROOT}', '/gone/relocated-install'));
+    expect(cmds.length, 'premise: the manifest routes entries through the launcher').toBeGreaterThan(5);
+    for (const c of cmds) expect(isMemHook(mk(c)), c).toBe(true);
   });
 });
 
@@ -282,11 +351,47 @@ describe('cleanup-hooks keeps user hooks in and around our groups', () => {
       });
       expect(r.status).toBe(0);
       expect(r.stdout).toMatch(/Removed 1 claude-mem-lite hook configuration from/);
+      // Round 2 (install B16): the count alone left a wrongly removed user hook unnoticed.
+      expect(r.stdout).toContain(`Stop: ${ours}`);
+      expect(r.stdout).not.toContain('/u/log.sh');
       const after = JSON.parse(readFileSync(p, 'utf8'));
       expect(after.hooks.Stop).toEqual([
         { matcher: '*', hooks: [{ type: 'command', command: '/u/log.sh' }] },
       ]);
       expect(after.hooks.SessionEnd[0].hooks[0].command).toMatch(/export/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Round 2 (install B16), the tester's three hooks on a machine that never installed the product.
+  it('leaves user hooks that mirror our layout on a machine without the product', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cml-hookprune-b16-'));
+    try {
+      const home = join(root, 'home');
+      for (const d of ['.claude/hooks/scripts', 'dotfiles/scripts'])
+        mkdirSync(join(home, d), { recursive: true });
+      for (const f of ['.claude/hooks/scripts/hook-launcher.mjs', 'dotfiles/scripts/hook-launcher.mjs'])
+        writeFileSync(join(home, f), '// the user launcher');
+      writeFileSync(join(home, '.claude/hooks/scripts/prettier.js'), '// mine');
+      writeFileSync(join(home, 'dotfiles/scripts/post-tool-use.sh'), '# mine');
+      const commands = [
+        `node "${home}/.claude/hooks/scripts/hook-launcher.mjs" scripts/prettier.js`,
+        `node ${home}/.claude/hooks/scripts/hook-launcher.mjs hook.mjs notify`,
+        `bash "${home}/dotfiles/scripts/post-tool-use.sh"`,
+      ];
+      const p = join(home, '.claude', 'settings.json');
+      const before = JSON.stringify({
+        hooks: { PostToolUse: commands.map((command) => ({ hooks: [{ type: 'command', command }] })) },
+      });
+      writeFileSync(p, before);
+      const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'cleanup-hooks'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, CLAUDE_MEM_DIR: join(root, 'data'), MEM_NO_AUTO_ADOPT: '1' },
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/No claude-mem-lite hooks found/);
+      expect(readFileSync(p, 'utf8')).toBe(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1741,7 +1741,7 @@ async function uninstall() {
 
   // 2. Remove hooks from settings.json (match both npx and git-clone install paths)
   const settings = readSettings();
-  cleanupMemHooksFromSettings(settings);
+  const removedHooks = cleanupMemHooksFromSettings(settings);
 
   // 2b. Uninstall does NOT auto-unadopt — an adopted project may be in active use
   // in other Claude Code sessions, and adoption lives in EACH project's own
@@ -1799,6 +1799,7 @@ async function uninstall() {
   }
   writeSettings(settings);
   ok('Hooks and plugin settings cleaned');
+  for (const h of removedHooks) log(`  removed hook ${h}`);
 
   // 5. Clean plugin system registry files (only if no other marketplace plugins remain)
   const marketplaceDir = join(pluginsDir, 'marketplaces', marketplaceKey);
@@ -1957,11 +1958,17 @@ async function cleanupHooks() {
 
   const settings = readSettings();
   if (refuseUnwritableConfigHome('cleanup-hooks')) return;
-  const removed = cleanupMemHooksFromSettings(settings);
+  const removedHooks = cleanupMemHooksFromSettings(settings);
+  const removed = removedHooks.length;
 
   if (removed > 0) {
     writeSettings(settings);
-    ok(`Removed ${removed} claude-mem-lite hook configuration${removed === 1 ? '' : 's'} from settings.json`);
+    ok(
+      `Removed ${removed} claude-mem-lite hook configuration${removed === 1 ? '' : 's'} from settings.json:`,
+    );
+    // Named, not counted: a user hook taken for ours went unnoticed behind the count (E2E
+    // 2026-10-16 round 2, B16).
+    for (const h of removedHooks) log(`  ${h}`);
   } else {
     ok('No claude-mem-lite hooks found in settings.json');
   }
@@ -3794,15 +3801,16 @@ export function clearPluginDisabledMarkerForDirectInstall(settings) {
   return true;
 }
 
+/** @returns {string[]} `<event>: <command>` of each hook entry removed */
 function cleanupMemHooksFromSettings(settings) {
-  if (!settings?.hooks) return 0;
+  if (!settings?.hooks) return [];
 
-  let removed = 0;
+  const removed = [];
   const roots = ourInstallRoots(settings);
   for (const [event, configs] of Object.entries(settings.hooks)) {
     if (!Array.isArray(configs)) continue;
-    const { kept, removed: n } = stripMemHooks(configs, roots);
-    removed += n;
+    const { kept, commands } = stripMemHooks(configs, roots);
+    for (const c of commands) removed.push(`${event}: ${c}`);
     if (kept.length > 0) settings.hooks[event] = kept;
     else delete settings.hooks[event];
   }

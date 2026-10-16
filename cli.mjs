@@ -138,6 +138,20 @@ function explainImportFailure(e) {
   // Never reprint the parser's own output: the stack is what this exists to replace.
   if (e instanceof SyntaxError) {
     const at = fileFromError(e);
+    // A module cut short before its exports (or an old module under a new importer, which a killed
+    // swap leaves) loads with the export missing; the one file:// URL in that error is the
+    // IMPORTER's, an intact file. Name the module the quoted specifier resolves to (E2E 2026-10-16
+    // round 4, install NEW-2).
+    const lacking = String(e.message).match(
+      /module '(\.{1,2}\/[^']+)' does not provide an export named '([^']+)'/,
+    );
+    if (lacking && at) {
+      const { join, dirname } = process.getBuiltinModule('node:path');
+      explainBrokenInstall(
+        `this file is damaged or truncated: ${join(dirname(at), lacking[1])} (it lacks the export ` +
+          `${lacking[2]} that ${at} imports)`,
+      );
+    }
     explainBrokenInstall(`this file is damaged or truncated: ${at || 'one of its modules'}`);
   }
   throw e;

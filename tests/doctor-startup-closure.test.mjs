@@ -267,6 +267,22 @@ describe('the CLI entry explains a broken install instead of stack-tracing', () 
     expect(`${g.stdout}${g.stderr}`).toMatch(/npm install -g claude-mem-lite@latest --force/);
   });
 
+  // Round 4 (install NEW-2): a module cut short before its exports loads as a module with no
+  // exports, so the SyntaxError is "does not provide an export named …" and the only file:// URL
+  // in it is the IMPORTER's. The message named that intact file as the damaged one.
+  it('names the module that lacks an export, not the module that imports it', () => {
+    const root = buildCopyInstall(join(cliHome, 'cut-before-exports'));
+    const victim = join(root, 'lib', 'blank-text.mjs');
+    writeFileSync(victim, readFileSync(victim, 'utf8').slice(0, 200));
+    expect(readFileSync(victim, 'utf8')).not.toMatch(/export /);
+    const r = runCli(root, ['search', 'parser']);
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).toMatch(/This install is incomplete/);
+    expect(out).toContain(victim);
+    expect(out).not.toMatch(/damaged or truncated: \S*deferred-work\.mjs/);
+    expect(r.code).toBe(1);
+  });
+
   // Round 3 (install NEW-3): the explanation reached the install-family commands only; the
   // memory commands, the ones run every day, printed a raw ERR_MODULE_NOT_FOUND stack.
   it('a memory command on a tree missing a module explains it too', () => {

@@ -1,8 +1,10 @@
 // Integration tests for feature ① — "file intelligence" injection in
 // scripts/pre-tool-recall.js. On the first Read of a file this session, the hook
 // surfaces the file's approximate token size + a one-line summary so the agent
-// can decide to read fully, slice, or grep. Read-only; opt out with
-// CLAUDE_MEM_FILE_INTEL=0. The summary/size logic itself is unit-tested in
+// can decide to read fully, slice, or grep. Read-only; OPT-IN with
+// CLAUDE_MEM_FILE_INTEL=1 since the injection-budget change (the line is delivered next to the
+// tool result, so it cannot inform the read it rides on — docs/audits/
+// 20261016-injection-budget-baseline.md). The summary/size logic itself is unit-tested in
 // tests/file-intel.test.mjs — these tests pin the HOOK WIRING (when it fires,
 // when it stays silent, that Edit is unaffected).
 
@@ -67,6 +69,7 @@ describe('pre-tool-recall file intelligence (feature ①)', () => {
   const env = (extra = {}) => ({
     CLAUDE_MEM_DIR: tmpRoot,
     CLAUDE_PROJECT_DIR: projectDir,
+    CLAUDE_MEM_FILE_INTEL: '1',
     ...extra,
   });
 
@@ -145,5 +148,40 @@ describe('pre-tool-recall file intelligence (feature ①)', () => {
       env({ CLAUDE_MEM_FILE_INTEL: '0' }),
     );
     expect(stdout).toBe('');
+  });
+
+  it('is OFF by default: a large file with no lessons injects nothing', async () => {
+    const fp = join(projectDir, 'default-off.mjs');
+    writeFileSync(fp, BIG_CONTENT);
+
+    const { stdout } = await runScript(
+      { tool_name: 'Read', session_id: 's6', tool_input: { file_path: fp } },
+      env({ CLAUDE_MEM_FILE_INTEL: '' }),
+    );
+    expect(stdout).toBe('');
+  });
+
+  it('is OFF by default: a lesson still lands, without the size line', async () => {
+    const fp = join(projectDir, 'default-off-lesson.mjs');
+    writeFileSync(fp, BIG_CONTENT);
+    const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+    insertObs(db, {
+      sessionId: 'mem-intel',
+      project: 'parent--inteltest',
+      type: 'bugfix',
+      importance: 2,
+      title: 'default off bug',
+      lessonLearned: 'keep the widget root alive',
+      filesModified: `["${fp}"]`,
+    });
+    db.close();
+
+    const { stdout } = await runScript(
+      { tool_name: 'Read', session_id: 's7', tool_input: { file_path: fp } },
+      env({ CLAUDE_MEM_FILE_INTEL: '' }),
+    );
+    const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+    expect(ctx).toContain('keep the widget root alive');
+    expect(ctx).not.toContain('📄');
   });
 });

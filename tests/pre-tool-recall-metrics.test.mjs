@@ -86,14 +86,15 @@ describe('pre-tool-recall firing metrics (tier-1)', () => {
   it('records a file_intel event when ① fires (metrics enabled)', async () => {
     const fp = join(projectDir, 'm1.mjs');
     writeFileSync(fp, BIG);
-    await runScript(read(fp, 's1'), env({ CLAUDE_MEM_METRICS: '1' }));
+    // ① is opt-in since the injection-budget change (CLAUDE_MEM_FILE_INTEL=1).
+    await runScript(read(fp, 's1'), env({ CLAUDE_MEM_METRICS: '1', CLAUDE_MEM_FILE_INTEL: '1' }));
     expect(metricEvents()).toContain('file_intel');
   });
 
   it('records a reread_warn event when ② warns (metrics enabled)', async () => {
     const fp = join(projectDir, 'm2.mjs');
     writeFileSync(fp, BIG);
-    await runScript(read(fp, 's2'), env({ CLAUDE_MEM_METRICS: '1' })); // first read → file_intel
+    await runScript(read(fp, 's2'), env({ CLAUDE_MEM_METRICS: '1' })); // first read arms the re-read guard (① is opt-in now)
     await runScript(read(fp, 's2'), env({ CLAUDE_MEM_METRICS: '1' })); // repeat full read of unchanged file → reread_warn
     expect(metricEvents()).toContain('reread_warn');
   });
@@ -131,7 +132,8 @@ describe('pre-tool-recall firing metrics (tier-1)', () => {
   it('records NO pretool_recall event when nothing injects (metrics enabled)', async () => {
     const fp = join(projectDir, 'm5.mjs');
     writeFileSync(fp, BIG);
-    await runScript(read(fp, 's5'), env({ CLAUDE_MEM_METRICS: '1' })); // no obs seeded → file_intel only
+    // no obs seeded → file_intel only (① opted in, so something DID inject and the absence below is real)
+    await runScript(read(fp, 's5'), env({ CLAUDE_MEM_METRICS: '1', CLAUDE_MEM_FILE_INTEL: '1' }));
     const p = join(tmpRoot, 'metrics', `${today()}.jsonl`);
     const events = existsSync(p)
       ? readFileSync(p, 'utf8')

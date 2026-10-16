@@ -1154,7 +1154,7 @@ claude-mem-lite.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CLAUDE_MEM_ALL_TOOLS` | `1` exposes every registered MCP tool in `tools/list` instead of only the core ones (pre-v2.34.0 behavior). The 9 hidden tools stay callable by exact name either way; `mem_search_feedback` is registered only when search telemetry is enabled. | _(9 core)_ |
-| `CLAUDE_MEM_FILE_INTEL` | `0` disables the file-intel block injected before `Read` (past observations about the file you are about to open). | _(on)_ |
+| `CLAUDE_MEM_FILE_INTEL` | `1` turns on the file-intel line on the first `Read` of a large file (its approximate token size and a one-line summary). Off by default since the injection-budget change: the line reaches the model next to the read's result, so it cannot shape that read. | _(off)_ |
 | `CLAUDE_MEM_FILE_INTEL_MIN_TOKENS` | Files smaller than this stay silent — file-intel only pays for itself on large files. | `800` |
 | `CLAUDE_MEM_REREAD_GUARD` | `0` disables the warning when the same file is read twice in a session. Never fires on `offset`/`limit` paging. | _(on)_ |
 | `CLAUDE_MEM_REREAD_MIN_TOKENS` | Token floor below which the re-read guard stays silent. | `600` |

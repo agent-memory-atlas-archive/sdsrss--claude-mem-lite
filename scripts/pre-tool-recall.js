@@ -182,11 +182,20 @@ const ACTIVE_DIRECTIVE = SALIENCE_BIND
       : ACK_DIRECTIVE;
 const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file
 // Feature ① (file intelligence): on the first Read of a file each session, inject
-// its approximate token size + a one-line summary so the agent can decide to read
-// fully, slice, or grep. Read-only (Edit/Write already commit to the file). Default
-// ON; CLAUDE_MEM_FILE_INTEL=0 disables. Files below the token floor stay silent so
-// small reads carry no noise. Env names mirror schema.mjs CLAUDE_MEM_* convention (#8447).
-const FILE_INTEL_OFF = ['0', 'off', 'false', 'no'].includes(
+// its approximate token size + a one-line summary. Read-only (Edit/Write already commit
+// to the file). Files below the token floor stay silent. Env names mirror schema.mjs
+// CLAUDE_MEM_* convention (#8447).
+//
+// OPT-IN since the injection-budget change (docs/audits/20261016-injection-budget-baseline.md).
+// It was meant to let the agent "decide to read fully, slice, or grep", but PreToolUse
+// additionalContext is delivered next to the tool RESULT (Claude Code hooks reference, "Add
+// context for Claude"), so it can never change the call it rides on. On the frozen 52-session
+// corpus 92.3% of its 1,102 lines rode a call that was already a partial read (`sed -n`, grep,
+// Read with offset/limit), after a full Read the same file was sliced later in the turn LESS
+// often (39.7%, 25/63) than after a partial one (69.0%), and no reply named a size (0/1,102) —
+// at 1.57 KB/session, plus the framing header of the 426 blocks it was the only content of.
+// CLAUDE_MEM_FILE_INTEL=1 turns it back on.
+const FILE_INTEL_ON = ['1', 'on', 'true', 'yes'].includes(
   String(process.env.CLAUDE_MEM_FILE_INTEL || '').toLowerCase(),
 );
 // P2 (D#78): edge-level decay ENFORCEMENT — opt-in (default OFF, shadow-first).
@@ -824,10 +833,10 @@ try {
     // reliably renders across CC variants (sdscc drops plain-text stdout from PreToolUse).
     // suppressOutput:true hides it from transcript mode per CC hook docs.
     // Feature ①: file intelligence (size + summary) for the first Read of this
-    // file this session. Read-only; opt out via CLAUDE_MEM_FILE_INTEL=0. Never
+    // file this session. Read-only; opt-in via CLAUDE_MEM_FILE_INTEL=1. Never
     // throws — fileIntelFor returns null on unreadable/below-threshold files.
     let fileIntelLine = null;
-    if (isRead && !FILE_INTEL_OFF) {
+    if (isRead && FILE_INTEL_ON) {
       try {
         fileIntelLine = fileIntelFor(filePath, { minTokens: FILE_INTEL_MIN_TOKENS });
       } catch {}

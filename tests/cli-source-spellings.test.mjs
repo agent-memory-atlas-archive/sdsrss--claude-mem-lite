@@ -87,6 +87,17 @@ describe('a lone id positional outside --project stays a query', () => {
     const out = JSON.parse(r.stdout);
     expect(out.anchor?.title).toMatch(/Beta retries/);
     expect(out.anchor?.id).not.toBe(1);
+    // Round 3 (data nit): read as a search without a word; it now says so.
+    expect(r.stderr).toMatch(/is in another project/);
+  });
+
+  // Round 3 (data SB-2): --anchor N --project P centred P's window on another project's #N.
+  it('--anchor 1 --project app-b shows app-b around #1, never #1 itself', () => {
+    const r = cli('timeline', '--anchor', '1', '--project', 'app-b', '--json');
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.anchor?.id).not.toBe(1);
+    expect(out.anchor_note ?? out.anchorNote ?? '').toMatch(/app-b/);
   });
 });
 

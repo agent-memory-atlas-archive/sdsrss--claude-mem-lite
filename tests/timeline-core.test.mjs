@@ -135,6 +135,42 @@ describe('timeline-core', () => {
         expect(r.anchorId).toBe(foreign);
       });
 
+      // E2E 2026-10-16 round 3 (data SB-2, NEW-2): a bare id of another project centred the
+      // caller's window on THAT project's row, unlabelled; an E#/S# of another project anchored
+      // with a note that read as if it belonged here. The caller's project wins for every source
+      // type now — its nearest row to the anchor's time — and the note names both projects.
+      it('a bare id of another project anchors to the caller project at its time, saying so', () => {
+        const mine = addObs({ epochOffset: -60_000 });
+        const foreign = addForeign(-1_000);
+        const r = resolveAnchorToken(db, String(foreign), { project: 'test' });
+        expect(r.ok).toBe(true);
+        expect(r.anchorId).toBe(mine);
+        expect(r.crossProject).toBe(true);
+        expect(r.anchorNote).toMatch(/other/);
+        expect(r.anchorNote).toMatch(/test/);
+      });
+
+      it('an event of another project: the note names its project', () => {
+        const mine = addObs({ epochOffset: -60_000 });
+        const eid = Number(
+          db
+            .prepare(
+              "INSERT INTO events (project, event_type, title, body, importance, created_at_epoch) VALUES ('other', 'bug', 'e', 'b', 2, ?)",
+            )
+            .run(Date.now()).lastInsertRowid,
+        );
+        const r = resolveAnchorToken(db, `E#${eid}`, { project: 'test' });
+        expect(r.anchorId).toBe(mine);
+        expect(r.crossProject).toBe(true);
+        expect(r.anchorNote).toMatch(/other/);
+      });
+
+      it('an anchor inside the caller project is not cross-project', () => {
+        const mine = addObs();
+        const r = resolveAnchorToken(db, String(mine), { project: 'test' });
+        expect(r).toEqual({ ok: true, anchorId: mine, anchorNote: null });
+      });
+
       // The premise: without the scoping, the foreign row IS the globally nearest one, so
       // the three cases above would resolve to it. A fixture where it is not nearest would
       // pass whatever the code does.

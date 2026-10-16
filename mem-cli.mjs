@@ -1135,11 +1135,16 @@ function cmdTimeline(db, args) {
     parseIdToken(positional[0])
   ) {
     const resolved = resolveAnchorToken(db, positional[0], { project });
-    const inScope =
-      resolved.ok &&
-      (!project ||
-        db.prepare('SELECT project FROM observations WHERE id = ?').get(resolved.anchorId)?.project ===
-          project);
+    // crossProject: the token names a record of another project, which resolveAnchorToken
+    // answers with this project's nearest row in time. That is what --anchor asks for; a lone
+    // positional may be a search, so it stays one, and says why (E2E 2026-10-16 round 3).
+    const inScope = resolved.ok && !resolved.crossProject;
+    if (resolved.ok && resolved.crossProject) {
+      process.stderr.write(
+        `[mem] ${positional[0]} is in another project — searched ${project} for "${positional[0]}" instead; ` +
+          `--anchor ${positional[0]} shows ${project} around its time\n`,
+      );
+    }
     if (inScope) {
       anchorId = resolved.anchorId;
       anchorNote = resolved.anchorNote;

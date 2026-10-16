@@ -1,14 +1,17 @@
 #!/usr/bin/env node
-// Release gate (dev only, not shipped): would an update from <old> to <new> that is killed between
-// two renames leave an entry point that cannot load?
+// Release check (dev only, not shipped; no workflow or test runs it, the release runbook runs it by
+// hand before tagging): would an update from <old> to <new> that is killed between two renames
+// leave an entry point that cannot load?
 //
 // hook-update.mjs swaps SOURCE_FILES into the code home one rename at a time in the NEW release's
 // order (an older updater reads the list from the new tarball), then scripts/, then node_modules/.
 // A kill after entry i leaves SOURCE_FILES[0..i] at <new> and everything else at <old>. For every
-// split point this walks the static import graph (AST, not text) from each entry point and reports
-// a module that is missing or a named import its target does not export. The two shapes it
-// catches: a module swapped before something it imports (source-files.mjs states the order rule),
-// and an export removed that a not-yet-swapped module of <old> still imports.
+// split point this walks the import graph (AST, not text) from each entry point, static imports
+// and import() calls with a literal path alike, and reports a module that is missing or a named
+// import its target does not export (for a dynamic import, the names it destructures). The two
+// shapes it catches: a module swapped before something it imports (source-files.mjs states the
+// order rule), and an export removed that a not-yet-swapped module of <old> still imports. A
+// dynamic import fails only when its code path runs, so it is reported as such.
 //
 // Usage: node scripts/swap-mixed-tree.mjs <old-rev> [<new-rev> = HEAD; `.` = the working tree]
 // (exit 1 on any failure)
@@ -52,6 +55,37 @@ async function manifest(rev) {
   }
 }
 
+/**
+ * Every import() call with a literal path in the module, with the names it destructures:
+ * `const { a } = await import(...)` and `(await import(...)).a` name theirs; any other use (a
+ * namespace binding, `.then`) checks only that the module exists.
+ */
+function dynamicImports(ast) {
+  const out = [];
+  const stack = [[ast, null, null]];
+  while (stack.length > 0) {
+    const [n, parent, grand] = stack.pop();
+    if (n.type === 'ImportExpression' && n.source.type === 'Literal' && typeof n.source.value === 'string') {
+      let names = [];
+      if (parent?.type === 'AwaitExpression') {
+        if (grand?.type === 'VariableDeclarator' && grand.id.type === 'ObjectPattern')
+          names = grand.id.properties
+            .filter((q) => q.type === 'Property' && !q.computed)
+            .map((q) => q.key.name ?? q.key.value);
+        else if (grand?.type === 'MemberExpression' && !grand.computed) names = [grand.property.name];
+      }
+      out.push({ spec: n.source.value, names, dynamic: true });
+    }
+    for (const k of Object.keys(n)) {
+      const v = n[k];
+      if (Array.isArray(v)) {
+        for (const x of v) if (x && typeof x.type === 'string') stack.push([x, n, parent]);
+      } else if (v && typeof v.type === 'string') stack.push([v, n, parent]);
+    }
+  }
+  return out;
+}
+
 const parsed = new Map();
 function parse(rev, file) {
   const key = `${rev}:${file}`;
@@ -92,6 +126,7 @@ function parse(rev, file) {
       }
       if (n.type === 'ExportDefaultDeclaration') exports.add('default');
     }
+    for (const d of dynamicImports(ast)) imports.push(d);
     info = { imports, exports, star };
   } else if (show(rev, file) !== null) {
     info = { imports: [], exports: new Set(), star: [] }; // a non-JS file: present, imports nothing
@@ -134,14 +169,15 @@ function loadErrors(entry, i) {
     for (const im of p.imports) {
       if (!im.spec.startsWith('.')) continue;
       const target = posix.normalize(posix.join(posix.dirname(file), im.spec));
+      const how = im.dynamic ? 'import()s' : 'imports';
       if (!parse(revAt(target, i), target)) {
-        errors.push(`${file}@${revAt(file, i)}: module ${target} missing at ${revAt(target, i)}`);
+        errors.push(`${file}@${revAt(file, i)} ${how} ${target}, missing at ${revAt(target, i)}`);
         continue;
       }
       const ex = exportsOf(target, i);
       for (const name of im.names)
         if (!ex.has(name))
-          errors.push(`${file}@${revAt(file, i)} imports {${name}} that ${target}@${revAt(target, i)} lacks`);
+          errors.push(`${file}@${revAt(file, i)} ${how} {${name}} that ${target}@${revAt(target, i)} lacks`);
       stack.push(target);
     }
   }

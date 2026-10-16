@@ -7,18 +7,18 @@
 // THE ORDER IS THE UPDATE'S SWAP ORDER. hook-update.mjs renames these into the code home one by
 // one in this order (then scripts/, then node_modules/), and an older release's updater reads this
 // list from the NEW tarball, so the order binds the very update that ships it. Every entry comes
-// after each listed module it statically imports or re-exports from: a swap killed anywhere leaves
-// every swapped module's imports swapped too, and the not-yet-swapped ones (the previous release's)
-// importing from swapped files, which holds while no export an older entry point imports is
-// removed. Grouped by purpose, as it was before v6.28.0, a killed v6.27.0 -> v6.28.0 swap would
-// have left install.mjs (the repair path) unable to load at 77 of 168 split points (pre-tag review
-// 2026-10-16). tests/source-files-swap-order.test.mjs keeps the order; scripts/swap-mixed-tree.mjs
+// after each listed module it imports, re-exports from or import()s by a literal path: a swap
+// killed anywhere leaves every swapped module's imports swapped too, and the not-yet-swapped ones
+// (the previous release's) importing from swapped files, which holds while no export an older
+// entry point imports is removed. Grouped by purpose, as it was before v6.28.0, a killed v6.27.0 ->
+// v6.28.0 swap would have left install.mjs (the repair path) unable to load at 77 of 168 split
+// points (pre-tag review 2026-10-16). package.json goes last: the daily check reads the code
+// home's version from it, and re-enters the update (which replays a killed swap) only while it is
+// the older one. tests/source-files-swap-order.test.mjs keeps the order; scripts/swap-mixed-tree.mjs
 // checks a release pair's split points, removed exports included.
 export const SOURCE_FILES = [
-  'cli.mjs',
   'cli-path.mjs',
   'skip-tools.mjs',
-  'package.json',
   'package-lock.json',
   'skill.md',
   // Shared SOURCE_FILES manifest — self-reference so `~/.claude-mem-lite/` can
@@ -115,7 +115,6 @@ export const SOURCE_FILES = [
   'lib/hook-prune.mjs',
   'lib/proxy-fetch.mjs',
   'lib/anthropic-base-url.mjs',
-  'lib/llm-provider-probe.mjs',
   // P1 supply-chain: shared release-signing core (sha256 manifest + Ed25519
   // verify). Imported by hook-update.mjs (verify) + scripts/sign-release.mjs (CI
   // sign). Must ship or auto-update can't verify release signatures.
@@ -237,7 +236,6 @@ export const SOURCE_FILES = [
   'lib/file-edge-match.mjs',
   'bash-utils.mjs',
   'utils.mjs',
-  'rerank.mjs',
   'hook-update.mjs',
   'tier.mjs',
   'lib/doctor-benchmark.mjs',
@@ -252,7 +250,6 @@ export const SOURCE_FILES = [
   // ERR_MODULE_NOT_FOUND on every Stop.
   'lib/edge-attribution.mjs',
   'lib/cite-back-hint.mjs',
-  'cli/doctor.mjs',
   // D#124: Key Context marker write + injection_count bump, shared by
   // handleSessionStart and handlePreCompact. Statically imported by hook.mjs.
   'lib/keyctx-marker.mjs',
@@ -286,8 +283,11 @@ export const SOURCE_FILES = [
   'lib/db-backup.mjs',
   'lib/db-unusable.mjs',
   'schema.mjs',
+  'cli/doctor.mjs',
   'hook-memory.mjs',
   'haiku-client.mjs',
+  'lib/llm-provider-probe.mjs',
+  'rerank.mjs',
   'lib/llm-call.mjs',
   // comprehension-bridge forcing-function (CLAUDE_MEM_SALIENCE=bridge): rewrites
   // a recalled lesson into a check bound to the change hunk. Dynamic-imported by
@@ -295,7 +295,6 @@ export const SOURCE_FILES = [
   // hook can resolve it at runtime when a user opts in.
   'lib/lesson-bridge.mjs',
   'cli/fts-check.mjs',
-  'cli/activity.mjs',
   'server/fts-check.mjs',
   // Shared maintenance ops (decay/cleanup/boost/demote/dedup/purge/vacuum/rebuild).
   // Statically imported by mem-cli.mjs (cmdMaintain), server.mjs (mem_maintain),
@@ -328,7 +327,6 @@ export const SOURCE_FILES = [
   // server.mjs (mem_stats) and mem-cli.mjs (cmdStats); killed the ~80-line
   // byte-duplicated twin. Missing it breaks both stats surfaces on auto-update.
   'lib/stats-core.mjs',
-  'lib/save-enrich.mjs',
   // v2.70 deferred-work: carry-forward TODO primitives. Statically imported by
   // server.mjs (mem_defer family) and mem-cli.mjs (defer subcommand).
   'lib/deferred-work.mjs',
@@ -338,6 +336,7 @@ export const SOURCE_FILES = [
   'lib/save-observation.mjs',
   // Statically imported by hook-llm.mjs.
   'lib/activity.mjs',
+  'cli/activity.mjs',
   // /verify's write half (validate -> backup -> one transaction -> read-back -> undo).
   // Statically imported by cli/verify-apply.mjs.
   'lib/verify-apply-core.mjs',
@@ -354,6 +353,7 @@ export const SOURCE_FILES = [
   'lib/hook-telemetry.mjs',
   'hook-shared.mjs',
   'hook-semaphore.mjs',
+  'lib/save-enrich.mjs',
   'hook-episode.mjs',
   'hook-llm.mjs',
   'hook-handoff.mjs',
@@ -372,6 +372,8 @@ export const SOURCE_FILES = [
   'lib/export-columns.mjs',
   'server.mjs',
   'mem-cli.mjs',
+  'cli.mjs',
+  'package.json',
 ];
 
 /**

@@ -797,7 +797,7 @@ export const tools = [
       'USE when:\n' +
       '  - Hook-injected context shows #NN and you need the full narrative/lesson\n' +
       '  - A mem_search hit looks relevant and you need the supporting detail\n' +
-      '  - For session (S#) or prompt (P#) hits, pass source="session" or "prompt"\n' +
+      '  - Pass ids as printed (#N, E#N, S#N, P#N, D#N); each prefix routes itself, so source is rarely needed\n' +
       '\n' +
       'On miss, response includes "Try: …" hint listing other sources the ID lives in.\n' +
       '\n' +

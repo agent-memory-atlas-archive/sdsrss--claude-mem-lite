@@ -3,12 +3,21 @@
 // empty answer, and nothing says why. These pin the corrected text and the two argument aliases;
 // the real-model A/B behind each change is tasks/specs/d367-tool-descriptions.md.
 import { describe, it, expect } from 'vitest';
-import { memSearchSchema } from '../tool-schemas.mjs';
+import { tools, memSearchSchema } from '../tool-schemas.mjs';
+
+const descriptionOf = (name) => tools.find((t) => t.name === name).description;
 
 describe('mem_search query (P2-8)', () => {
   it('does not claim FTS5 syntax, and names what the sanitiser drops', () => {
     const text = memSearchSchema.query.description;
     expect(text).not.toMatch(/FTS5 syntax/);
     for (const op of ['NOT', '-term', 'prefix*', 'column:', '"phrase"']) expect(text).toContain(op);
+  });
+});
+
+describe('mem_get (P2-10)', () => {
+  it('no longer tells the model to pass source for S#/P# hits', () => {
+    expect(descriptionOf('mem_get')).not.toMatch(/pass source=/);
+    expect(descriptionOf('mem_get')).toMatch(/each prefix routes itself/);
   });
 });

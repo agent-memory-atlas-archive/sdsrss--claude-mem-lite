@@ -62,10 +62,14 @@ leaves unpaired tags"）。
 **各项改动在这份语料上触发到了没有**：
 
 - 64 KiB 截窗：触发 0 次。24581 个工具事件里没有一个输出超过 65536 字节。
-  尺子读的是 transcript 里给模型看的 `content`，Claude Code 会把它截短；钩子收到的 `tool_response`
-  对应 transcript 行里的 `toolUseResult`。但在这份语料的主线程上，10477 个 Bash 结果的
-  `toolUseResult` stdout+stderr 也没有一个超过 64 KiB（比 `content` 长 100 字符以上的有 114 个，
-  最多长 28,425 字符）。所以截窗这一项只能靠"调用同一个函数"保证一致，没有实测到；
+  原因是 transcript 里根本存不下大输出，不是大输出不存在。尺子读的是给模型看的 `content`；
+  输出太大时，Claude Code 把它另存成文件（transcript 行里有 `persistedOutputSize`），
+  `content` 只留约 2 KB 预览，`toolUseResult.stdout` 也截到 30,000 字符以内。
+  这份语料的主线程上有 114 个 Bash 输出是这样另存的，其中 85 个超过 64 KiB
+  （84 个在 64 KiB 到 PostToolUse 前置过滤器的 256 KiB 上限之间），最大 1,347,605 字节。
+  钩子收到的 `tool_response` 是不是完整输出，没有测过。所以截窗这一项只能靠"调用同一个函数"保证一致，没有实测到。
+  （上一版这里写的是"`toolUseResult` 也没有一个超过 64 KiB"，那是把截短后的 `toolUseResult` 当成了完整输出，
+  第二轮评审指出后改正；`persistedOutputSize` 的计数已复现。）
 - `projectDir`：只在项目本身位于 `/tmp/` 下时才影响 `isScratchCommandPath`。这个项目不在 `/tmp/` 下，所以 B → C 为 0，和预期一致；
 - 脱敏：改动了 30/1671 个窗口的诊断文本，只算主线程条目（闸门读的就是这部分）是 24 个；
   `desc` 被改动的有 1 个窗口，在 subagent 条目里。结果因此变化的只有上面那 1 个事件。
@@ -86,7 +90,7 @@ leaves unpaired tags"）。
 这次对齐的是每个条目的 worker 字段和 `desc`：计算它们的函数和参数现在和钩子一样。
 条目本身从哪些事件来、读的是什么文本，仍然不同：
 
-- `files` 故意用 `legacyFilePaths`，也就是历史事件存下来时用的旧提取规则（见文件头），
+- `files` 故意用 `legacyFilePaths`，也就是历史事件存下来时用的旧提取规则（见这个函数自己的注释），
   因为尺子要按存下来的 `file_paths` 去匹配窗口；
 - 输入文本是 transcript 里给模型看的 `content`，不是钩子收到的 `tool_response`（transcript 行里的 `toolUseResult`）。
   一个没有输出的 Bash 调用在 `content` 里是占位文本 `(Bash completed with no output)`（31 个字符），
@@ -94,6 +98,7 @@ leaves unpaired tags"）。
   这份语料的主线程上有 73 个这样的调用。
 
 改成读 `toolUseResult` 并按钩子的 `normalizeToolResponse` 规则处理，已记为延后项（D#337）。
+这样改也拿不回上面那 114 个另存的输出：它们的 `toolUseResult` 同样是截短的，要读另存的文件。
 
 ## 顺带发现：可达性自检在被清理过的语料上会失败（两版相同，与本次改动无关）
 

@@ -19,7 +19,7 @@
 4. OpenRouter 文档（provider-selection 页，2026-10-15 读）说 `tools`、`response_format`（含结构化输出）、
    `verbosity` 是选 provider 时的软偏好：模型的 provider 里只有部分支持时，请求只发给支持的那些。
    Bedrock 列了 `response_format`，没列 `structured_outputs`，这条软偏好按哪一个算，文档没写。
-   D#330 保持未决：需要一个没有 provider 限制的账号来测，而且修法要先去掉 `temperature`。
+   D#330 保持未决（之后改记为 D#331）：需要一个没有 provider 限制的账号来测，而且修法要先去掉 `temperature`。
 
 ## 端点表（`GET /api/v1/models/anthropic/claude-haiku-5.5/endpoints`，2026-10-15T22:2xZ，无需 key）
 
@@ -85,19 +85,19 @@ rows -> /tmp/claude-1000/-home-ai-dev-claude-mem-lite/d888a8f3-388b-42a6-ab4e-4a
   ~~~~
 
 - 端点表来自 `curl https://openrouter.ai/api/v1/models/anthropic/claude-haiku-5.5/endpoints` 的输出。
-  每个端点的 supported_parameters 原样如下（`sp=` 后面是参数列表）：
+  那条命令每个端点打印一行：`provider_name | tag | status | $pricing.prompt（每 token 美元）| sp=supported_parameters`。原样如下：
 
   ~~~~text
-  Google | google-vertex/global | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
-  Claude Platform on AWS | claude-on-aws | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
-  Azure | azure/global | sp=reasoning,include_reasoning,structured_outputs,max_tokens,max_completion_tokens,tools,tool_choice,response_format,verbosity,stop,reasoning_effort
-  Anthropic | anthropic | sp=reasoning,include_reasoning,max_tokens,stop,tools,tool_choice,structured_outputs,response_format,verbosity,reasoning_effort
-  Amazon Bedrock | amazon-bedrock | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
-  Google | google-vertex/europe | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
-  Google | google-vertex/us | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
-  Azure | azure/us | sp=reasoning,include_reasoning,structured_outputs,max_tokens,max_completion_tokens,tools,tool_choice,response_format,verbosity,stop,reasoning_effort
-  Amazon Bedrock | amazon-bedrock/us-east-1 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
-  Amazon Bedrock | amazon-bedrock/eu-west-1 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  Google | google-vertex/global | 0 | $0.0000001 | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
+  Claude Platform on AWS | claude-on-aws | 0 | $0.0000001 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  Azure | azure/global | 0 | $0.0000001 | sp=reasoning,include_reasoning,structured_outputs,max_tokens,max_completion_tokens,tools,tool_choice,response_format,verbosity,stop,reasoning_effort
+  Anthropic | anthropic | 0 | $0.0000001 | sp=reasoning,include_reasoning,max_tokens,stop,tools,tool_choice,structured_outputs,response_format,verbosity,reasoning_effort
+  Amazon Bedrock | amazon-bedrock | 0 | $0.0000001 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  Google | google-vertex/europe | 0 | $0.00000011 | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
+  Google | google-vertex/us | 0 | $0.00000011 | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
+  Azure | azure/us | 0 | $0.00000011 | sp=reasoning,include_reasoning,structured_outputs,max_tokens,max_completion_tokens,tools,tool_choice,response_format,verbosity,stop,reasoning_effort
+  Amazon Bedrock | amazon-bedrock/us-east-1 | 0 | $0.00000011 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  Amazon Bedrock | amazon-bedrock/eu-west-1 | 0 | $0.00000011 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
   ~~~~
 
 `req-params` 组 404 的 routing_funnel（原样）：

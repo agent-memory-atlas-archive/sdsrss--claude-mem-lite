@@ -25,14 +25,21 @@ export function jaccardSimilarityCjk(a, b) {
   // The bigrams only stand in for a CJK sentence's words. A Latin identifier or number glued into
   // it stays one token among them, so 修复了redis连接池泄漏 / 修复了mysql连接池泄漏 read 0.75 and the
   // second, a different fact, was dropped as a duplicate (pre-tag review 2026-10-16). When the two
-  // texts' Latin runs differ, they are scored as jaccardSimilarity scores them.
+  // texts' Latin runs differ, they are scored as jaccardSimilarity scores them. NFKC folds the
+  // full-width forms an IME types (node２２) into the runs they are.
   if (a && b && (HAS_CJK_RUN_RE.test(a) || HAS_CJK_RUN_RE.test(b)) && !sameSet(latinRuns(a), latinRuns(b))) {
     return jaccardOfTokens(a, b, false);
   }
   return jaccardOfTokens(a, b, true);
 }
 
-const latinRuns = (s) => new Set(s.toLowerCase().match(/[a-z0-9]+/g) || []);
+const latinRuns = (s) =>
+  new Set(
+    s
+      .normalize('NFKC')
+      .toLowerCase()
+      .match(/[a-z0-9]+/g) || [],
+  );
 const sameSet = (x, y) => x.size === y.size && [...x].every((v) => y.has(v));
 
 function jaccardOfTokens(a, b, cjk) {

@@ -44,6 +44,8 @@ describe('save-time dedup on CJK text', () => {
   // into the sentence is one token, so in a short sentence the identifier — the part that tells
   // the two facts apart — barely moved the score: 修复了redis连接池泄漏 then 修复了mysql连接池泄漏
   // read 0.75 and the second was dropped ("Skipped: similar", exit 0), where v6.27.0 stored both.
+  // The full-width forms an IME types in full-width mode are the same identifiers (round-2 review:
+  // node２２ / node２０ read 0.778 and were deduped).
   it.each([
     ['修复了redis连接池泄漏', '修复了mysql连接池泄漏'],
     ['升级到node22之后构建失败', '升级到node20之后构建失败'],
@@ -51,6 +53,8 @@ describe('save-time dedup on CJK text', () => {
       '升级到node22之后构建失败，原因是原生模块没有重新编译',
       '升级到node20之后构建失败，原因是原生模块没有重新编译',
     ],
+    ['升级到node２２之后构建失败', '升级到node２０之后构建失败'],
+    ['修复了ｒｅｄｉｓ连接池泄漏', '修复了ｍｙｓｑｌ连接池泄漏'],
   ])('a CJK save naming another identifier or number is saved: %s / %s', (a, b) => {
     expect(save({ content: a }).kind).toBe('saved');
     expect(save({ content: b }).kind).toBe('saved');

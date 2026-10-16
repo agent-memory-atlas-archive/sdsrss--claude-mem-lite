@@ -1287,9 +1287,14 @@ async function dogfoodAutoAdopt() {
         stdio: 'pipe',
       }).trim();
       const isDogfood = /github\.com[:/]sdsrss\/claude-mem-lite(\.git)?$/i.test(remote);
-      if (isDogfood) {
-        const { cmdAdopt } = await importFromInstall('adopt-cli.mjs');
-        cmdAdopt([]);
+      // The clone itself only. cmdAdopt targets the directory it runs in, and every README
+      // git-clone install has this remote: run from the user's own repo (or from a Claude
+      // session, where CLAUDE_PROJECT_DIR names the session's project), the block landed in
+      // THAT committed CLAUDE.md (E2E 2026-10-16).
+      const adopt = isDogfood ? await importFromInstall('adopt-cli.mjs') : null;
+      const target = adopt ? (adopt.detectCwd?.() ?? process.cwd()) : null;
+      if (adopt && sameDir(target, PROJECT_DIR)) {
+        adopt.cmdAdopt([]);
         ok('Invited-memory: auto-adopt for claude-mem-lite dogfood repo');
       }
     } catch {

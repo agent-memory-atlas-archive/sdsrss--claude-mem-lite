@@ -291,6 +291,36 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(existsSync(join(dataDir, 'scripts', 'prompt-search-utils.mjs'))).toBe(true);
   });
 
+  // E2E 2026-10-16 (install P2-1): every README git-clone install has the sdsrss remote, so the
+  // dogfood auto-adopt fired for it, and cmdAdopt targets the directory install is RUN from:
+  // run from the user's own repo, the block landed in their committed CLAUDE.md. It now adopts
+  // the clone itself only. MEM_NO_AUTO_ADOPT is deliberately unset here (the branch must run);
+  // cwd and PWD both point into the sandbox, so a regression writes there, not into this repo.
+  it('the dogfood auto-adopt does not write into the repo install is run from', () => {
+    const other = join(home, 'work', 'app');
+    mkdirSync(join(other, '.git'), { recursive: true });
+    writeFileSync(join(other, 'CLAUDE.md'), '# Team rules\n');
+    const env = {
+      ...process.env,
+      HOME: home,
+      PWD: other,
+      CLAUDE_MEM_SKIP_REPOS: '1',
+      PATH: `${binDir}:${process.env.PATH}`,
+    };
+    delete env.MEM_NO_AUTO_ADOPT;
+    delete env.CLAUDE_PROJECT_DIR;
+    const out = execFileSync(process.execPath, [INSTALL_PATH, 'install', '--dev', '--skip-repos'], {
+      cwd: other,
+      env,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 30000,
+    });
+    expect(out).not.toMatch(/auto-adopt for claude-mem-lite dogfood repo/);
+    expect(readFileSync(join(other, 'CLAUDE.md'), 'utf8')).toBe('# Team rules\n');
+    expect(existsSync(join(other, '.claude'))).toBe(false);
+  });
+
   it('install registers hooks in settings.json with all 5 events', () => {
     runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
 

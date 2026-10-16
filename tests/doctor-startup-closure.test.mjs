@@ -267,6 +267,20 @@ describe('the CLI entry explains a broken install instead of stack-tracing', () 
     expect(`${g.stdout}${g.stderr}`).toMatch(/npm install -g claude-mem-lite@latest --force/);
   });
 
+  // Round 3 (install NEW-3): the explanation reached the install-family commands only; the
+  // memory commands, the ones run every day, printed a raw ERR_MODULE_NOT_FOUND stack.
+  it('a memory command on a tree missing a module explains it too', () => {
+    const root = buildCopyInstall(join(cliHome, 'mem-cmd-tree'));
+    rmSync(join(root, 'lib', 'atomic-write.mjs'));
+    for (const args of [['search', 'parser'], ['recent'], ['save', 'hello']]) {
+      const r = runCli(root, args);
+      const out = `${r.stdout}${r.stderr}`;
+      expect(out, args.join(' ')).toMatch(/This install is incomplete/);
+      expect(out, args.join(' ')).not.toMatch(/node:internal/);
+      expect(r.code).toBe(1);
+    }
+  });
+
   // Round 2 (install B12b): the npm -g line came first for every other tree. It repairs neither
   // a plugin-cache tree (Claude Code's /plugin reinstall does) nor a git clone (git does).
   it('names /plugin for a plugin-cache tree and git for a clone, not npm -g', () => {

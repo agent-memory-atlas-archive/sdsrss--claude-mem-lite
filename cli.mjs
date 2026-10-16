@@ -130,23 +130,44 @@ async function isDoctorDbMode() {
   }
 }
 
+/** A broken tree's import failure, explained instead of thrown as a stack; other errors rethrow. */
+function explainImportFailure(e) {
+  if (e?.code === 'ERR_MODULE_NOT_FOUND') {
+    explainBrokenInstall(`it is missing: ${fileFromError(e) || 'a module'}`);
+  }
+  // Never reprint the parser's own output: the stack is what this exists to replace.
+  if (e instanceof SyntaxError) {
+    const at = fileFromError(e);
+    explainBrokenInstall(`this file is damaged or truncated: ${at || 'one of its modules'}`);
+  }
+  throw e;
+}
+
 async function loadInstaller() {
   let mod;
   try {
     mod = await import('./install.mjs');
   } catch (e) {
-    if (e?.code === 'ERR_MODULE_NOT_FOUND') {
-      explainBrokenInstall(`it is missing: ${fileFromError(e) || 'a module'}`);
-    }
-    // Never reprint the parser's own output: the stack is what this exists to replace.
-    if (e instanceof SyntaxError) {
-      const at = fileFromError(e);
-      explainBrokenInstall(`this file is damaged or truncated: ${at || 'one of its modules'}`);
-    }
-    throw e;
+    explainImportFailure(e);
   }
   if (typeof mod?.main !== 'function') {
     explainBrokenInstall('install.mjs loaded but exports no `main` — it is truncated');
+  }
+  return mod;
+}
+
+// The memory commands too: only the install family was explained, and `search`, `save`,
+// `recent` — the commands run every day — printed a raw ERR_MODULE_NOT_FOUND stack on a tree
+// missing a module (E2E 2026-10-16 round 3).
+async function loadMemCli() {
+  let mod;
+  try {
+    mod = await import('./mem-cli.mjs');
+  } catch (e) {
+    explainImportFailure(e);
+  }
+  if (typeof mod?.run !== 'function') {
+    explainBrokenInstall('mem-cli.mjs loaded but exports no `run` — it is truncated');
   }
   return mod;
 }
@@ -216,7 +237,7 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'));
   process.stdout.write(`claude-mem-lite v${pkg.version}\n`);
 } else if (cmd === '--help' || cmd === '-h') {
-  const { run } = await import('./mem-cli.mjs');
+  const { run } = await loadMemCli();
   await run(['help']);
 } else if (cmd === 'doctor' && (await isDoctorDbMode())) {
   // Per #8217: the DB-layer doctor modes (--benchmark / --metrics / --session-audit,
@@ -228,10 +249,10 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   // and rejected by cli/doctor.mjs. Gating on the three DB-layer flags keeps --json
   // (and any future install-doctor flag) on the install path. Adding a NEW DB-layer
   // mode requires extending this list — a deliberate trade for a working --json.
-  const { run } = await import('./mem-cli.mjs');
+  const { run } = await loadMemCli();
   await run(process.argv.slice(2));
 } else if (CLI_COMMANDS.has(cmd)) {
-  const { run } = await import('./mem-cli.mjs');
+  const { run } = await loadMemCli();
   await run(process.argv.slice(2));
 } else if (!cmd) {
   // No command: show CLI help if installed, install help if not — except under npx, where a
@@ -249,7 +270,7 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   const dataDir = resolveDataDir(process.env.CLAUDE_MEM_DIR);
   const dbPath = join(dataDir, 'claude-mem-lite.db');
   if (existsSync(dbPath) && !isNpxRun(dirname(fileURLToPath(import.meta.url)))) {
-    const { run } = await import('./mem-cli.mjs');
+    const { run } = await loadMemCli();
     await run(['help']);
   } else {
     const { main } = await loadInstaller();

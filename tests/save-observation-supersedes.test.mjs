@@ -251,6 +251,31 @@ describe('saveObservation supersedes', () => {
     ).toBeNull();
   });
 
+  // The one-step form of the correction flow: save, notice it is wrong, save the fix with
+  // supersedes=[that id] inside five minutes. A correction is textually close to what it
+  // corrects, so the dedup window matched the very row being retired, skipped the save and
+  // left the wrong memory live (E2E 2026-10-16, MCP P1-2).
+  it('a correction is not deduped against a row it names in supersedes', () => {
+    const wrong = saveObservation(db, {
+      content: 'The flaky upload test fails because the S3 mock returns 503 on the first multipart part',
+      title: 'Flaky upload cause',
+      type: 'bugfix',
+      project: 'test',
+    });
+    expect(wrong.kind).toBe('saved');
+    const fix = saveObservation(db, {
+      content: 'The flaky upload test fails because the S3 mock returns 500 on the second multipart part',
+      title: 'Flaky upload cause (corrected)',
+      type: 'bugfix',
+      project: 'test',
+      supersedes: [wrong.id],
+    });
+    expect(fix.kind).toBe('saved');
+    expect(fix.supersededIds).toEqual([wrong.id]);
+    const row = db.prepare('SELECT superseded_by FROM observations WHERE id = ?').get(wrong.id);
+    expect(row.superseded_by).toBe(fix.id);
+  });
+
   // CLASS-LEVEL SWEEP. `supersedeSkipped` is only worth anything if a face
   // actually renders it, and both faces have TWO return paths that need it —
   // the saved path and the dedup short-circuit, which returns before the saved

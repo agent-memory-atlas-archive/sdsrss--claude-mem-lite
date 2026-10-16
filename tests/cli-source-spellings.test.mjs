@@ -47,6 +47,15 @@ describe('--source accepts both spellings', () => {
     expect(cli('search', 'redis', '--source', 'obsrv').status).not.toBe(0);
     expect(cli('get', '1', '--source', 'obsrv').status).not.toBe(0);
   });
+  // Round 2 (data nit): each refusal still listed one spelling, though both are taken.
+  it('the refusal lists both spellings', () => {
+    expect(cli('search', 'redis', '--source', 'obsrv').stderr).toMatch(/obs.*observations|observations.*obs/);
+    expect(cli('get', '1', '--source', 'obsrv').stderr).toMatch(/obs.*observations|observations.*obs/);
+  });
+  // Round 2 (data nit): `activity promote --min-importance 2x` was read as 2 (bare parseInt).
+  it('activity promote refuses a malformed --min-importance', () => {
+    expect(cli('activity', 'promote', '--min-importance', '2x').status).toBe(1);
+  });
 });
 
 // E2E 2026-10-16 (cli F17): `timeline 1` sent "1" to the query search and answered "No anchor

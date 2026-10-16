@@ -227,7 +227,9 @@ export async function cmdActivity(db, args) {
     // P2(b): promote insight-bearing events (body present, importance>=N) into
     // searchable observations. Preview by default; --execute applies. One-time
     // backfill — the source events are marked promoted (idempotent re-runs).
-    const minImp = flags['min-importance'] !== undefined ? parseInt(flags['min-importance'], 10) : 2;
+    // Whole digits only: a bare parseInt read `2x` as 2.
+    const rawMin = flags['min-importance'];
+    const minImp = rawMin === undefined ? 2 : /^\d+$/.test(String(rawMin)) ? Number(rawMin) : NaN;
     if (isNaN(minImp) || minImp < 1 || minImp > 3) {
       fail('[mem] activity promote: --min-importance must be 1, 2, or 3.');
       return;

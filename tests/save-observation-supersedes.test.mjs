@@ -599,6 +599,23 @@ describe('saveObservation blank title', () => {
       db.close();
     }
   });
+
+  // Round 2 (data nit): trim() keeps zero-width characters, so a title of U+200B alone was
+  // stored as an invisible title.
+  it('a title of zero-width characters only is treated as absent', () => {
+    const db = createTestDb();
+    try {
+      const r = saveObservation(db, {
+        content: 'Zero width title content about herons',
+        title: '\u200b\u200d\ufeff',
+        project: 'test',
+      });
+      const row = db.prepare('SELECT title FROM observations WHERE id = ?').get(r.id);
+      expect(row.title).toBe('Zero width title content about herons');
+    } finally {
+      db.close();
+    }
+  });
 });
 
 // E2E 2026-10-16 (MCP P2-5): for CJK text the stored `text` column carries appended bigrams,

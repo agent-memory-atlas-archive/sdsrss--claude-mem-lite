@@ -314,7 +314,9 @@ async function cmdSearch(db, args, { llm } = {}) {
   }
 
   if (source && !['observations', 'sessions', 'prompts', 'events'].includes(source)) {
-    fail(`[mem] Invalid --source "${source}". Use: observations, sessions, prompts, events`);
+    fail(
+      `[mem] Invalid --source "${source}". Use: observations|obs, sessions|session, prompts|prompt, events|event`,
+    );
     return;
   }
 
@@ -930,7 +932,9 @@ function cmdGet(db, args) {
   const explicit = flags.source ? (GET_SOURCE_SPELLINGS[flags.source] ?? flags.source) : flags.source;
   const validSources = new Set(['obs', 'session', 'prompt', 'event']);
   if (explicit && !validSources.has(explicit)) {
-    fail(`[mem] Invalid --source "${explicit}". Use: obs, session, prompt, event`);
+    fail(
+      `[mem] Invalid --source "${explicit}". Use: obs|observations, session|sessions, prompt|prompts, event|events`,
+    );
     return;
   }
 

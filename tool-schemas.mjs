@@ -748,7 +748,7 @@ export const tools = [
       'List the most recent observations for the current project, newest first.\n' +
       '\n' +
       'DO NOT use when:\n' +
-      '  - You are searching for a topic (use mem_search — this tool does no filtering)\n' +
+      '  - You are searching for a topic (use mem_search — this tool filters by type and date, not by words)\n' +
       '  - SessionStart already printed a recent-activity block (it is the same data)\n' +
       '  - You need details for a specific ID (use mem_get)\n' +
       '\n' +

@@ -21,3 +21,10 @@ describe('mem_get (P2-10)', () => {
     expect(descriptionOf('mem_get')).toMatch(/each prefix routes itself/);
   });
 });
+
+describe('mem_recent (P2-20)', () => {
+  it('does not say it does no filtering', () => {
+    expect(descriptionOf('mem_recent')).not.toMatch(/does no filtering/);
+    expect(descriptionOf('mem_recent')).toMatch(/filters by type and date, not by words/);
+  });
+});

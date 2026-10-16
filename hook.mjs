@@ -52,7 +52,7 @@ import {
 import { inferProjectDir } from './project-utils.mjs';
 import { extractFileTargets } from './bash-utils.mjs';
 import { isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
-import { readHookStdin } from './lib/hook-stdin.mjs';
+import { readHookStdin, salvageTruncatedHookEvent, TOOL_INPUT_FILE_MAX_BYTES } from './lib/hook-stdin.mjs';
 // Aliased: `acquireLock` from hook-episode.mjs below is the episode buffer's own
 // (argument-less) lock — a different mutex with a different staleness policy.
 import { acquireLock as acquireProcLock } from './lib/proc-lock.mjs';
@@ -706,8 +706,15 @@ function flushEpisodeGroup(ep, db) {
 async function handlePostToolUse() {
   let raw;
   try {
-    raw = await readStdin();
-  } catch {
+    // The whole-file tier, like PreToolUse: an Edit carries the whole file in
+    // tool_response.originalFile, and the 256 KB tier dropped every edit of a file past it.
+    raw = await readHookStdin({
+      timeoutMs: 3000,
+      maxBytes: TOOL_INPUT_FILE_MAX_BYTES,
+      rejectOnTimeout: true,
+    });
+  } catch (err) {
+    if (err?.message === 'timeout') debugLog('WARN', 'readStdin', 'stdin timeout after 3s — event dropped');
     return;
   }
 
@@ -715,9 +722,20 @@ async function handlePostToolUse() {
   try {
     hookData = JSON.parse(raw.text);
   } catch {
-    // Truncated JSON — try to salvage tool_name from the prefix
-    if (raw.truncated) {
-      debugLog('WARN', 'postToolUse', 'stdin truncated at 256KB, attempting salvage');
+    // A payload cut short — past this tier, or by the bash prefilter's own byte cap, which
+    // leaves node a prefix it cannot tell is cut (raw.truncated is only set past OUR cap).
+    // Salvage what the prefix holds, path and session included, rather than tool_name alone.
+    const s = salvageTruncatedHookEvent(raw.text);
+    if (s?.toolName) {
+      debugLog('WARN', 'postToolUse', 'stdin cut short, salvaged tool name, path and session');
+      hookData = {
+        tool_name: s.toolName,
+        tool_input: { file_path: s.filePath },
+        tool_response: '(truncated)',
+        ...(s.sessionId ? { session_id: s.sessionId } : {}),
+        ...(s.agentId ? { agent_id: s.agentId } : {}),
+      };
+    } else {
       const m = raw.text.match(/"tool_name"\s*:\s*"([^"]+)"/);
       if (m) hookData = { tool_name: m[1], tool_input: {}, tool_response: '(truncated)' };
     }

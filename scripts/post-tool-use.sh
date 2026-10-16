@@ -48,8 +48,11 @@ _mem_plugin_disabled() {
   [[ "$_settings" =~ \"claude-mem-lite@sdsrss\"[[:space:]]*:[[:space:]]*false ]]
 }
 
-# Read stdin (tool hook JSON)
-input=$(head -c 262144)
+# Read stdin (tool hook JSON). The whole-file tier (8 MB, lib/hook-stdin.mjs
+# TOOL_INPUT_FILE_MAX_BYTES), not 256 KB: an Edit carries the whole file in
+# tool_response.originalFile and a Write in tool_input.content, and a 256 KB prefix handed to
+# node failed to parse, so every edit of a file over ~250 KB vanished (E2E 2026-10-16).
+input=$(head -c 8388608)
 
 # Extract tool_name via bash regex — no subprocess
 if [[ "$input" =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then

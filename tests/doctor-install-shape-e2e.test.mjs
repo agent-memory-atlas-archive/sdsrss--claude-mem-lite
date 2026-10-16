@@ -28,6 +28,7 @@ import {
   chmodSync,
   cpSync,
   readFileSync,
+  symlinkSync,
 } from 'fs';
 import { createRequire } from 'module';
 import { tmpdir } from 'os';
@@ -51,6 +52,12 @@ function withRealDeps(root) {
   writeFileSync(
     join(pkgDir, 'index.js'),
     `module.exports = require(${JSON.stringify(join(REPO, 'node_modules', 'better-sqlite3'))});\n`,
+  );
+  // doctor also asks each root whether its MCP server can load the SDK (E2E 2026-10-16), so a
+  // healthy fixture carries that dependency too; its own imports resolve through the realpath.
+  symlinkSync(
+    join(REPO, 'node_modules', '@modelcontextprotocol'),
+    join(root, 'node_modules', '@modelcontextprotocol'),
   );
   return root;
 }
@@ -621,4 +628,26 @@ describe('rebuild-binding: repairs every broken tree, and says so honestly', () 
     // re-spawn npm every 6h forever (2026-08-13).
     expect(existsSync(marker), 'marker cleared while a tree was still broken').toBe(true);
   }, 120_000);
+});
+
+// E2E 2026-10-16 (install P1-6): doctor imported the MCP SDK into its own process, which
+// answers for the tree doctor runs from. A managed install whose node_modules lost the SDK
+// read "✓ verified" while its server.mjs could not start; asked per code home it is a ✗ that
+// names the home and its repair.
+describe('doctor: the MCP SDK is checked in each code home', () => {
+  it('a managed install without the SDK is red, naming it', () => {
+    const root = makeManagedInstall();
+    rmSync(join(root, 'node_modules', '@modelcontextprotocol'), { recursive: true, force: true });
+    const r = run('doctor', { CLAUDE_MEM_DIR: join(home, 'data') });
+    const sdk = failLines(r.stdout).filter((l) => l.includes('@modelcontextprotocol/sdk'));
+    expect(sdk.length, r.stdout).toBe(1);
+    expect(sdk[0]).toMatch(/managed install/);
+    expect(r.stdout).toMatch(/repair: cd .*\.claude-mem-lite && npm install --omit=dev/);
+  });
+
+  it('a managed install with the SDK is green', () => {
+    makeManagedInstall();
+    const r = run('doctor', { CLAUDE_MEM_DIR: join(home, 'data') });
+    expect(r.stdout).toMatch(/✓ @modelcontextprotocol\/sdk: verified in .*managed install/);
+  });
 });

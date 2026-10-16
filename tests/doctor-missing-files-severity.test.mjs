@@ -57,6 +57,13 @@ function doctorOn({
   mkdirSync(join(installDir, 'lib'), { recursive: true });
   mkdirSync(join(installDir, 'scripts'), { recursive: true });
   mkdirSync(join(installDir, 'runtime'), { recursive: true });
+  // doctor asks each code home whether its MCP server can load the SDK; give this one the
+  // dependency so the issue counts compared below stay about the managed files alone.
+  mkdirSync(join(installDir, 'node_modules'), { recursive: true });
+  symlinkSync(
+    resolve(import.meta.dirname, '../node_modules/@modelcontextprotocol'),
+    join(installDir, 'node_modules', '@modelcontextprotocol'),
+  );
   // Entry points present in the shape under test; every lib/* module deliberately absent —
   // that is the fact whose SEVERITY differs between the shapes.
   for (const rel of ENTRIES) {
@@ -66,7 +73,12 @@ function doctorOn({
   }
   for (const rel of extraSymlinks) {
     mkdirSync(dirname(join(installDir, rel)), { recursive: true });
-    symlinkSync(REPO_FILE, join(installDir, rel));
+    // package.json is read by Node as the module-type config of every file under it, and
+    // the SDK probe imports through it: a JS file in its place reads "Invalid package config".
+    symlinkSync(
+      rel === 'package.json' ? resolve(import.meta.dirname, '../package.json') : REPO_FILE,
+      join(installDir, rel),
+    );
   }
   for (const rel of extraCopies) writeFileSync(join(installDir, rel), '// copy\n');
   // doctor exits non-zero when it finds issues — that is its contract, so read stdout

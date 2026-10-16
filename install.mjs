@@ -96,7 +96,12 @@ import {
   probeBindingInFreshProcess,
   flattenBindingError,
 } from './lib/binding-probe.mjs';
-import { detectInstallShape, probeRuntimeRoots, hasAnyManagedCode } from './lib/install-shape.mjs';
+import {
+  detectInstallShape,
+  probeRuntimeRoots,
+  probeRuntimeRootsSdk,
+  hasAnyManagedCode,
+} from './lib/install-shape.mjs';
 import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 // A namespace, not named imports: a swap renames files one at a time, so for a moment this file can
@@ -2333,12 +2338,29 @@ async function doctor() {
     }
   }
 
-  try {
-    await import('@modelcontextprotocol/sdk/server/mcp.js');
-    ok('@modelcontextprotocol/sdk: verified (import OK)');
-  } catch (e) {
-    fail(`@modelcontextprotocol/sdk: import failed (${e.message})`);
-    issues++;
+  // Per runtime root, like the binding check: importing the SDK into THIS process answered for
+  // the tree doctor runs from, not the one the MCP server starts from (E2E 2026-10-16).
+  const sdkProbes = probeRuntimeRootsSdk(shape.runtimeRoots);
+  const brokenSdk = sdkProbes.filter((r) => !r.ok);
+  if (sdkProbes.length === 0) {
+    // No runtime root at all: the better-sqlite3 line above already failed; ask this tree.
+    try {
+      await import('@modelcontextprotocol/sdk/server/mcp.js');
+      ok('@modelcontextprotocol/sdk: verified (import OK)');
+    } catch (e) {
+      fail(`@modelcontextprotocol/sdk: import failed (${e.message})`);
+      issues++;
+    }
+  } else if (brokenSdk.length === 0) {
+    ok(
+      `@modelcontextprotocol/sdk: verified in ${sdkProbes.length} install${sdkProbes.length === 1 ? '' : 's'} (${sdkProbes.map((r) => r.label).join('; ')})`,
+    );
+  } else {
+    for (const b of brokenSdk) {
+      fail(`@modelcontextprotocol/sdk unusable in ${b.label}: ${b.error} — its MCP server cannot start`);
+      log(`    repair: ${b.repair}`);
+      issues++;
+    }
   }
 
   // Entry points. These live in ~/.claude-mem-lite ONLY in the install.mjs-managed

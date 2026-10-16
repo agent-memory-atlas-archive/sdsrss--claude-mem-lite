@@ -23,6 +23,7 @@
     "benchmark/hook-latency.mjs",
     "benchmark/haiku-model-ab.mjs",
     "benchmark/lesson-blind-read.mjs",
+    "benchmark/injection-budget.mjs",
     "scripts/*.mjs",
     "scripts/*.js",
     "tests/**/*.test.mjs"

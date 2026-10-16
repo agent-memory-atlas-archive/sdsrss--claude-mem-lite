@@ -494,6 +494,19 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(existsSync(link)).toBe(false);
   });
 
+  // E2E 2026-10-16 (install P2-3): with no `claude` on PATH (Claude Code reached through a shell
+  // alias, say) the removal threw ENOENT, the catch swallowed it, and uninstall reported "MCP
+  // server not found or already removed" while ~/.claude.json still registered it.
+  it('uninstall says it could not run claude, instead of "not found"', () => {
+    const nodeOnly = join(home, 'node-only-bin');
+    mkdirSync(nodeOnly, { recursive: true });
+    symlinkSync(process.execPath, join(nodeOnly, 'node'));
+    const out = runInstall('uninstall', home, [], { PATH: `${nodeOnly}:/usr/bin:/bin` });
+    expect(out).not.toMatch(/not found or already removed/);
+    expect(out).toMatch(/could not run `claude`/);
+    expect(out).toMatch(/claude mcp remove -s user mem-lite/);
+  });
+
   it('uninstall --purge removes data directory', () => {
     runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
 

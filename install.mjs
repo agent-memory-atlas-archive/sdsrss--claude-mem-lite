@@ -1531,14 +1531,26 @@ async function uninstall() {
   let removedAny = false;
   const owned = ownedUserMcpNames();
   noteForeignMem(owned.foreignMem);
+  // Three outcomes, not two: "could not run claude" is not "not registered" (E2E 2026-10-16 —
+  // with no `claude` on PATH the ENOENT was swallowed and uninstall said "not found" while the
+  // registration stayed, pointing at a server --purge was about to delete).
+  let claudeMissing = false;
   for (const name of owned.names) {
     try {
       execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
       ok(`MCP server removed: ${name}`);
       removedAny = true;
-    } catch {}
+    } catch (e) {
+      if (e?.code === 'ENOENT') {
+        claudeMissing = true;
+        break;
+      }
+    }
   }
-  if (!removedAny) warn('MCP server not found or already removed');
+  if (claudeMissing) {
+    warn('MCP server: could not run `claude` (not on PATH), so its registration was not removed. Run:');
+    for (const name of owned.names) log(`    claude mcp remove -s user ${name}`);
+  } else if (!removedAny) warn('MCP server not found or already removed');
 
   // 1b. Remove CLI symlink
   for (const binDir of CLI_BIN_DIRS) {

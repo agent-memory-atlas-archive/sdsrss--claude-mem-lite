@@ -14,11 +14,16 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { makeFixtureTracker } from './test-helpers.mjs';
-import { HOOK_DB_BUSY_TIMEOUT_MS, UPS_DB_BUSY_TIMEOUT_MS } from '../lib/time-constants.mjs';
+import {
+  DB_BUSY_TIMEOUT_MS,
+  HOOK_DB_BUSY_TIMEOUT_MS,
+  UPS_DB_BUSY_TIMEOUT_MS,
+} from '../lib/time-constants.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOST_TIMEOUT_MS = 5000; // hooks.json: user-prompt, stop, post-tool-failure, pre-compact
 const UPS_TIMEOUT_MS = 2000; // hooks.json: scripts/user-prompt-search.js
+const SESSION_START_TIMEOUT_MS = 15000; // hooks.json: hook.mjs session-start
 const LOCK_MS = 8000;
 const fixtures = makeFixtureTracker();
 afterAll(() => fixtures.disposeAll());
@@ -126,7 +131,7 @@ function hook(event, payload, timeout = HOST_TIMEOUT_MS) {
 }
 
 /** Another process holding the write lock, as a long maintain/import/restore would. */
-function holdWriteLock() {
+function holdWriteLock(lockMs = LOCK_MS) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -136,7 +141,7 @@ function holdWriteLock() {
          const db = new D(${JSON.stringify(dbPath)});
          db.exec('BEGIN IMMEDIATE');
          process.stdout.write('locked\\n');
-         setTimeout(() => { db.exec('ROLLBACK'); db.close(); }, ${LOCK_MS});`,
+         setTimeout(() => { db.exec('ROLLBACK'); db.close(); }, ${lockMs});`,
       ],
       { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'] },
     );
@@ -145,8 +150,8 @@ function holdWriteLock() {
   });
 }
 
-async function underLock(fn) {
-  const locker = await holdWriteLock();
+async function underLock(fn, lockMs) {
+  const locker = await holdWriteLock(lockMs);
   try {
     return fn();
   } finally {
@@ -191,6 +196,40 @@ describe('a hook under a write lock held past its host timeout', () => {
     expect(r.stdout).toContain('invoice totals reduce crashed on undefined lines');
     expect(injectedCount(r.stdout)).toBeGreaterThan(1);
     expect(r.ms).toBeLessThan(2 * UPS_DB_BUSY_TIMEOUT_MS);
+  });
+
+  // D#381: SessionStart keeps the 5 s wait (its host timeout is 15 s), but the first write that
+  // ran out of it threw out of the whole handler: exit 0 with 0 B on stdout, so the session began
+  // with no memory context at all. After a /clear it has two more writes to make (the ending
+  // session's handoff and fast summary), and each one waiting 5 s in turn reaches the host's
+  // 15 s; the lock outlasts two waits here, so a run that waited for each write, or for the lock
+  // to clear, cannot pass the bound.
+  it('SessionStart after a /clear still emits the memory context, after one lock wait', async () => {
+    const free = hook('session-start', { session_id: 'cc-ss', source: 'startup' }, SESSION_START_TIMEOUT_MS);
+    expect(free.status).toBe(0);
+    expect(free.stdout, 'premise: SessionStart shows the lesson').toContain('invoice totals reduce');
+    // Work in the session the /clear ends, so it has a handoff to write.
+    hook('user-prompt', { session_id: 'cc-ss', prompt: PROMPT });
+    hook('post-tool-use', {
+      session_id: 'cc-ss',
+      tool_name: 'Edit',
+      tool_input: {
+        file_path: join(projectDir, 'src/invoice.js'),
+        old_string: 'l.reduce',
+        new_string: '(l ?? []).reduce',
+      },
+      tool_response: { success: true },
+    });
+    hook('stop', { session_id: 'cc-ss' });
+    const lockMs = 2 * DB_BUSY_TIMEOUT_MS + 2000;
+    const r = await underLock(
+      () => hook('session-start', { session_id: 'cc-ss', source: 'clear' }, SESSION_START_TIMEOUT_MS),
+      lockMs,
+    );
+    expect(r.signal, `killed at the host timeout after ${r.ms} ms`).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('invoice totals reduce');
+    expect(r.ms).toBeLessThan(1.5 * DB_BUSY_TIMEOUT_MS);
   });
 
   it('Stop exits inside its timeout', async () => {

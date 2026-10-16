@@ -3322,7 +3322,18 @@ async function handleSessionStart() {
 
     rekeyProjectOnce(db, project);
 
-    runSessionStartDbMutations(db, { sessionId, project, prevSessionId, now });
+    try {
+      runSessionStartDbMutations(db, { sessionId, project, prevSessionId, now });
+    } catch (e) {
+      // Another process holds the write lock past DB_BUSY_TIMEOUT_MS (a long maintain vacuum,
+      // fts-check rebuild, import or restore). This used to end the handler with no context at all
+      // (D#381). The session row is lost either way, and the first prompt inserts it; the context
+      // below reads the store and does not need it. Stop waiting for this lock, so each
+      // best-effort write that follows fails at once instead of waiting 5 s again.
+      if (!isDbBusyError(e)) throw e;
+      debugLog('WARN', 'session-start', 'database locked by another process; session row not recorded');
+      db.pragma('busy_timeout = 0');
+    }
 
     scheduleSessionStartAutoMaintain(project);
 

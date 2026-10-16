@@ -2,6 +2,45 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.26.1 — a keyed reply that is not a whole answer goes to the `claude -p` fallback
+
+Fixes only; no schema change, no migration, no new setting. Without `ANTHROPIC_API_KEY` or
+`OPENROUTER_API_KEY` nothing here applies: every call already goes through `claude -p`.
+
+- **Fix: a reply that was cut off, filtered or refused now goes to the `claude -p` fallback.**
+  The plugin's callers parse a fixed-shape JSON answer out of the reply (the opt-in lesson bridge
+  keeps its first line instead). When the reply stopped at its token limit (direct API
+  `stop_reason: "max_tokens"`, OpenRouter `finish_reason: "length"`), the plain-text calls passed
+  the cut-off text on as the answer, and the JSON calls returned nothing without trying the
+  fallback, which has no such limit. A reply whose JSON was already complete before the cut now
+  goes to the fallback too, although it could have been used. The same
+  now holds for an OpenRouter reply whose `finish_reason` is `content_filter` or `error`, whose
+  `native_finish_reason` is `refusal`, or whose choice carries an `error`; such a reply could
+  pass partial text on as the answer. These follow OpenRouter's API reference; its refusal
+  reply for Anthropic models has not been observed live. The direct API also read only the
+  first text block of a reply, so an empty first block sent the call to the fallback and
+  dropped the answer in the block after it; text blocks are now joined.
+- **Fix: Claude Haiku 5.5 under an OpenRouter variant or a Bedrock-form ID gets the request
+  written for it.** v6.26.0 sent that request (thinking off, a structured output on deep search's
+  query rewrite and, on the direct API, no `temperature`) only to the exact IDs
+  `claude-haiku-5-5` and `anthropic/claude-haiku-5.5`. It now also goes to OpenRouter variants
+  such as `OPENROUTER_MODEL=anthropic/claude-haiku-5.5:nitro` or `:floor`, which were sent with
+  thinking on and no structured output, and to `anthropic.claude-haiku-5-5`, the form a gateway
+  may use, with or without a cross-region prefix such as `us.`, `global.` or GovCloud's
+  `us-gov.`, which was sent with thinking on, no structured output and `temperature: 0`, a value
+  Claude Haiku 5.5 rejects. A gateway deployment name is still not guessed at: if your
+  deployment is Claude Haiku 5.5 under a name of your own, name it `claude-haiku-5-5`, as the
+  v6.26.0 notes say.
+- **OpenRouter: Claude Haiku 5.5 is no longer sent `temperature`.** OpenRouter dropped it in
+  transit (no endpoint serving that model lists the parameter); the request now leaves it out,
+  as the direct API's does. Other OpenRouter models are still sent `temperature: 0`.
+- Internal, no behaviour change: the hook builds each episode entry's fields for the background
+  summarizer through one function, `workerEntryFields`, which the benchmark replays now call too.
+  Not in the npm package: golden files now pin the episode prompt's text, and
+  `benchmark/key-events-input-replay.mjs` computes each entry's summarizer fields with the
+  hook's function and options; on this repository's sessions its readings moved for 1 of 1096
+  events (`docs/measurement/rulers.md`).
+
 ## v6.26.0 — haiku-tier LLM calls made with an API key move to Claude Haiku 5.5
 
 **Upgrade note: with `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` set, the `haiku` tier now

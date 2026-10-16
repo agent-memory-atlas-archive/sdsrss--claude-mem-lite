@@ -122,6 +122,14 @@ const asArrayOrRaw = (v) => {
   return v;
 };
 
+// asArrayOrRaw keeps a blank or `"[]"` string as a string so the schema refuses it; without this
+// the refusal read "expected array, received string", which names the wrong problem: the caller
+// sent the shape the field takes, only empty (E2E 2026-10-16 round 4, data R-1). Error text is
+// not part of the advertised JSON schema, so the schemas stay byte-identical.
+const emptyListError = (whenEmpty) => (iss) =>
+  typeof iss.input === 'string' && /^\s*(\[\s*\])?\s*$/.test(iss.input) ? whenEmpty : undefined;
+const MUST_NOT_BE_EMPTY = emptyListError('must not be empty: pass a non-empty list, or omit the field');
+
 // Coerce mixed ID tokens (#N / P#N / S#N / D#N / bare N) for mem_get. Accepts:
 //   - native arrays: [1, "P#2", "#3"]
 //   - single number: 1
@@ -325,7 +333,7 @@ export const memDeleteSchema = {
   // toJSONSchema({io:'input'}) reads a ZodPipe's input side as accepting `undefined` and
   // drops the key, so the advertised contract said optional while the server said required.
   // See tests/tool-schemas.test.mjs, which grades every field against runtime ground truth.
-  ids: boundedIntArray(z.array(z.number().int()).min(1).max(50))
+  ids: boundedIntArray(z.array(z.number().int(), { error: MUST_NOT_BE_EMPTY }).min(1).max(50))
     .nonoptional()
     .describe('Observation IDs to delete'),
   confirm: coerceBool.describe('false=preview what will be deleted, true=execute deletion'),
@@ -357,6 +365,7 @@ const coerceDeferredTokens = z.preprocess(
         z.number().int().positive(),
         z.string().regex(/^D#\d+$/, 'expected D#N (raw id) or positive integer (ordinal)'),
       ]),
+      { error: MUST_NOT_BE_EMPTY },
     )
     .min(1)
     .max(20),
@@ -384,6 +393,7 @@ const coerceSupersedes = z.preprocess(
         z.number().int().positive(),
         z.string().regex(/^[Ee]#?\d+$/, 'expected a positive observation id or E#<n> for an event'),
       ]),
+      { error: MUST_NOT_BE_EMPTY },
     )
     .min(1)
     .max(20),
@@ -456,7 +466,12 @@ export const memOptimizeSchema = {
     .default('preview')
     .describe('preview=scan candidates, run=execute with limits, run_all=bypass gates'),
   tasks: z
-    .preprocess(asArrayOrRaw, z.array(z.enum(['re-enrich', 'normalize', 'cluster-merge', 'smart-compress'])))
+    .preprocess(
+      asArrayOrRaw,
+      z.array(z.enum(['re-enrich', 'normalize', 'cluster-merge', 'smart-compress']), {
+        error: emptyListError('must not be empty: pass a non-empty list, or omit tasks to run every task'),
+      }),
+    )
     .optional()
     .describe('Which optimization tasks to run (default: all)'),
   max_items: boundedInt(z.number().int().min(1).max(100))
@@ -486,7 +501,13 @@ export const memMaintainSchema = {
   operations: z
     .preprocess(
       asArrayOrRaw,
-      z.array(z.enum(['dedup', 'decay', 'cleanup', 'boost', 'demote_pinned', 'purge_stale', 'vacuum'])),
+      z.array(z.enum(['dedup', 'decay', 'cleanup', 'boost', 'demote_pinned', 'purge_stale', 'vacuum']), {
+        // The handler's own sentence for a native []; the default set is not named here, since
+        // importing it would pull lib/maintain-core.mjs's load graph into every schema reader.
+        error: emptyListError(
+          'operations array is empty. Pass a non-empty list or omit operations to use the default set.',
+        ),
+      }),
     )
     .optional()
     .describe(
@@ -503,7 +524,7 @@ export const memMaintainSchema = {
             )
           : v;
       },
-      z.array(z.array(z.number().int()).min(2)),
+      z.array(z.array(z.number().int()).min(2), { error: MUST_NOT_BE_EMPTY }),
     )
     .optional()
     .describe('For dedup: [[keepId, removeId1, removeId2], ...] — first ID in each group is kept'),

@@ -786,6 +786,27 @@ describe('array fields accept the serialised shapes their siblings accept', () =
       ).toBe(false);
     }
   });
+  // Round 4 (data R-1): the refusal read "expected array, received string", which names the wrong
+  // problem — the caller sent the JSON-array shape the field takes, only empty.
+  it('an empty list string is refused as empty, not as the wrong type', () => {
+    const msg = (schema, args) =>
+      parseSchema(schema, args)
+        .error.issues.map((i) => i.message)
+        .join(' | ');
+    for (const empty of ['[]', ' [ ] ', '']) {
+      expect(msg(memMaintainSchema, { action: 'execute', operations: empty })).toMatch(
+        /operations array is empty/,
+      );
+      expect(msg(memOptimizeSchema, { action: 'run', tasks: empty })).toMatch(/must not be empty/);
+      expect(msg(memMaintainSchema, { action: 'execute', merge_ids: empty })).toMatch(/must not be empty/);
+      expect(msg(memDeleteSchema, { ids: empty, confirm: true })).toMatch(/must not be empty/);
+      expect(msg(memSaveSchema, { content: 'x', supersedes: empty })).toMatch(/must not be empty/);
+      expect(msg(memSaveSchema, { content: 'x', closes_deferred: empty })).toMatch(/must not be empty/);
+    }
+    // A string of the wrong kind keeps the type error.
+    expect(msg(memOptimizeSchema, { action: 'run', tasks: 7 })).toMatch(/invalid|expected/i);
+    expect(msg(memOptimizeSchema, { action: 'run', tasks: 7 })).not.toMatch(/must not be empty/);
+  });
   // Round 3 (data NEW-4): mem_delete took digits only, the one id-list argument without #N or a
   // JSON-array string.
   it('mem_delete ids: #N and a JSON-array string', () => {

@@ -1747,6 +1747,7 @@ server.registerTool(
   },
   safeHandler(async (args) => {
     const action = args.action || 'preview';
+    if (args.project) args = { ...args, project: resolveProject(args.project) };
 
     if (action === 'preview') {
       const preview = optimizePreview(db, { project: args.project, detail: args.detail === true });

@@ -121,3 +121,14 @@ describe('project-name resolution in the long-lived server', () => {
     expect(second.text).toMatch(/in project "b--delta"/);
   });
 });
+
+describe('mem_optimize resolves a short project name like its sibling tools', () => {
+  // Every other project-taking handler resolves `opt` to `b--opt`; mem_optimize passed the
+  // raw string, so preview counted 0 candidates and `run` silently processed nothing.
+  it('preview reports and filters on the canonical project', async () => {
+    insertForeignRow('b--opt', 'Optimize probe row about retry budgets');
+    const r = await call('mem_optimize', { project: 'opt' });
+    expect(r.isError).toBe(false);
+    expect(r.text).toContain('Project filter: b--opt');
+  });
+});

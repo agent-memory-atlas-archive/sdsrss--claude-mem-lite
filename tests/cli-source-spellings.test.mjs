@@ -64,3 +64,15 @@ describe('timeline takes a lone id positional as the anchor', () => {
     expect(r.stdout).toContain('Redis pool exhaustion');
   });
 });
+
+// E2E 2026-10-16 (cli F16): `--` parsed as an empty-named flag, so text starting with `--` could
+// not be saved positionally.
+describe('a bare -- ends the options', () => {
+  it('save -- "--dry-run …" saves the text', () => {
+    const r = cli('save', '--force', '--', '--dry-run is ignored by deploy.sh');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/Saved #\d+/);
+    expect(r.stderr).not.toMatch(/Unknown flag/);
+    expect(cli('search', 'deploy.sh').stdout).toContain('--dry-run is ignored by deploy.sh');
+  });
+});

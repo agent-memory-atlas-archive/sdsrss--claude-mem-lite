@@ -53,6 +53,13 @@ export function parseArgs(argv) {
   let i = 0;
   while (i < argv.length) {
     const arg = argv[i];
+    // POSIX end of options: everything after a bare `--` is positional, so text that starts
+    // with `--` can be saved (`save -- "--dry-run is ignored by deploy.sh"`). It parsed as an
+    // empty-named flag and the text after it as a flag of its own (E2E 2026-10-16).
+    if (arg === '--') {
+      positional.push(...argv.slice(i + 1));
+      break;
+    }
     if (arg.startsWith('--')) {
       const body = arg.slice(2);
       // `--key=value` (GNU long-option form). Split on the FIRST '=' so values that

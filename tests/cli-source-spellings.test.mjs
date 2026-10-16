@@ -170,6 +170,11 @@ describe('round-3 CLI wording', () => {
     expect(r.stderr).not.toMatch(/Unknown flag/);
     expect(r.stderr).toMatch(/save -- "/);
   });
+  // Round 4 (data NEW-A): the hint named `<cmd> -- "…"`, which fails for a subcommand.
+  it('the bare -- hint keeps a subcommand in place', () => {
+    const r = cli('defer', 'add', '--no-verify skips the pre-commit hooks');
+    expect(r.stderr).toMatch(/defer add -- "/);
+  });
   it('the activity promote refusal names --min-importance', () => {
     const r = cli('activity', 'promote', '--execute', '--importance', '2');
     expect(r.status).toBe(1);

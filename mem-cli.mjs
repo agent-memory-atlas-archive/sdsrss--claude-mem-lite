@@ -2729,7 +2729,7 @@ function cmdMaintain(db, args) {
     out(formatPendingPurgeLine(stats.pendingPurge));
     if (stats.explicitToShowAgain > 0)
       out(
-        `  Explicit saves an earlier release hid (the next execute shows them again): ${stats.explicitToShowAgain}`,
+        `  Explicit saves an earlier release hid (the next execute that runs decay — the default set does — shows them again): ${stats.explicitToShowAgain}`,
       );
     if (duplicates.length > 0) {
       const autoMergeable = duplicates.filter((d) => parseFloat(d.similarity) >= AUTO_MERGE_THRESHOLD);
@@ -3936,9 +3936,13 @@ async function runDispatch(argv) {
     // No flag name holds a space: this is a value or text that starts with `-`, and "Unknown
     // flag … ignored" before the refusal that follows contradicted it (E2E 2026-10-16 round 3).
     if (/\s/.test(flag)) {
+      // The words before the first flag, so a subcommand keeps its place: `defer add -- "…"`, not
+      // `defer -- "…"`, which fails (E2E 2026-10-16 round 4).
+      const firstFlag = cmdArgs.findIndex((a) => a.startsWith('-'));
+      const dashLead = [cmd, ...cmdArgs.slice(0, firstFlag < 0 ? 0 : firstFlag)].join(' ');
       process.stderr.write(
         `[mem] "--${flag}" was read as a flag. A value that starts with - is written --name="…"; ` +
-          `text that starts with - goes after a bare --: ${cmd} -- "…"\n`,
+          `text that starts with - goes after a bare --: ${dashLead} -- "…"\n`,
       );
       continue;
     }

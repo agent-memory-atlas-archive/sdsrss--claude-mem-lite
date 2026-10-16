@@ -1669,7 +1669,7 @@ server.registerTool(
         formatPendingPurgeLine(stats.pendingPurge),
         ...(stats.explicitToShowAgain > 0
           ? [
-              `  Explicit saves an earlier release hid (the next execute shows them again): ${stats.explicitToShowAgain}`,
+              `  Explicit saves an earlier release hid (the next execute that runs decay — the default set does — shows them again): ${stats.explicitToShowAgain}`,
             ]
           : []),
       ];

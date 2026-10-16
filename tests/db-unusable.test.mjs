@@ -208,6 +208,14 @@ describe('shouldRecordOnce', () => {
     expect(shouldRecordOnce(dir, DB_UNUSABLE_MARKER_PREFIX, 'projA', 'k')).toBe(false);
   });
 
+  // E2E 2026-10-16 round 2 (hooks NEW-3): non-ASCII letters became `_`, so `项目--博客` and
+  // `项目--商城` shared one marker and one project's record silenced the other's for an hour.
+  it('keys two non-ASCII projects of the same shape apart', () => {
+    const dir = tmp('once-cjk-');
+    expect(shouldRecordOnce(dir, DB_UNUSABLE_MARKER_PREFIX, '项目--博客', 'k')).toBe(true);
+    expect(shouldRecordOnce(dir, DB_UNUSABLE_MARKER_PREFIX, '项目--商城', 'k')).toBe(true);
+  });
+
   it('re-records when the key changes — new information is not the fault already logged', () => {
     const dir = tmp('once-key-');
     expect(shouldRecordOnce(dir, DB_UNUSABLE_MARKER_PREFIX, 'p', 'k1')).toBe(true);
@@ -285,7 +293,8 @@ describe('shouldRecordOnce', () => {
   it('sanitises the project into a single path segment', () => {
     const dir = tmp('once-path-');
     expect(shouldRecordOnce(dir, DB_UNUSABLE_MARKER_PREFIX, '../../etc/passwd', 'k')).toBe(true);
-    const written = readFileSync(join(dir, `${DB_UNUSABLE_MARKER_PREFIX}.._.._etc_passwd`), 'utf8');
+    // `-`, not `_`, since round 2 (the shared projectFileKey); still one segment, no traversal.
+    const written = readFileSync(join(dir, `${DB_UNUSABLE_MARKER_PREFIX}..-..-etc-passwd`), 'utf8');
     expect(JSON.parse(written).key).toBe('k');
   });
 });

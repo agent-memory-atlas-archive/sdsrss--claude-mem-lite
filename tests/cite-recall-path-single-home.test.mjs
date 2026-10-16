@@ -145,6 +145,17 @@ describe('per-project file keys stay distinct for non-ASCII ids', () => {
     expect(citeRecallProjectKey('项'.repeat(80)).length).toBeLessThanOrEqual(64);
   });
 
+  // Round 2 (hooks NEW-3): an ASCII id past the cap was cut with no hash, so two long ids that
+  // share 64 characters shared one snapshot, and one project's nudge was lost.
+  it('two long ASCII ids that share the capped prefix get different keys', async () => {
+    const { citeRecallProjectKey } = await import('../lib/cite-recall-path.mjs');
+    const a = 'acme-platform-monorepo-services--payments-reconciliation-worker-eu';
+    const b = 'acme-platform-monorepo-services--payments-reconciliation-worker-us';
+    expect(a.slice(0, 64), 'premise: same first 64 characters').toBe(b.slice(0, 64));
+    expect(citeRecallProjectKey(a)).not.toBe(citeRecallProjectKey(b));
+    expect(citeRecallProjectKey(a).length).toBeLessThanOrEqual(64);
+  });
+
   it('the nudge reader ignores a snapshot written for another project', async () => {
     const { mkdtempSync, writeFileSync, rmSync } = await import('fs');
     const { tmpdir } = await import('os');

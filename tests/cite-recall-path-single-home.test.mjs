@@ -152,8 +152,12 @@ describe('per-project file keys stay distinct for non-ASCII ids', () => {
     const { buildCiteRecallNudge } = await import('../lib/cite-back-hint.mjs');
     const dir = mkdtempSync(join(tmpdir(), 'mem-citerecall-'));
     try {
-      const snap = { project: '项目--博客', unsavedBugfix: 3, nudged: 3, saved: 0, ts: Date.now() };
-      writeFileSync(citeRecallPathFor(dir, '项目--商城'), JSON.stringify(snap));
+      // The same payload under its own project is a nudge — the premise, so '' below means
+      // "not this project's", not "this payload never nudges".
+      const snap = (project) => ({ project, injected: 0, recalled: 0, ratio: 0, unsaved: 3 });
+      writeFileSync(citeRecallPathFor(dir, '项目--商城'), JSON.stringify(snap('项目--商城')));
+      expect(buildCiteRecallNudge('项目--商城', dir, {})).toContain('3 unsaved bugfix-shape');
+      writeFileSync(citeRecallPathFor(dir, '项目--商城'), JSON.stringify(snap('项目--博客')));
       expect(buildCiteRecallNudge('项目--商城', dir, {})).toBe('');
     } finally {
       rmSync(dir, { recursive: true, force: true });

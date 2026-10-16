@@ -158,17 +158,22 @@ async function underLock(fn, lockMs) {
 
 const PROMPT = 'invoice totals reduce crashed again on undefined lines';
 
-function promptTexts() {
+/** One row of a read-only query, from another process (the hooks hold no handle in this one). */
+function queryRow(sql) {
   const q = spawnSync(
     process.execPath,
     [
       '-e',
       `const D = require('better-sqlite3'); const db = new D(${JSON.stringify(dbPath)}, { readonly: true });
-       process.stdout.write(JSON.stringify(db.prepare('SELECT prompt_text FROM user_prompts').all().map((r) => r.prompt_text)));`,
+       process.stdout.write(JSON.stringify(db.prepare(${JSON.stringify(sql)}).get()));`,
     ],
     { cwd: REPO, encoding: 'utf8' },
   );
   return JSON.parse(q.stdout);
+}
+
+function promptTexts() {
+  return JSON.parse(queryRow('SELECT json_group_array(prompt_text) AS t FROM user_prompts').t);
 }
 
 describe('a hook under a write lock held past its host timeout', () => {
@@ -254,10 +259,20 @@ describe('a hook under a write lock held past its host timeout', () => {
   });
 
   it('Stop under a 2.5 s lock writes its turn instead of failing on the lock', async () => {
+    const t0 = Date.now();
+    const summaries = () => queryRow('SELECT COUNT(*) AS n FROM session_summaries').n;
+    const before = summaries();
     const r = await underLock(() => hook('stop', { session_id: 'cc-short' }), 2500);
     expect(r.signal).toBeNull();
     expect(r.status).toBe(0);
     expect(r.stderr).not.toMatch(/database is locked/);
+    // Stop logs a lost lock to the debug log only, so the exit alone cannot tell (round-2 review:
+    // green with Stop's wait mutated to 0, the session left 'active' and no summary written).
+    const completed = queryRow(
+      `SELECT COUNT(*) AS n FROM sdk_sessions WHERE status = 'completed' AND completed_at_epoch >= ${t0}`,
+    ).n;
+    expect(completed, 'the turn marked the session completed').toBe(1);
+    expect(summaries(), "the turn's summary baseline").toBe(before + 1);
   });
 
   it('Stop with three sessions in the episode buffer exits inside its timeout under a long lock', async () => {

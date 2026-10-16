@@ -958,7 +958,11 @@ function cmdGet(db, args) {
   // Validate --fields against obs schema (only meaningful for obs rows).
   if (rejectBareStringFlags(flags, ['fields', 'source'])) return;
   let requestedFields = null;
-  if (flags.fields) {
+  if (flags.fields && bySrc.obs.length === 0) {
+    // Nothing to select from: checked against the observation fields, `get E#2 --fields body`
+    // failed "No valid fields specified" for the Body an event prints (E2E 2026-10-16 round 2).
+    process.stderr.write('[mem] --fields selects observation fields; E#/S#/P# records print in full\n');
+  } else if (flags.fields) {
     const allRequested = flags.fields.split(',').map((s) => s.trim());
     const invalid = allRequested.filter((f) => !OBS_FIELDS.includes(f));
     if (invalid.length > 0) {

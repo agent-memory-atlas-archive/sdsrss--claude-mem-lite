@@ -81,6 +81,18 @@ describe('a lone id positional outside --project stays a query', () => {
   });
 });
 
+// Round 2 (data N4): `get E#N --fields body` checked the names against the observation fields
+// and failed "No valid fields specified", though Body is what the event prints.
+describe('get --fields on events', () => {
+  it('get E#N --fields body prints the event and notes --fields is for observations', () => {
+    expect(cli('activity', 'save', '--type', 'bug', 'Cron overlap', '--body', 'use flock').status).toBe(0);
+    const r = cli('get', 'E#1', '--fields', 'body');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('Cron overlap');
+    expect(r.stderr).toMatch(/--fields .*observation/);
+  });
+});
+
 // E2E 2026-10-16 (cli F16): `--` parsed as an empty-named flag, so text starting with `--` could
 // not be saved positionally.
 describe('a bare -- ends the options', () => {

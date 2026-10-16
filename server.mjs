@@ -1075,6 +1075,9 @@ server.registerTool(
         fieldsNote = `Note: unknown field(s) dropped: ${invalidFields.join(', ')}. Valid: ${OBS_FIELDS.join(', ')}`;
       }
       obsFieldFilter = validFields;
+    } else if (args.fields?.length) {
+      // Said rather than dropped without a word (E2E 2026-10-16 round 2).
+      fieldsNote = 'Note: fields selects observation fields; E#/S#/P# records are shown in full.';
     }
 
     // Per-source fetchers — each returns { rows, foundIds:Set, prefix }.

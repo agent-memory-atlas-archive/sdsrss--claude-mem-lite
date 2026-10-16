@@ -165,6 +165,27 @@ describe('mem_export states what a backup leaves out', () => {
   });
 });
 
+// Round 2 (data N4): `fields` selects observation fields; for an event-only request it was
+// dropped without a word.
+describe('mem_get fields on an event-only request', () => {
+  it('says fields applies to observations', async () => {
+    withDb((db) =>
+      db
+        .prepare(
+          `INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
+           VALUES ('x', 'bug', 'Cron overlap event', 'use flock', 2, ?)`,
+        )
+        .run(Date.now()),
+    );
+    const id = withDb(
+      (db) => db.prepare("SELECT id FROM events WHERE title = 'Cron overlap event'").get().id,
+    );
+    const r = await call('mem_get', { ids: [`E#${id}`], fields: ['body'] });
+    expect(r.text).toMatch(/Cron overlap event/);
+    expect(r.text).toMatch(/fields.*observation/i);
+  });
+});
+
 // Round 2 (data N2): a deep search whose query sanitises to nothing listed the whole store as
 // its "results", where the plain search says the query was filtered.
 describe('deep search on an operator-only query', () => {

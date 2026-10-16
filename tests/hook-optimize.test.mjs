@@ -158,6 +158,7 @@ describe('re-enrich', () => {
     insertSession(db, { id: 'manual-test', project: 'test' });
     insertObs(db, {
       sessionId: 'manual-test',
+      type: 'bugfix',
       title: 'Saved by hand',
       narrative: 'measured 0.4 ms p50 on staging',
     });
@@ -171,6 +172,47 @@ describe('re-enrich', () => {
     expect(obs.lesson_learned).toBe('a lesson with enough signal to persist');
     expect(obs.memory_session_id).toBe('manual-test');
     expect(isAutoWritten(obs.memory_session_id)).toBe(false);
+  });
+
+  // E2E round 2 (hooks REGRESSION-2): with the text kept, the same UPDATE still wrote the
+  // model's type, raised importance and an invented lesson under the person's name — a
+  // discovery at importance 1 became a decision at importance 3 in Key Context. An explicit save
+  // now gets what save-time enrichment writes: its own type and importance, a lesson only for a
+  // type that obligates one (lib/save-enrich.mjs ENRICH_OBLIGATED_TYPES).
+  it("narrow re-enrich keeps an explicit save's type and importance, and adds no lesson to a discovery", async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertSession(db, { id: 'manual-disc', project: 'test' });
+    insertObs(db, {
+      sessionId: 'manual-disc',
+      type: 'discovery',
+      importance: 1,
+      title: 'Redis eviction policy on the staging cache is allkeys-lru',
+      narrative: 'staging cache uses allkeys-lru',
+    });
+    callModelJSONAsync.mockResolvedValue({
+      ...narrowReply,
+      type: 'decision',
+      importance: 3,
+      lesson_learned: 'Use volatile-lru for session stores.',
+      concepts: ['redis'],
+    });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    const obs = db
+      .prepare('SELECT type, importance, lesson_learned, concepts FROM observations LIMIT 1')
+      .get();
+    expect(obs.type).toBe('discovery');
+    expect(obs.importance).toBe(1);
+    expect(obs.lesson_learned ?? null).toBeNull();
+    expect(obs.concepts, 'side fields are still filled').toBe('redis');
+  });
+
+  it('control: a machine-written row still takes the model type and a raised importance', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { type: 'discovery', importance: 1, title: 'Modified cache.js', narrative: 'x' });
+    callModelJSONAsync.mockResolvedValue({ ...narrowReply, type: 'decision', importance: 3 });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    const obs = db.prepare('SELECT type, importance FROM observations LIMIT 1').get();
+    expect(obs).toEqual({ type: 'decision', importance: 3 });
   });
 
   it("narrow re-enrich still rewrites a machine-written row's title", async () => {

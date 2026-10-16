@@ -34,6 +34,7 @@ import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
 import { MANUAL_SESSION_ID_PREFIX, writerSessionId } from './lib/provenance.mjs';
+import { ENRICH_OBLIGATED_TYPES } from './lib/save-enrich.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
 // P1-14: same resolver as hook-shared.mjs — this was the second module that had never
@@ -555,6 +556,11 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // 'change' (lower TYPE_QUALITY + faster decay); keep the stored type on that downgrade.
       let type = validTypes.has(parsed.type) ? parsed.type : cand.type || 'change';
       if (type === 'change' && cand.type && cand.type !== 'change') type = cand.type;
+      // An explicit save gets what its failed save-time enrichment would have written and no
+      // more (lib/save-enrich.mjs): its own type and importance, a lesson only for a type that
+      // obligates one, and the side fields. A discovery at importance 1 came back a decision at
+      // importance 3 with a lesson the person never wrote, under their name (E2E round 2).
+      if (manualSave && cand.type) type = cand.type;
       const concepts = Array.isArray(parsed.concepts) ? parsed.concepts.slice(0, 10) : [];
       const facts = Array.isArray(parsed.facts) ? parsed.facts.slice(0, 10) : [];
       // Preserve-on-empty: wide-scope candidates can already carry concepts/facts/aliases
@@ -569,6 +575,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // head that scrubSecrets's value-length floor no longer matches (the scrubRecord
       // below would then miss it too). Mirrors the hook-llm save-path fix.
       const lessonLearned =
+        (!manualSave || ENRICH_OBLIGATED_TYPES.has(type)) &&
         typeof parsed.lesson_learned === 'string' &&
         parsed.lesson_learned.toLowerCase() !== 'none' &&
         parsed.lesson_learned.trim().length > 0
@@ -604,7 +611,8 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // Decided in the UPDATE itself, on the row as it is then: the candidate's importance was read
       // before the model call, and writing it back undid a person's change made during the call
       // (D#206).
-      const modelImportance = clampImportance(parsed.importance);
+      // 0 keeps the stored value in the MAX below (an explicit save's own, see `type` above).
+      const modelImportance = manualSave ? 0 : clampImportance(parsed.importance);
 
       const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
       const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');

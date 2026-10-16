@@ -560,6 +560,55 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     }
   });
 
+  // Round 2 (install B7): the precheck covered install only. uninstall removed the MCP server and
+  // the CLI link, then died on the settings.json write with a raw EACCES stack — every hook still
+  // registered and firing; cleanup-hooks printed the stack straight away.
+  for (const cmd of ['uninstall', 'cleanup-hooks']) {
+    it.skipIf(process.getuid?.() === 0)(
+      `${cmd} refuses an unwritable ~/.claude before doing anything`,
+      () => {
+        runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
+        const settingsBefore = readFileSync(join(home, '.claude', 'settings.json'), 'utf8');
+        const mcpBefore = readFileSync(join(home, '.claude', 'mcp-state.txt'), 'utf8');
+        chmodSync(join(home, '.claude'), 0o555);
+        try {
+          let out = '';
+          let status = 0;
+          try {
+            out = runInstall(cmd, home, [], { PATH: `${binDir}:${process.env.PATH}` });
+          } catch (e) {
+            status = e.status;
+            out = `${e.stdout || ''}${e.stderr || ''}`;
+          }
+          expect(status).toBe(1);
+          expect(out).toMatch(/is not writable .* nothing was done/);
+          expect(out).not.toMatch(/\n\s+at /);
+        } finally {
+          chmodSync(join(home, '.claude'), 0o755);
+        }
+        expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).toBe(settingsBefore);
+        expect(readFileSync(join(home, '.claude', 'mcp-state.txt'), 'utf8')).toBe(mcpBefore);
+      },
+    );
+  }
+
+  // Round 2 (install B8): any failure of `claude mcp remove` but ENOENT read as "not found or
+  // already removed" while ~/.claude.json still registered the server.
+  it('uninstall names a registration `claude mcp remove` failed to remove', () => {
+    const failBin = join(home, 'failbin');
+    mkdirSync(failBin, { recursive: true });
+    writeFileSync(join(failBin, 'claude'), '#!/usr/bin/env bash\necho "boom" >&2\nexit 1\n');
+    chmodSync(join(failBin, 'claude'), 0o755);
+    writeFileSync(
+      join(home, '.claude.json'),
+      JSON.stringify({ mcpServers: { 'mem-lite': { command: 'node', args: ['/x/server.mjs'] } } }),
+    );
+    const out = runInstall('uninstall', home, [], { PATH: `${failBin}:${process.env.PATH}` });
+    expect(out).not.toMatch(/not found or already removed/);
+    expect(out).toMatch(/still registered/);
+    expect(out).toMatch(/claude mcp remove -s user mem-lite/);
+  });
+
   it('uninstall --purge removes data directory', () => {
     runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
 

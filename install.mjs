@@ -762,6 +762,15 @@ function ownedUserMcpNames() {
   return { names: memIsOurs ? ['mem', 'mem-lite'] : ['mem-lite'], foreignMem: !!entry && !memIsOurs };
 }
 
+/** Whether ~/.claude.json registers `name` at user scope (unreadable → false). */
+function userMcpRegistered(name) {
+  try {
+    return !!JSON.parse(readFileSync(claudeStatePath(), 'utf8'))?.mcpServers?.[name];
+  } catch {
+    return false;
+  }
+}
+
 function noteForeignMem(foreignMem) {
   if (foreignMem) log('User-scope MCP "mem" left in place — it does not run claude-mem-lite.');
 }
@@ -1533,9 +1542,29 @@ async function install() {
 
 // ─── Uninstall ──────────────────────────────────────────────────────────────
 
+/**
+ * Refuse, before any side effect, when the Claude config home cannot be written: every command
+ * that edits settings.json would otherwise act and then die on that write with a raw EACCES
+ * stack — install after copying files and registering MCP, uninstall after removing the MCP
+ * server and the CLI link with every hook still registered (E2E 2026-10-16, rounds 1 and 2).
+ *
+ * @param {string} label the command, for the message
+ * @returns {boolean} true when refused (exit code set)
+ */
+function refuseUnwritableConfigHome(label) {
+  const denied = dirAccessError(claudeConfigDir());
+  if (!denied) return false;
+  console.error(
+    `[${label}] ${claudeConfigDir()} is not writable (${denied}) — nothing was done. Fix: ${dataDirRemedy(denied, claudeConfigDir())}`,
+  );
+  process.exitCode = 1;
+  return true;
+}
+
 async function uninstall() {
   console.log('\nclaude-mem-lite uninstaller\n');
   readSettings(); // before any side effect — see install()
+  if (refuseUnwritableConfigHome('uninstall')) return;
 
   // 1. Remove MCP (legacy hook-based install).
   // Try both the legacy "mem" (pre-v2.78) and current "mem-lite" names so a user
@@ -1559,9 +1588,16 @@ async function uninstall() {
       }
     }
   }
+  // A failed `claude mcp remove` is "not registered" only when ~/.claude.json agrees: any other
+  // failure read as "not found or already removed" with the server still registered (E2E
+  // 2026-10-16 round 2).
+  const stillRegistered = claudeMissing ? [] : owned.names.filter((name) => userMcpRegistered(name));
   if (claudeMissing) {
     warn('MCP server: could not run `claude` (not on PATH), so its registration was not removed. Run:');
     for (const name of owned.names) log(`    claude mcp remove -s user ${name}`);
+  } else if (stillRegistered.length > 0) {
+    warn('MCP server: `claude mcp remove` failed, and it is still registered in ~/.claude.json. Run:');
+    for (const name of stillRegistered) log(`    claude mcp remove -s user ${name}`);
   } else if (!removedAny) warn('MCP server not found or already removed');
 
   // 1b. Remove CLI symlink
@@ -1790,6 +1826,7 @@ async function cleanupHooks() {
   console.log('\nclaude-mem-lite cleanup-hooks\n');
 
   const settings = readSettings();
+  if (refuseUnwritableConfigHome('cleanup-hooks')) return;
   const removed = cleanupMemHooksFromSettings(settings);
 
   if (removed > 0) {
@@ -4316,14 +4353,7 @@ async function runLockedInstall() {
   // Claude Code's config home gets settings.json and the MCP registration. A root-owned one (a
   // `sudo claude` run) let install copy files, run npm and register MCP, then die on the
   // settings.json write with a raw EACCES stack: half installed (E2E 2026-10-16). Absent is fine.
-  const configDenied = dirAccessError(claudeConfigDir());
-  if (configDenied) {
-    console.error(
-      `[install] ${claudeConfigDir()} is not writable (${configDenied}) — nothing was done. Fix: ${dataDirRemedy(configDenied, claudeConfigDir())}`,
-    );
-    process.exitCode = 1;
-    return;
-  }
+  if (refuseUnwritableConfigHome('install')) return;
   const { release, error: blocked } = takeLock(INSTALL_LOCK_PATH);
   if (!release) {
     if (blocked) {

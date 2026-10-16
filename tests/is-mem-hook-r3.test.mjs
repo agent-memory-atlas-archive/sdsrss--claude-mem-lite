@@ -65,11 +65,46 @@ describe('isMemHook leaves user hooks that merely mention the product', () => {
 // auto-update's dangling-hook prune, on a machine that had never installed the product.
 describe('isMemHook leaves user hooks that share a script NAME with ours', () => {
   it('does not match a generic post-tool-use.sh or hook-launcher.mjs of the user', () => {
-    expect(isMemHook(mk('bash ~/.claude/scripts/post-tool-use.sh'))).toBe(false);
-    expect(isMemHook(mk('bash "/home/me/dotfiles/scripts/pre-tool-recall-bash.sh"'))).toBe(false);
-    expect(isMemHook(mk('bash /home/me/bin/scripts/pre-agent-inject.sh --strict'))).toBe(false);
+    // The user's scripts exist, as a working hook's do (a missing one is a dead hook, below).
+    const home = mkdtempSync(join(tmpdir(), 'cml-userhooks-'));
+    try {
+      for (const d of ['dotfiles/scripts', 'bin/scripts']) mkdirSync(join(home, d), { recursive: true });
+      writeFileSync(join(home, 'dotfiles/scripts/pre-tool-recall-bash.sh'), '# mine');
+      writeFileSync(join(home, 'bin/scripts/pre-agent-inject.sh'), '# mine');
+      expect(isMemHook(mk('bash ~/.claude/scripts/post-tool-use.sh'))).toBe(false);
+      expect(isMemHook(mk(`bash "${join(home, 'dotfiles/scripts/pre-tool-recall-bash.sh')}"`))).toBe(false);
+      expect(isMemHook(mk(`bash ${join(home, 'bin/scripts/pre-agent-inject.sh')} --strict`))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
     expect(isMemHook(mk('node ~/.claude/hooks/hook-launcher.mjs guard-bash'))).toBe(false);
     expect(isMemHook(mk('node "/opt/x/scripts/hook-launcher.mjs" lint --fix'))).toBe(false);
+  });
+
+  // E2E round 2 (install B3): a relative prefilter path was checked for a launcher beside it
+  // against the installer's cwd, so installing from the git clone (README's clone install runs
+  // it there, and the clone has scripts/hook-launcher.mjs) deleted `bash scripts/post-tool-use.sh
+  // --fmt`. Our installs write absolute paths or ${CLAUDE_PLUGIN_ROOT}.
+  it('a relative prefilter path is never ours, whatever the cwd holds', () => {
+    const prev = process.cwd();
+    try {
+      process.chdir(REPO); // holds scripts/hook-launcher.mjs and scripts/post-tool-use.sh
+      expect(isMemHook(mk('bash scripts/post-tool-use.sh --fmt'))).toBe(false);
+      expect(isMemHook(mk('bash ./scripts/pre-agent-inject.sh'))).toBe(false);
+    } finally {
+      process.chdir(prev);
+    }
+  });
+
+  // Round 2 (install B6): an install relocated by an older release whose directory was later
+  // removed left three prefilter hooks that were no longer recognised (no launcher beside them
+  // to confirm), so install kept them beside its own — each failing "No such file or directory"
+  // on every fire — and doctor reported no orphans. A script that is not there cannot run, so a
+  // dead entry under one of our exact names is removable.
+  it('a prefilter whose script is gone is ours to remove', () => {
+    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/post-tool-use.sh"'))).toBe(true);
+    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/pre-tool-recall-bash.sh"'))).toBe(true);
+    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/pre-agent-inject.sh"'))).toBe(true);
   });
   it('the dangling-hook prune keeps them too', () => {
     const settings = {
@@ -85,6 +120,28 @@ describe('isMemHook leaves user hooks that share a script NAME with ours', () =>
     const { settings: after, removed } = pruneDanglingMemHooks(settings, '/nonexistent-install');
     expect(removed).toEqual([]);
     expect(after.hooks.PreToolUse[0].hooks).toHaveLength(1);
+  });
+  // Round 2 (install B2): ownership was asked of the GROUP, so a user's launcher-shaped hook
+  // appended into one of OUR groups (the natural hand-edit) was dropped with a dead target, by
+  // the auto-update, though install and uninstall keep it.
+  it("the dangling-hook prune keeps a user's hook inside one of our groups", () => {
+    const ours = 'node "/home/me/.claude-mem-lite/scripts/hook-launcher.mjs" hook.mjs stop';
+    const settings = {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: 'command', command: ours },
+              { type: 'command', command: 'node ~/.claude/hooks/hook-launcher.mjs notify --sound' },
+            ],
+          },
+        ],
+      },
+    };
+    const { settings: after } = pruneDanglingMemHooks(settings, '/nonexistent-install');
+    expect(after.hooks.Stop[0].hooks.map((h) => h.command)).toContain(
+      'node ~/.claude/hooks/hook-launcher.mjs notify --sound',
+    );
   });
   it('still matches an install outside a claude-mem-lite directory', () => {
     // Launcher commands carry our entry shape whatever the directory is called.

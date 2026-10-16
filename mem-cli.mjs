@@ -3517,7 +3517,13 @@ async function cmdImportJsonl(db, argv) {
     out(
       `[mem] Warning: 0 imported, ${totalSkip} line(s) skipped — none matched the expected Claude Code transcript JSONL shape (user/assistant/tool_result). 'export' output is NOT re-importable via import-jsonl.`,
     );
+    // Nothing was recognised, so nothing was imported: not a success (restore treats its own
+    // "nothing restorable" the same way). E2E 2026-10-16.
+    process.exitCode = 1;
   }
+  // A file that could not be read is a failure even when the others imported; the summary says
+  // which, and `import-jsonl dir && …` must not read it as a clean run.
+  if (errorCount > 0) process.exitCode = 1;
 }
 
 // ─── Enrich ─────────────────────────────────────────────────────────────────

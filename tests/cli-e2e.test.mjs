@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { mkdirSync, rmSync, writeFileSync, readdirSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync, readdirSync, chmodSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -1042,7 +1042,9 @@ describe('CLI E2E: import-jsonl routing', () => {
     );
 
     const { stdout, exitCode } = runCli(['import-jsonl', exportShaped, '--project', 'wrong-proj']);
-    expect(exitCode).toBe(0);
+    // Nothing recognised = nothing imported = exit 1, like restore's "nothing restorable"
+    // (E2E 2026-10-16); the warning still says why, on stdout.
+    expect(exitCode).toBe(1);
     expect(stdout).toContain('none matched');
   });
 });
@@ -1153,10 +1155,32 @@ describe('import-jsonl all-skipped warning (Round2-P2)', () => {
     const badPath = join(tmpHome, 'not-a-transcript.jsonl');
     writeFileSync(badPath, '{"id":1,"type":"bugfix","title":"x"}\n{"id":2,"type":"decision","title":"y"}\n');
     const { stdout, exitCode } = runCli(['import-jsonl', badPath, '--project', 'p']);
-    expect(exitCode).toBe(0); // graceful, not a crash
+    expect(exitCode).toBe(1); // a failure exit with a reason, not a crash (E2E 2026-10-16: was 0)
     expect(stdout).toMatch(/0 imported/);
     expect(stdout).toMatch(/none matched/i);
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'exits 1 when a file in the batch could not be read, after importing the rest',
+    () => {
+      const dir = join(tmpHome, 'mixed-batch');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'ok.jsonl'),
+        '{"type":"user","sessionId":"s","timestamp":"2026-10-10T00:00:00Z","message":{"content":"hi there friend"}}\n',
+      );
+      const locked = join(dir, 'locked.jsonl');
+      writeFileSync(locked, '{}\n');
+      chmodSync(locked, 0o000); // unreadable (root reads it anyway: skipped below)
+      try {
+        const { stdout, exitCode } = runCli(['import-jsonl', dir, '--project', 'p']);
+        expect(stdout).toMatch(/1 file\(s\) errored/);
+        expect(exitCode).toBe(1);
+      } finally {
+        chmodSync(locked, 0o644);
+      }
+    },
+  );
 });
 
 describe('CLI E2E: version alias', () => {

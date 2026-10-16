@@ -224,3 +224,18 @@ describe('why the exemption exists: purge is what destroys the redirect', () => 
     db.close();
   });
 });
+
+// E2E 2026-10-16 (MCP P2-12): boostAccessed skips a row whose importance a person set
+// (importance_set_at, D10); the forecast did not, so scan promised "Boostable: 1" for a row
+// every execute answered with "Boosted 0", forever.
+describe('boost forecast matches what boostAccessed does', () => {
+  it('a row with a person-set importance is neither forecast nor boosted', () => {
+    const db = freshDb();
+    const id = add(db, { title: 'hot row the user pinned at 2', importance: 2, accessCount: 9 });
+    db.prepare('UPDATE observations SET importance_set_at = ? WHERE id = ?').run(Date.now(), id);
+    const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
+    expect(stats.boostable).toBe(0);
+    expect(boostAccessed(db, ctx())).toBe(stats.boostable);
+    db.close();
+  });
+});

@@ -970,6 +970,7 @@ server.registerTool(
     inputSchema: memTimelineSchema,
   },
   safeHandler(async (args) => {
+    args = applyArgAliases(args, { id: 'anchor' });
     if (args.project) args = { ...args, project: resolveProject(args.project) };
     const before = args.before ?? 5;
     const after = args.after ?? 5;
@@ -1356,7 +1357,8 @@ server.registerTool(
   safeHandler(async (args) => {
     // `obs_type` → `type`: the sibling read tools all name it obs_type (see the schema
     // comment). Without this, an unknown key was dropped and the row saved as `discovery`.
-    args = applyArgAliases(args, { obs_type: 'type' });
+    // `lesson` → `lesson_learned`: the CLI flag the description prints (D#367).
+    args = applyArgAliases(args, { obs_type: 'type', lesson: 'lesson_learned' });
     if (args.project) args = { ...args, project: resolveProjectForWrite(args.project) };
     const project = args.project || inferProject();
     // A named project that does not exist: a near-miss is refused, a new name is noted (cli F14).

@@ -298,6 +298,9 @@ const coerceAnchor = z.preprocess(
 );
 
 export const memTimelineSchema = {
+  // `id` is the name a caller reaches for after mem_get; dropped as an unknown key, it returned
+  // the most recent rows with no hint the anchor was ignored (D#367, E2E 2026-10-16).
+  id: coerceAnchor.optional().describe('Alias for `anchor`'),
   anchor: coerceAnchor
     .optional()
     .describe(
@@ -429,6 +432,10 @@ export const memSaveSchema = {
     .max(500)
     .optional()
     .describe('Key lesson or takeaway, ≤500 chars (for bugfix: root cause & fix; for decision: rationale)'),
+  // Alias, as obs_type is for `type`: the description prints the CLI's `--lesson`, and this
+  // non-strict schema dropped an unknown key, so `mem_save(lesson: …)` saved the row without
+  // its lesson and the save-time enricher wrote one in its place (D#367, E2E 2026-10-16).
+  lesson: z.string().max(500).optional().describe('Alias for `lesson_learned` (CLI `save --lesson`)'),
   closes_deferred: coerceDeferredTokens
     .optional()
     .describe(

@@ -91,14 +91,14 @@ function seedObservation(text, title) {
 }
 
 /** Give the dashboard a leg of its own that no other stdout contributor can produce. */
-function seedEvent(title) {
+// A recent, unconsumed exit handoff: the dashboard's DB-backed line (its events count, which
+// this file used to seed, left in injection budget C6).
+function seedExitHandoff(workingOn) {
   const db = new Database(dbPath);
   db.prepare(
-    `
-    INSERT INTO events (project, event_type, title, body, importance, created_at_epoch)
-    VALUES ('work--fresh', 'lesson', ?, '', 1, ?)
-  `,
-  ).run(title, Date.now());
+    `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+     VALUES ('work--fresh', 'exit', 'cc-earlier', ?, ?)`,
+  ).run(workingOn, Date.now() - 60_000);
   db.close();
 }
 
@@ -165,10 +165,10 @@ describe('SessionStart stdout envelope', () => {
 
   it('carries the startup dashboard in the same envelope, not a second write', () => {
     seedObservation('Backoff reset on every redirect hop', 'Backoff reset on every redirect hop');
-    // Seed the events leg explicitly. Before MAIN-1 this test rendered a dashboard only
+    // Seed a dashboard leg explicitly. Before MAIN-1 this test rendered a dashboard only
     // by reading the HOST repository's git state; with the subprocess correctly rooted in
     // the fixture there is nothing to report unless the fixture supplies it.
-    seedEvent('replay budget exhausted mid-shard');
+    seedExitHandoff('replay budget exhausted mid-shard');
     const stdout = runSessionStart('cc-env-2');
     const parsed = expectSingleEnvelope(stdout);
     // One document ⇒ exactly one line that parses as JSON.
@@ -185,8 +185,9 @@ describe('SessionStart stdout envelope', () => {
     // Pin the DASHBOARD leg by content, not by "additionalContext is non-empty":
     // deleting the dashboard push left this green because the <claude-mem-context>
     // block alone satisfied a length check (pre-tag review, SHOULD-FIX-3).
-    // `mem events` is the dashboard's own line, absent from the context block.
-    expect(parsed.hookSpecificOutput.additionalContext).toMatch(/\[mem\] Startup dashboard|mem events:/);
+    // `🔄 Continuation available` is the dashboard's own line, absent from the context block.
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('[mem] Startup dashboard');
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('🔄 Continuation available');
   });
 
   it('roots the dashboard at the project dir, not at the process cwd', () => {

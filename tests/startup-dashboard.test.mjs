@@ -186,7 +186,9 @@ describe('startup dashboard (T10c)', () => {
     expect(shownTasks.length).toBe(3);
   });
 
-  test('includes events count when non-zero', () => {
+  // Injection budget C6: the events count left the dashboard (the model ran `activity` in 4 of
+  // 52 sessions that were shown it). Seeded events must not bring it back.
+  test('carries no events count, even with events present', () => {
     const db = createTestDb();
     const now = Date.now();
     for (let i = 0; i < 5; i++) {
@@ -206,7 +208,7 @@ describe('startup dashboard (T10c)', () => {
         handoff: null,
       },
     });
-    expect(text).toMatch(/mem events: 5/);
+    expect(text).not.toMatch(/mem events/);
   });
 
   test('omits events line when count is zero', () => {

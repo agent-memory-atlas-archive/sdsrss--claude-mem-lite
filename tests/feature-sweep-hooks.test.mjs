@@ -486,9 +486,15 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
       '--lesson',
       'Invalidate the widget cache on write, never on read',
     ]);
-    await cli(
-      ['activity', 'save', '--type', 'lesson', 'Session start sweep event', '--body', 'event body'],
-      cwd,
+    // A recent, unconsumed exit handoff for THIS project: the dashboard's DB-backed,
+    // project-scoped line (its events count, the old probe, left in injection budget C6).
+    withDb((db) =>
+      db
+        .prepare(
+          `INSERT INTO session_handoffs (project, type, session_id, working_on, created_at_epoch)
+           VALUES (?, 'exit', 'cc-earlier-session', 'sweep handoff', ?)`,
+        )
+        .run(project, Date.now() - 60_000),
     );
 
     const r = await hookEvent('session-start', {
@@ -502,11 +508,11 @@ describe('hook feature sweep: hook.mjs foreground events', () => {
       plainAllowed: false,
       label: 'hook.mjs session-start',
     });
-    // The startup dashboard rides the JSON channel and must name the one event seeded above
-    // (a dashboard computed over the wrong project — or over the live DB — says "0 entries"
-    // or nothing at all).
+    // The startup dashboard rides the JSON channel and must point at the handoff seeded above
+    // (a dashboard computed over the wrong project — or over the live DB — has no such line).
     expect(envelopes).toHaveLength(1);
-    expect(envelopes[0].hookSpecificOutput.additionalContext).toContain('mem events: 1 entries');
+    expect(envelopes[0].hookSpecificOutput.additionalContext).toContain('🔄 Continuation available');
+    expect(envelopes[0].hookSpecificOutput.additionalContext).not.toContain('mem events');
     expect(envelopes[0].suppressOutput).toBe(true);
     // …and the context block rides the SAME envelope, carrying the seeded memory.
     // Asserted against additionalContext, not against raw stdout: `stdout` contains

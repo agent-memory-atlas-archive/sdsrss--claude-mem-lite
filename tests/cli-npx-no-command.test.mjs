@@ -9,11 +9,12 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
-const CLI = resolve(import.meta.dirname, '../cli.mjs');
+const REPO = resolve(import.meta.dirname, '..');
+const CLI = join(REPO, 'cli.mjs');
 
 let root, env;
 
@@ -48,11 +49,43 @@ const run = (extra) => {
   return r.stdout + r.stderr;
 };
 
+// npx runs the package from its cache, `~/.npm/_npx/<hash>/node_modules/claude-mem-lite`. The
+// tree is linked there and node keeps the link's path, so the entry sees the path npx gives it.
+function npxShapedCli() {
+  const dir = join(root, '.npm', '_npx', 'abc123', 'node_modules');
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(REPO, join(dir, 'claude-mem-lite'), 'dir');
+  return join(dir, 'claude-mem-lite', 'cli.mjs');
+}
+const runAt = (cli, extra = {}) => {
+  const e = { ...env, ...extra };
+  if (!('npm_command' in extra)) delete e.npm_command;
+  const r = spawnSync(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', cli], {
+    env: e,
+    encoding: 'utf8',
+    timeout: 60000,
+  });
+  return r.stdout + r.stderr;
+};
+
 describe('cli.mjs with no command', () => {
   it('under npx, routes to install even when a database exists', () => {
-    const out = run({ npm_command: 'exec' });
+    const out = runAt(npxShapedCli(), { npm_command: 'exec' });
     expect(out).not.toMatch(/claude-mem-lite CLI/);
     expect(out).toMatch(/settings\.json/);
+    // The cache path alone decides: without the variable the same entry still installs.
+    const bare = runAt(join(root, '.npm', '_npx', 'abc123', 'node_modules', 'claude-mem-lite', 'cli.mjs'));
+    expect(bare).toMatch(/settings\.json/);
+  });
+
+  // E2E round 2 (install B5): npm exports npm_command=exec to everything npx starts, so a
+  // Claude Code launched with npx hands it to its Bash tool and hooks. A bare
+  // `claude-mem-lite` (the npm -g link, or ~/.claude-mem-lite/cli.mjs) there ran a full install
+  // over a plugin-only machine. The entry's own path decides, not the inherited variable.
+  it('an inherited npm_command=exec outside the npx cache still prints the CLI help', () => {
+    const out = run({ npm_command: 'exec' });
+    expect(out).toMatch(/claude-mem-lite CLI/);
+    expect(out).not.toMatch(/settings\.json/);
   });
 
   it('outside npx, with a database, prints the CLI help', () => {

@@ -918,6 +918,42 @@ function registerMcpServer() {
   }
 }
 
+// The _note an earlier install wrote when it emptied the marketplace clone's hooks.json.
+const CLEARED_CLONE_NOTE =
+  'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates';
+
+/** Whether the clone's hooks/hooks.json is exactly the emptied file an earlier install wrote. */
+function cloneManifestEmptiedByUs(cloneDir) {
+  try {
+    const h = JSON.parse(readFileSync(join(cloneDir, 'hooks', 'hooks.json'), 'utf8'));
+    return h?._note === CLEARED_CLONE_NOTE && !!h.hooks && Object.keys(h.hooks).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Put back the marketplace clone's tracked hooks/hooks.json when an earlier install emptied it
+ * (see dedupePluginCacheAndHooks). Acts only on a git clone whose file is exactly that edit, so a
+ * change anyone else made is left alone.
+ *
+ * @returns {'absent'|'untouched'|'restored'|{failed: string}}
+ */
+export function restoreMarketplaceHooksManifest(
+  cloneDir,
+  run = (args) => execFileSync('git', args, { encoding: 'utf8', stdio: 'pipe', timeout: 20000 }),
+) {
+  if (!existsSync(join(cloneDir, '.git')) || !existsSync(join(cloneDir, 'hooks', 'hooks.json')))
+    return 'absent';
+  if (!cloneManifestEmptiedByUs(cloneDir)) return 'untouched';
+  try {
+    run(['-C', cloneDir, 'checkout', '--', 'hooks/hooks.json']);
+    return 'restored';
+  } catch (e) {
+    return { failed: e?.code || e?.message || 'git failed' };
+  }
+}
+
 export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) {
   // 3b. Deduplicate: if marketplace plugin also registers MCP + hooks,
   // clear them to prevent double execution. install.mjs hooks (in settings.json)
@@ -928,10 +964,9 @@ export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) 
   // Do NOT modify marketplace .mcp.json — it breaks the MCP server registration chain.
   // Dedup is handled by skipping global `claude mcp add` when plugin system is active.
   const pluginDir = join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY);
-  const pluginHooksPath = join(pluginDir, 'hooks', 'hooks.json');
 
   // Clearing is a DEDUP, and a dedup with only one registration left is a delete.
-  // Both clearers below empty a file Claude Code reads hooks from; that is correct
+  // The clearer below empties a file Claude Code reads hooks from; that is correct
   // only while settings.json ALSO registers them. On a plugin-only install (no
   // install.mjs-managed entries) the cache manifest is the sole registration, so
   // clearing it silently unregisters all seven events — and status/doctor then read
@@ -948,8 +983,8 @@ export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) 
   // for any caller that has not just written settings.json.
   const settingsOwnsHooks = managedHooks ?? hasInstallManagedHooks();
 
-  // Scope note (pre-ship review, finding 2): the gate covers the two hook-CLEARING
-  // blocks only. The launch.mjs / launch-preflight.mjs sync below it is not dedup —
+  // Scope note (pre-ship review, finding 2): the gate covers the hook-CLEARING block
+  // only. The launch.mjs / launch-preflight.mjs sync below it is not dedup —
   // it is issue #15's dev-mode MCP routing fix — and an early return out of the whole
   // function would silently stop shipping it to plugin-cache users.
   if (!settingsOwnsHooks) {
@@ -964,33 +999,19 @@ export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) 
     // cache .mcp.json to lose the MCP server definition, breaking plugin MCP.
     // Dedup is already handled by skipping global `claude mcp add` above.
 
-    // Clear plugin hooks to prevent double hook execution
-    try {
-      if (settingsOwnsHooks && existsSync(pluginHooksPath)) {
-        const pluginHooks = JSON.parse(readFileSync(pluginHooksPath, 'utf8'));
-        if (pluginHooks.hooks && Object.keys(pluginHooks.hooks).length > 0) {
-          // Atomic (audit 2026-09-02 P1-10): a torn hooks.json is not a fail-open marker —
-          // Claude Code parses it at plugin load, so half a file disables the plugin's hooks
-          // for that install until the next successful write. Same writer settings.json
-          // already uses 1600 lines down.
-          atomicWriteFileSync(
-            pluginHooksPath,
-            JSON.stringify(
-              {
-                description: pluginHooks.description || 'claude-mem-lite hooks',
-                _note:
-                  'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates',
-                hooks: {},
-              },
-              null,
-              2,
-            ) + '\n',
-          );
-          ok('Marketplace plugin: hooks cleared (prevents duplicate)');
-        }
-      }
-    } catch (e) {
-      warn(`Marketplace hooks dedup: ${e.message}`);
+    // The clone itself is never written (D#368, E2E 2026-10-16 install P1-4). This used to EMPTY
+    // its tracked hooks/hooks.json too; Claude Code updates the marketplace by pulling the clone,
+    // so that edit failed the pull on any upstream commit touching hooks.json and the plugin
+    // stopped updating silently. Claude Code loads hooks from the cache copies, cleared below and
+    // again by hook.mjs's SessionStart self-heal. The cost: a version materialized after that
+    // self-heal ran registers its hooks alongside settings.json for one session.
+    // An earlier install's edit is put back — only when the file is exactly that edit.
+    const restored = restoreMarketplaceHooksManifest(pluginDir);
+    if (restored === 'restored')
+      ok('Marketplace clone: put back hooks/hooks.json an earlier install had emptied');
+    else if (restored?.failed) {
+      warn(`Marketplace clone: could not put back hooks/hooks.json (${restored.failed})`);
+      warn(`  Run: git -C ${shellWord(pluginDir)} checkout -- hooks/hooks.json`);
     }
 
     // Sync launch.mjs to plugin cache — ensures MCP server loads dev code via symlink detection.
@@ -2910,7 +2931,13 @@ async function doctor() {
     log(
       '    the plugin then stops updating silently, which is how a machine ends up running code older than its DB.',
     );
-    log(`    Inspect: git -C ${marketplaceClone} status`);
+    // The commonest cause was this installer's own edit (D#368): say so, with the fix.
+    if (cloneManifestEmptiedByUs(marketplaceClone)) {
+      log('    Cause: hooks/hooks.json was emptied by an earlier claude-mem-lite install.');
+      log(`    Fix: git -C ${shellWord(marketplaceClone)} checkout -- hooks/hooks.json`);
+    } else {
+      log(`    Inspect: git -C ${marketplaceClone} status`);
+    }
   } else if (clone.kind === 'unknown') {
     dwarn(`Marketplace clone: could not check ${marketplaceClone} (${clone.reason}) — not checked`);
   } else if (clone.kind === 'clean') {

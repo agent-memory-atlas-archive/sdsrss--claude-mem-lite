@@ -447,6 +447,87 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     }
   });
 
+  // D#368 (E2E 2026-10-16 install P1-4): install also EMPTIED the marketplace clone's tracked
+  // hooks/hooks.json. Claude Code updates the marketplace by pulling that clone, so the edit made
+  // the pull fail on any upstream commit touching hooks.json and the plugin stopped updating.
+  describe('the marketplace clone is never written', () => {
+    const cloneManifest = () =>
+      join(home, '.claude', 'plugins', 'marketplaces', 'sdsrss', 'hooks', 'hooks.json');
+    const UPSTREAM =
+      JSON.stringify({ description: 'upstream', hooks: { Stop: [{ hooks: [] }] } }, null, 2) + '\n';
+    const git = (...args) =>
+      execFileSync('git', ['-C', dirname(dirname(cloneManifest())), ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      });
+    function seedClone() {
+      mkdirSync(dirname(cloneManifest()), { recursive: true });
+      writeFileSync(cloneManifest(), UPSTREAM);
+      git('init', '-q');
+      git('add', 'hooks/hooks.json');
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'upstream');
+    }
+
+    it('install leaves a clean clone clean', () => {
+      seedClone();
+      runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
+      expect(readFileSync(cloneManifest(), 'utf8')).toBe(UPSTREAM);
+      expect(git('status', '--porcelain')).toBe('');
+    });
+
+    it("install puts back an earlier install's emptied manifest", () => {
+      seedClone();
+      writeFileSync(
+        cloneManifest(),
+        JSON.stringify(
+          {
+            description: 'upstream',
+            _note: 'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates',
+            hooks: {},
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+      expect(git('status', '--porcelain')).not.toBe('');
+      runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
+      expect(readFileSync(cloneManifest(), 'utf8')).toBe(UPSTREAM);
+      expect(git('status', '--porcelain')).toBe('');
+    });
+
+    it('doctor names an earlier install as the cause of a dirty clone, with the fix', () => {
+      seedClone();
+      writeFileSync(
+        cloneManifest(),
+        JSON.stringify(
+          {
+            _note: 'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates',
+            hooks: {},
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+      let out;
+      try {
+        out = runInstall('doctor', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+      } catch (e) {
+        out = `${e.stdout}${e.stderr}`;
+      }
+      expect(out).toMatch(/Marketplace clone: 1 uncommitted change/);
+      expect(out).toMatch(/emptied by an earlier claude-mem-lite install/);
+      expect(out).toMatch(/checkout -- hooks\/hooks\.json/);
+    });
+
+    it('an edit that is not ours stays', () => {
+      seedClone();
+      const theirs = JSON.stringify({ description: 'mine', hooks: {} }, null, 2) + '\n';
+      writeFileSync(cloneManifest(), theirs);
+      runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
+      expect(readFileSync(cloneManifest(), 'utf8')).toBe(theirs);
+    });
+  });
+
   it('status shows MCP registered and hooks configured', () => {
     runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
     const output = runInstall('status', home, [], { PATH: `${binDir}:${process.env.PATH}` });

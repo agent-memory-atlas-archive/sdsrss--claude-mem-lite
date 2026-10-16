@@ -1232,7 +1232,7 @@ what is already stored — only whether new work runs.
 |----------|-------------|---------|
 | `CLAUDE_MEM_SKIP_SUMMARY` | Skip the background LLM session summary at **both** of its spawn sites — `Stop`, and the SessionStart `/clear`-handoff path. Until v5.3.0 only the `Stop` one honoured it. | _(runs)_ |
 | `CLAUDE_MEM_LEGACY_STOP_UNLINK` | Restore the pre-v5.4.0 behaviour where `Stop` deletes the session file. Documented revert path for the session-lifecycle change, not a supported configuration: it re-mints a mem session per turn and makes the `/clear` handoff unreachable again. Only reach for it on a host that fires `Stop` once per session rather than once per turn. | _(file kept)_ |
-| `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush. Episodes are still batched and pass through the same degraded fallback as a failed call: one that fixed an error a successful command printed is saved with inferred metadata (a command reported as failed does not enter the episode), an edit-only one is usually dropped as noise. | _(runs)_ |
+| `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush. Only the rule-based pre-save runs, through the noise gate: an error-fixing episode with a low-signal title ("Error: …") is dropped, where a failed call would save it as an activity event; an edit-only one is usually dropped as noise. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SAVE_ENRICH` | Skip the background Haiku call that backfills `lesson_learned` / search aliases after a save. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_COMPRESS` | Skip auto-compression of old observations. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_MAINTAIN` | Skip the 24h auto-maintain pass (decay, purge, backup). | _(runs)_ |
@@ -1311,7 +1311,7 @@ The original called an LLM on every tool use with raw JSON inputs. claude-mem-li
 
 ### Does this work cross-project? Cross-machine?
 
-Each memory belongs to the project it was saved in (an id like `parent--dir`). Search covers every project and ranks the current project's rows first; name a project (`project` on the MCP tools, `--project` on the CLI) to search only that one. `mem_recent` and the listings shown after a search or timeline miss use the current project. Single-machine only (SQLite, not networked). Use `mem_export` (JSON / JSONL) to back up or migrate between machines.
+Each memory belongs to the project it was saved in (an id like `parent--dir`). Search covers every project and weights the current project's rows ×2 in the ranking; name a project (`project` on the MCP tools, `--project` on the CLI) to search only that one. `mem_recent`, mem_search's `obs_type` fallback and the timeline without an anchor use the current project. Single-machine only (SQLite, not networked). Use `mem_export` (JSON / JSONL) to back up or migrate between machines.
 
 ### What about privacy? Does it call external APIs?
 

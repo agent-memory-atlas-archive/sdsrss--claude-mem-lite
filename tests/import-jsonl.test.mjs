@@ -44,6 +44,53 @@ describe('importJsonl — fixture', () => {
     expect(cnt.n).toBe(2);
   });
 
+  // E2E 2026-10-16 (cli F9): a line without `timestamp` was stored with the import's wall clock,
+  // which is part of both dedup keys, so every re-run duplicated its prompts and observations.
+  it('stays idempotent for lines without a timestamp, and keeps a repeated prompt', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'import-nots-'));
+    try {
+      const file = join(dir, 'nots.jsonl');
+      const lines = [
+        {
+          type: 'user',
+          sessionId: 's-no-ts',
+          message: { role: 'user', content: 'how do I rotate the signing key?' },
+        },
+        {
+          type: 'assistant',
+          sessionId: 's-no-ts',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls keys/' } }],
+          },
+        },
+        {
+          type: 'user',
+          sessionId: 's-no-ts',
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a.pem b.pem' }],
+          },
+        },
+        { type: 'user', sessionId: 's-no-ts', message: { role: 'user', content: 'yes' } },
+        { type: 'user', sessionId: 's-no-ts', message: { role: 'user', content: 'yes' } },
+      ];
+      writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      const first = await importJsonl(db, file, { project: 'proj' });
+      expect(first.prompts).toBe(3);
+      expect(first.observations).toBe(1);
+      for (let i = 0; i < 2; i++) {
+        const again = await importJsonl(db, file, { project: 'proj' });
+        expect(again.prompts, `run ${i + 2}`).toBe(0);
+        expect(again.observations, `run ${i + 2}`).toBe(0);
+      }
+      expect(db.prepare('SELECT COUNT(*) AS n FROM user_prompts').get().n).toBe(3);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // recognized > 0 on a valid transcript even when fully deduped — this is the
   // signal cmdImportJsonl uses to NOT mislabel an idempotent re-run as "wrong shape".
   it('reports recognized transcript events on both first import and re-run', async () => {

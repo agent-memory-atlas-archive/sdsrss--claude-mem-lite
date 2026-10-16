@@ -295,4 +295,64 @@ describe('an unpaired managed sentinel must not eat user content or be reported 
     expect(out).toMatch(/removed 1 CLAUDE\.md block/);
     expect(count(/STEP ONE/g), 'the sweep lost the user tail').toBe(1);
   });
+
+  // E2E 2026-10-16 round 2 (install B14): a begin marker with text after it on its line is no
+  // sentinel to the block pattern, so `adopt` said "created" and appended a second block below
+  // the damaged one — exit 0, both copies loaded, and unadopt then reported 2 unpaired lines.
+  describe('adopt over a damaged sentinel line', () => {
+    const adoptCli = (...a) => {
+      const env = {
+        ...process.env,
+        CLAUDE_MEM_DIR: join(tmpHome, 'data'),
+        CLAUDE_PROJECT_DIR: cwd,
+        MEM_NO_AUTO_ADOPT: '1',
+        CLAUDE_MEM_TEST_GUARD: '0',
+      };
+      try {
+        return {
+          status: 0,
+          out: execFileSync(process.execPath, [join(REPO, 'cli.mjs'), 'adopt', ...a], {
+            cwd,
+            env,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          }),
+        };
+      } catch (e) {
+        return { status: e.status, out: `${e.stdout || ''}${e.stderr || ''}` };
+      }
+    };
+
+    it('refuses, names the line and the fix, and writes nothing', () => {
+      expect(adoptCli().status).toBe(0);
+      writeFileSync(md, read().replace(/(<!-- claude-mem-lite:begin v\d+ -->)\n/, '$1 (team note)\n'));
+      // A half state adopt would otherwise heal: the doc coming back is a write.
+      rmSync(detailDocPath(cwd, SLUG));
+      const before = read();
+      const line = before.split('\n').findIndex((l) => l.includes('(team note)')) + 1;
+      expect(line, 'premise: the damaged line is there').toBeGreaterThan(0);
+
+      for (const flags of [[], ['--dry-run']]) {
+        const r = adoptCli(...flags);
+        expect(r.status, `adopt ${flags.join(' ')} exit code`).toBe(1);
+        expect(r.out).toMatch(new RegExp(`CLAUDE\\.md line ${line}\\b`));
+        expect(r.out).toMatch(/\(team note\)/);
+        expect(r.out).toMatch(/nothing was written/i);
+        expect(read(), 'adopt wrote into a file with a damaged sentinel').toBe(before);
+        expect(count(/claude-mem-lite:begin/g)).toBe(1);
+        expect(existsSync(detailDocPath(cwd, SLUG)), 'the detail doc was written').toBe(false);
+      }
+    });
+
+    it('still adopts a CLAUDE.md that mentions the sentinel inside a sentence', () => {
+      writeFileSync(md, '# Docs\n\nPlugins wrap their block in `<!-- claude-mem-lite:begin v1 -->`.\n');
+      const r = adoptCli();
+      expect(r.status).toBe(0);
+      expect(readBlock(cwd, SLUG).body, 'prose mention refused an adopt').not.toBeNull();
+      // And the healthy block it wrote is no stray: a re-run is a plain no-op.
+      const again = adoptCli();
+      expect(again.status).toBe(0);
+      expect(again.out).toMatch(/→ unchanged/);
+    });
+  });
 });

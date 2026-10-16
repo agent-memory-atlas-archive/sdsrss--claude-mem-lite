@@ -51,6 +51,7 @@ import {
   detailDocPath,
   addAgentsImports,
   holdsOnlyOwnLines,
+  straySentinelLines,
 } from './claudemd.mjs';
 import { PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc } from './adopt-content.mjs';
 import {
@@ -197,6 +198,18 @@ function adoptOne(cwd, { force, dryRun }) {
   const block = buildClaudeMdBlock();
   const doc = getDetailDoc();
   const version = CURRENT_SENTINEL_VERSION;
+  // A damaged sentinel line pairs with no block, so writing would add a second block beside it
+  // (E2E 2026-10-16 round 2, B14). Which lines are the block is the user's call: refuse first.
+  const stray = straySentinelLines(claudeMdPath(cwd), PLUGIN_SLUG);
+  if (stray.length > 0) {
+    log(`[adopt] ${cwd} → refused, nothing was written:`);
+    for (const s of stray) log(`  ${claudeMdPath(cwd)} line ${s.line}: ${s.text}`);
+    log(
+      `  ${stray.length === 1 ? 'This sentinel line pairs' : 'These sentinel lines pair'} with no well-formed block, so adopt would add a second one. Make the block's first line exactly \`<!-- ${PLUGIN_SLUG}:begin ${version} -->\` and its last \`<!-- ${PLUGIN_SLUG}:end -->\`, each on a line of its own, or delete the marker lines and the text between them; then run adopt again.`,
+    );
+    process.exitCode = 1;
+    return { action: 'refused' };
+  }
   // Claude Code stops reading AGENTS.md once a CLAUDE.md exists: the one written here imports
   // the AGENTS.md files beside it and names the ones it cannot import.
   const agents = agentsMdForNewClaudeMd(cwd, PLUGIN_SLUG);

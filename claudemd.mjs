@@ -104,6 +104,35 @@ function orphanSentinelCount(raw, slug) {
   });
   return total - paired;
 }
+/**
+ * The lines of `p` that open with a sentinel of this slug and that no well-formed block
+ * accounts for: a begin marker with text after it, a lost version tag, a missing partner. The
+ * block pattern cannot see them, so a write that trusts it adds a second block beside them
+ * (E2E 2026-10-16 round 2, B14). A sentinel inside a sentence is prose, not a marker (pre-ship
+ * review P2-3), and is not listed.
+ * @param {string} p absolute path of the instructions file
+ * @param {string} slug
+ * @returns {{line: number, text: string}[]} 1-based; empty for a missing or unreadable file
+ */
+export function straySentinelLines(p, slug) {
+  let raw;
+  try {
+    raw = readFileSync(p, 'utf8');
+  } catch {
+    return [];
+  }
+  const spans = [...raw.matchAll(blockRegexG(slug))].map((m) => [m.index, m.index + m[0].length]);
+  const opensLine = new RegExp(`^\\s*<!-- ${escapeRe(slug)}:(?:begin|end)\\b`);
+  const stray = [];
+  let offset = 0;
+  raw.split('\n').forEach((text, i) => {
+    const at = offset + text.indexOf('<!--');
+    if (opensLine.test(text) && !spans.some(([s, e]) => at >= s && at < e))
+      stray.push({ line: i + 1, text: text.trim() });
+    offset += text.length + 1;
+  });
+  return stray;
+}
 function blockRegex(slug) {
   return new RegExp(blockBody(escapeRe(slug)));
 }

@@ -77,3 +77,30 @@ describe('cluster-merge sends stored rows as data', () => {
     });
   });
 });
+
+describe('narrow and wide re-enrich send the stored row as data', () => {
+  let db;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-1', project: 'test' });
+    callModelJSONAsync.mockReset();
+    callModelJSONAsync.mockResolvedValue(null);
+  });
+  afterEach(() => db.close());
+
+  for (const scope of ['narrow', 'wide']) {
+    it(`${scope}: title, narrative and type in user; the re-enrich contract plus the guard in system`, async () => {
+      const { executeReenrich } = await import('../hook-optimize.mjs');
+      insertObs(db, { type: 'bugfix', title: TITLE, narrative: NARRATIVE });
+      const res = await executeReenrich(db, 5, { scope });
+      expect(res.skipped).toBe(1);
+      expect(callModelJSONAsync).toHaveBeenCalledTimes(1);
+      const prompt = callModelJSONAsync.mock.calls[0][0];
+      expectStoredTextIsData(prompt, {
+        stored: [TITLE, DIRECTIVE],
+        instruction: '"lesson_learned":"non-obvious insight',
+      });
+      expect(prompt.user).toContain('Type: bugfix');
+    });
+  }
+});

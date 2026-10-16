@@ -457,19 +457,21 @@ facts: 1-4 specific, checkable statements the narrative actually asserts. Omit r
         processed++;
         continue;
       }
-      const prompt = `Re-enrich this observation with structured metadata. Return ONLY valid JSON, no markdown fences.
-
-Title: ${truncate(cand.title || '(untitled)', 200)}
-Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}
-Type: ${cand.type || 'change'}
+      // Narrow and wide share this prompt. Instructions and the guard in `system`, the stored
+      // row in `user` (D367; the cluster-merge prompt says why).
+      const system = `Re-enrich this observation with structured metadata. Return ONLY valid JSON, no markdown fences.
 
 JSON: {"type":"decision|bugfix|feature|refactor|discovery|change","title":"improved ≤120 char title","narrative":"improved 2-3 sentence narrative","concepts":["kw1","kw2"],"facts":["specific fact 1","specific fact 2"],"importance":1,"lesson_learned":"non-obvious insight or 'none' if routine","search_aliases":["alt query 1","alt query 2"],"scope":"file|module|project|environment"}
 importance: 0=no value, 1=routine, 2=notable non-obvious insight, 3=critical. Default 1.
 lesson_learned: State what was learned. If routine, write "none".
 search_aliases: 2-6 alternative search terms (include CJK if applicable).
-scope: ${SCOPE_PROMPT_LEGEND}`;
+scope: ${SCOPE_PROMPT_LEGEND}
+${MEMORY_INPUT_GUARD}`;
+      const user = `Title: ${truncate(cand.title || '(untitled)', 200)}
+Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}
+Type: ${cand.type || 'change'}`;
 
-      const parsed = await callModelJSONAsync(prompt, 'haiku', {
+      const parsed = await callModelJSONAsync({ system, user }, 'haiku', {
         timeout: BG_LLM_TIMEOUT_MS,
         maxTokens: 500,
       });

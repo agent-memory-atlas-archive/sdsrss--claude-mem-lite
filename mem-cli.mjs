@@ -3717,6 +3717,11 @@ import { HOOK_TEXT_CAP } from './lib/hook-text-cap.mjs';
  * remembered to enumerate.
  */
 const ARGV_PARSED_COMMANDS = new Set(['adopt', 'unadopt', 'doctor', 'optimize']);
+// Every flag adopt-cli.mjs reads (hasFlag) for the two commands that write into a repository.
+const WRITER_COMMAND_FLAGS = {
+  adopt: ['--dry-run', '--all', '--status', '--disable', '--enable', '--force'],
+  unadopt: ['--dry-run', '--all', '--status', '--force'],
+};
 
 export async function run(argv) {
   // The inert-selection-flag notice is emitted HERE rather than inside the dispatcher because
@@ -3764,6 +3769,26 @@ async function runDispatch(argv) {
   if (cmdArgs.includes('--help') || cmdArgs.includes('-h')) {
     cmdHelp();
     return;
+  }
+
+  // adopt / unadopt write and delete files in the user's repository, so an unknown flag stops
+  // them instead of being warned about and ignored, the rule the install family follows.
+  // `adopt --dryrun` used to warn and then write the committed CLAUDE.md, `adopt --disabel`
+  // adopted, `unadopt --dryrun` removed the block, all exit 0 (E2E 2026-10-16).
+  const writerFlags = WRITER_COMMAND_FLAGS[cmd];
+  if (writerFlags) {
+    if (cmdArgs[0] === 'help') {
+      cmdHelp();
+      return;
+    }
+    const unknown = cmdArgs.filter((a) => a.startsWith('-') && !writerFlags.includes(a));
+    if (unknown.length > 0) {
+      fail(
+        `[mem] ${cmd}: unknown flag ${unknown.join(', ')} — nothing was changed. ` +
+          `${cmd} takes: ${writerFlags.join(' ')}`,
+      );
+      return;
+    }
   }
 
   // Typo guard: parseArgs silently DROPS unknown flags, so `save --improtance 3` used to

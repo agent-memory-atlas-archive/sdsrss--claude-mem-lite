@@ -237,6 +237,25 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.28.0
+
+**The first database open after the update re-indexes events, so CJK text in them is searchable.**
+No schema-version change: 6.27.0 still opens, searches and writes the database after this release
+has (rows it writes are not re-indexed when you update again).
+
+- **What the open costs.** 88–94 ms on the maintainer's store (6909 events), growing with the
+  store: about 0.9–1.9 s at 60,000 events and 6.7 s at 200,000. On a store that large, a hook with
+  a 5 s timeout that opens it first is killed once with its output, and the next open finishes the
+  pass; `integrity_check` read ok after each step.
+- **Exit codes.** Some commands that exited 0 now exit 1, among them `save`, `update`, `defer add`
+  and `activity save` given a flag they do not take, `save` and `defer add` given a mistyped
+  project, `delete` given a malformed id, `self-update` when it checked nothing, and `import-jsonl`
+  on input none of whose lines is a transcript event; CHANGELOG.md lists the rest. `install` exits
+  3 when only the MCP registration failed. A script that relied on exit 0 there needs a look.
+- **Also in this release:** `install` no longer edits the marketplace clone's `hooks/hooks.json`;
+  four MCP tool texts say what the tools do; a hook under a long write lock exits instead of being
+  killed (UserPromptSubmit and SessionStart with their context). Details in CHANGELOG.md.
+
 ## Upgrading to 6.25.0
 
 **Every session gets the same first line on a file-recall block again.** No schema-version

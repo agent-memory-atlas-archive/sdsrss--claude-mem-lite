@@ -607,9 +607,25 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
       stdout = e.stdout || '';
     }
     expect(stdout).toMatch(/MCP registration failed/);
-    expect(status).toBe(1);
+    // Its own code, so repair can tell "installed, MCP not registered" from a failed install.
+    expect(status).toBe(3);
     expect(stdout).not.toMatch(/Done! Restart Claude Code/);
     expect(stdout.trim().split('\n').pop()).toMatch(/MCP server is NOT registered/);
+  });
+
+  // repair re-runs a verified release's install; with B8's exit code that read as "Repair failed"
+  // (and the manual curl fallback) for a resync that worked, on a machine whose hook env cannot
+  // run `claude`.
+  it('repair takes "installed, MCP not registered" as a resync with a warning', async () => {
+    const { runRepairInstaller, EXIT_MCP_UNREGISTERED } = await import('../install.mjs');
+    const fail = (status) => () => {
+      throw Object.assign(new Error(`exit ${status}`), { status });
+    };
+    expect(runRepairInstaller('/x/install.mjs', () => {})).toEqual({ mcpRegistered: true });
+    expect(runRepairInstaller('/x/install.mjs', fail(EXIT_MCP_UNREGISTERED))).toEqual({
+      mcpRegistered: false,
+    });
+    expect(() => runRepairInstaller('/x/install.mjs', fail(1))).toThrow(/exit 1/);
   });
 
   // The same failure over a registration that already runs this install's server leaves the

@@ -1623,10 +1623,35 @@ async function install() {
     console.log(
       '\n  ✗ Installed, but the MCP server is NOT registered: the mem_* tools stay unavailable until the "Try manually" command above runs. Then restart Claude Code.\n',
     );
-    process.exitCode = 1;
+    process.exitCode = EXIT_MCP_UNREGISTERED;
     return;
   }
   console.log('\n  Done! Restart Claude Code to activate.\n');
+}
+
+/**
+ * install's exit code when everything was installed except the MCP registration (B8). Its own
+ * code rather than 1, so repair can tell it from an install that failed.
+ */
+export const EXIT_MCP_UNREGISTERED = 3;
+
+/**
+ * Run a verified release's installer for repair. "Installed, MCP not registered" is a completed
+ * resync there, with a warning: read as a failure it printed "Repair failed" and the manual curl
+ * fallback for files that had been synced (a hook env that cannot run `claude`).
+ * @returns {{mcpRegistered: boolean}}
+ */
+export function runRepairInstaller(
+  installer,
+  run = (args) => execFileSync(process.execPath, args, { stdio: 'inherit', timeout: 300000 }),
+) {
+  try {
+    run([installer, 'install']);
+    return { mcpRegistered: true };
+  } catch (e) {
+    if (e?.status === EXIT_MCP_UNREGISTERED) return { mcpRegistered: false };
+    throw e;
+  }
 }
 
 // ─── Uninstall ──────────────────────────────────────────────────────────────
@@ -4272,8 +4297,9 @@ async function repair() {
     const tarballInstaller = join(stagingDir, 'install.mjs');
     if (!existsSync(tarballInstaller)) throw new Error('verified tarball missing install.mjs');
     log('Re-running install from the verified release sources...');
-    execFileSync(process.execPath, [tarballInstaller, 'install'], { stdio: 'inherit', timeout: 300000 });
+    const { mcpRegistered } = runRepairInstaller(tarballInstaller);
     ok(`Repair complete — resynced from verified release v${rel.version}`);
+    if (!mcpRegistered) warn('The MCP server is still not registered: run the "Try manually" command above.');
   } catch (e) {
     fail(`Repair failed: ${e.message}`);
     console.log('');

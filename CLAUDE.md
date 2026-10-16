@@ -82,8 +82,7 @@ produces a number that looks measured and is not.** → `findings.md § Measurem
 
 ## Rulers
 
-**Read a ruler's entry in `rulers.md` before quoting or re-measuring it** — each records its
-caliber, population, self-checks and wrong drafts.
+**Read a ruler's `rulers.md` entry before quoting or re-measuring it.**
 
 `denoise-ab.mjs` any precision/recall lever, BEFORE shipping · `error-recall-live-replay.mjs`
 + `error-recall-suite.mjs` command-vocabulary admits, and the bm25 floor denoise-ab is blind
@@ -94,7 +93,7 @@ a PROJECT · `patha-exclude-report.mjs` D#216, deciding column `refilled` ·
 `deep-search-holdout.mjs` deep search's PRECISION arm ·
 `compress-veto-rate.mjs` whether D#10's veto FIRES, three arms · `haiku-model-ab.mjs` a haiku-tier
 model swap · `multiplier-discrimination.mjs` whether each of the 8 multipliers is WIRED at its magnitude · `longmemeval.mjs` standard
-recall, lexical baseline.
+recall, lexical baseline · `injection-budget.mjs` hook bytes per face, frozen corpus.
 
 ## Baselines
 

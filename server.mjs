@@ -40,6 +40,7 @@ import {
   parseDuration,
   coreRunSearchPipeline,
   reachabilityNote,
+  ignoredOperatorNote,
 } from './lib/search-core.mjs';
 import {
   runMaintainOps,
@@ -471,6 +472,11 @@ function formatSearchOutput(
       hint.push('Tip: use content words instead of operators (AND, OR, NOT, NEAR).');
     } else {
       hint.push('No results found.');
+      const opNote = ignoredOperatorNote(args.query, {
+        orHint: 'pass or=true for any-word matching',
+        orMode: !!args.or,
+      });
+      if (opNote) hint.push(opNote);
       if (args.query) {
         const expanded = ftsQuery || args.query;
         // Bounded like the other two echo sites. This one is the worst of the three: it
@@ -518,6 +524,13 @@ function formatSearchOutput(
   lines.push(
     `${header}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paginatedResults)}\n`,
   );
+  if (!listing) {
+    const opNote = ignoredOperatorNote(args.query, {
+      orHint: 'pass or=true for any-word matching',
+      orMode: !!args.or,
+    });
+    if (opNote) lines.push(`${opNote}\n`);
+  }
 
   // `~Nt` = estimated tokens to fetch this row's full body via mem_get (attachBodyTokens).
   // Conditional so a result that skipped enrichment renders cleanly, not "~undefinedt".

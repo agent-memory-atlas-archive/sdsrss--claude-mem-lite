@@ -205,6 +205,18 @@ describe('round-3 CLI wording', () => {
   });
 });
 
+// E2E 2026-10-16 (cli F5): NOT / -term / OR were dropped with no word.
+describe('search says which operators it ignored', () => {
+  it('on stderr, so --json stdout stays parseable', () => {
+    const r = cli('search', 'redis NOT pool', '--json');
+    expect(r.status, r.stderr).toBe(0);
+    expect(() => JSON.parse(r.stdout)).not.toThrow();
+    expect(r.stderr).toMatch(/NOT \(nothing is excluded\)/);
+    expect(cli('search', 'redis OR pool').stderr).toMatch(/--or/);
+    expect(cli('search', 'redis pool').stderr).not.toMatch(/not supported/);
+  });
+});
+
 // E2E 2026-10-16 (cli F13): the section key was derived from the heading text, so the Recent
 // table's key carried today's date ("recent_(2026-10-16)") and changed every day.
 describe('context --json section keys are stable', () => {

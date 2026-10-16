@@ -143,6 +143,7 @@ import {
   parseDuration,
   coreRunSearchPipeline,
   reachabilityNote,
+  ignoredOperatorNote,
 } from './lib/search-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import { countRecentHookErrors } from './lib/hook-telemetry.mjs';
@@ -286,6 +287,9 @@ async function cmdSearch(db, args, { llm } = {}) {
     return;
   }
   const useOr = flags.or === true || flags.or === 'true';
+  // stderr, so a --json consumer's stdout stays one parseable document (E2E 2026-10-16, cli F5).
+  const opNote = ignoredOperatorNote(query, { orHint: 'use --or for any-word matching', orMode: useOr });
+  if (opNote) process.stderr.write(`[mem] ${opNote}\n`);
   // R-1: opt-in flag to surface hook-llm fallback titles ("Modified X", "Worked on X", raw
   // error logs, etc.) which are otherwise filtered from default search. Use for auditing or
   // when explicitly searching for a file/command that produced a degraded title.

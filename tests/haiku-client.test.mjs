@@ -2436,6 +2436,92 @@ describe('haiku-client.mjs', () => {
       expect(execFileSync).not.toHaveBeenCalled();
     });
   });
+
+  // ─── The caller's timeout is a deadline for the whole call (E2E 2026-10-16 P2-6) ──
+  // The CLI fallback used to get a fresh full `timeout` after the keyed provider had spent its
+  // own, so every budget was really twice itself. One case per dispatcher, both ways: a provider
+  // that hangs the whole budget leaves no CLI spawn, and one that fails fast leaves the CLI only
+  // what remains.
+  describe('the CLI fallback gets only what is left of the timeout', () => {
+    const BUDGET = 1200;
+    // A fetch that never answers and honours the abort, like a provider that hangs its body.
+    const hungFetch = () =>
+      vi.fn(
+        (_url, opts) =>
+          new Promise((_resolve, reject) => {
+            opts.signal.addEventListener('abort', () =>
+              reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            );
+          }),
+      );
+    // A spawned CLI that never prints and never exits.
+    const silentChild = () => {
+      const child = new EventEmitter();
+      child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+      child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+      child.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
+      child.kill = vi.fn();
+      return child;
+    };
+    beforeEach(() => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+      _resetMode();
+    });
+
+    const sync = [
+      ['callHaiku', () => callHaiku('p', { timeout: BUDGET })],
+      ['callLLMWithModel', () => callLLMWithModel('p', 'haiku', { timeout: BUDGET })],
+    ];
+    for (const [name, call] of sync) {
+      it(`${name}: no CLI spawn once the provider has spent the whole budget`, async () => {
+        vi.stubGlobal('fetch', hungFetch());
+        vi.mocked(execFileSync).mockReturnValue('cli text');
+        const t0 = Date.now();
+        expect(await call()).toBeNull();
+        expect(execFileSync).not.toHaveBeenCalled();
+        expect(Date.now() - t0).toBeLessThan(BUDGET + 400);
+      });
+
+      it(`${name}: the CLI gets what remains after a fast provider failure`, async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+        vi.mocked(execFileSync).mockReturnValue('cli text');
+        expect(await call()).toEqual({ text: 'cli text' });
+        const { timeout } = vi.mocked(execFileSync).mock.calls[0][2];
+        expect(timeout).toBeLessThanOrEqual(BUDGET);
+        expect(timeout).toBeGreaterThan(BUDGET - 300);
+      });
+    }
+
+    const async = [
+      ['callLLMWithModelAsync', () => callLLMWithModelAsync('p', 'haiku', { timeout: BUDGET })],
+      ['callModelJSONAsync', () => callModelJSONAsync('p', 'haiku', { timeout: BUDGET })],
+    ];
+    for (const [name, call] of async) {
+      it(`${name}: no CLI spawn once the provider has spent the whole budget`, async () => {
+        vi.stubGlobal('fetch', hungFetch());
+        vi.mocked(spawn).mockImplementation(silentChild);
+        const t0 = Date.now();
+        expect(await call()).toBeNull();
+        expect(spawn).not.toHaveBeenCalled();
+        expect(Date.now() - t0).toBeLessThan(BUDGET + 400);
+      });
+
+      it(`${name}: a silent CLI is cut at the original deadline, not a fresh one`, async () => {
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            () => new Promise((resolve) => setTimeout(() => resolve({ ok: false, status: 500 }), BUDGET / 2)),
+          ),
+        );
+        vi.mocked(spawn).mockImplementation(silentChild);
+        const t0 = Date.now();
+        expect(await call()).toBeNull();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        // A fresh budget would end at 1.5 x BUDGET; the deadline ends at BUDGET.
+        expect(Date.now() - t0).toBeLessThan(BUDGET * 1.25);
+      });
+    }
+  });
   // ─── Pre-tag review findings (v3.68.0) ────────────────────────────────────
   // The async twins added for the MCP legs (D#138 MEDIUM-3) must be twins in
   // behaviour, not just in name. Two divergences the review found:

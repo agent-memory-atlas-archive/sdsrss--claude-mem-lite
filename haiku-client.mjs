@@ -284,6 +284,32 @@ export function flattenForCLI(input) {
 // ─── Core Call ───────────────────────────────────────────────────────────────
 
 /**
+ * What the CLI fallback may spend once the keyed provider has failed: the rest of the call's
+ * deadline, or 0 when less than RETRY_MIN_BUDGET_MS is left (a spawn that cannot finish is
+ * worse than returning the failure, the same rule the CLI's own compat retry follows).
+ *
+ * A caller's `timeout` is a deadline for the WHOLE call, keyed provider and fallback together
+ * (E2E 2026-10-16 P2-6). The fallback used to get a fresh full `timeout`, so every budget was
+ * twice itself: the lesson bridge's 2.5 s ran 5.1 s against its 3 s PreToolUse hook with both
+ * legs hanging, and one deep search blocked 48 s.
+ *
+ * @param {number} deadline epoch ms the call must end by
+ * @param {string} mode the keyed provider that failed, for the log
+ * @param {string} model
+ * @returns {number} ms for the CLI, or 0 for none
+ */
+function fallbackBudget(deadline, mode, model) {
+  const left = deadline - Date.now();
+  if (left >= RETRY_MIN_BUDGET_MS) return left;
+  debugLog(
+    'WARN',
+    'haiku-client',
+    `${mode} call failed with ${Math.max(0, left)}ms left; no claude CLI fallback (${model})`,
+  );
+  return 0;
+}
+
+/**
  * Call Haiku model with a prompt. Returns parsed text or null on failure.
  * Provider priority ANTHROPIC_API_KEY → OPENROUTER_API_KEY → CLI; if the keyed
  * provider call fails (HTTP error / network throw / empty), degrades to the
@@ -314,10 +340,12 @@ export async function callHaiku(
       return null;
     }
   }
+  const deadline = Date.now() + timeout;
 
   // Keyed provider (api/openrouter): attempt it, then degrade to the CLI on any
   // failure (HTTP error → null, or network/timeout throw). A region-blocked or
-  // out-of-credit key must not silently drop background summaries.
+  // out-of-credit key must not silently drop background summaries. The CLI gets what is left
+  // of `timeout`, not a fresh one (fallbackBudget).
   let primary = null;
   try {
     // callModelAPI, not a second copy of it: the two were byte-identical apart from
@@ -340,9 +368,11 @@ export async function callHaiku(
   }
   if (primary) return primary;
 
+  const left = fallbackBudget(deadline, mode, 'haiku');
+  if (!left) return null;
   debugLog('WARN', 'haiku-client', `${mode} call failed, falling back to claude CLI`);
   try {
-    return callHaikuCLI(prompt, { timeout });
+    return callHaikuCLI(prompt, { timeout: left });
   } catch (e) {
     debugCatch(e, 'callHaiku:cli-fallback');
     return null;
@@ -426,6 +456,7 @@ export async function callLLMWithModel(
       return null;
     }
   }
+  const deadline = Date.now() + timeout;
 
   // Keyed provider (api/openrouter): attempt it, then degrade to the CLI on any
   // failure so a region-blocked / out-of-credit key still produces output.
@@ -440,9 +471,11 @@ export async function callLLMWithModel(
   }
   if (primary) return primary;
 
+  const left = fallbackBudget(deadline, mode, resolvedModel);
+  if (!left) return null;
   debugLog('WARN', 'haiku-client', `${mode} call failed, falling back to claude CLI (${resolvedModel})`);
   try {
-    return callModelCLI(prompt, resolvedModel, { timeout });
+    return callModelCLI(prompt, resolvedModel, { timeout: left });
   } catch (e) {
     debugCatch(e, `callLLMWithModel:cli-fallback:${resolvedModel}`);
     return null;
@@ -477,6 +510,7 @@ export async function callLLMWithModelAsync(
 
   // CLI is terminal — no provider to fall back to.
   if (mode === 'cli') return callModelCLIAsync(prompt, resolvedModel, { timeout });
+  const deadline = Date.now() + timeout;
 
   let primary = null;
   try {
@@ -489,12 +523,14 @@ export async function callLLMWithModelAsync(
   }
   if (primary) return primary;
 
+  const left = fallbackBudget(deadline, mode, resolvedModel);
+  if (!left) return null;
   debugLog(
     'WARN',
     'haiku-client',
     `${mode} call failed, falling back to async claude CLI (${resolvedModel})`,
   );
-  return callModelCLIAsync(prompt, resolvedModel, { timeout });
+  return callModelCLIAsync(prompt, resolvedModel, { timeout: left });
 }
 
 /**
@@ -536,6 +572,7 @@ export async function callModelJSONAsync(
     const res = await callModelCLIAsync(prompt, resolvedModel, { timeout });
     return res?.text ? parseJsonFromLLM(res.text) : null;
   }
+  const deadline = Date.now() + timeout;
 
   // Keyed provider (api/openrouter): try it, then degrade to the ASYNC CLI on any
   // failure — NOT the blocking execFileSync callModelCLI that callModelJSON uses.
@@ -550,7 +587,9 @@ export async function callModelJSONAsync(
   }
   if (primary?.text) return parseJsonFromLLM(primary.text);
 
-  const res = await callModelCLIAsync(prompt, resolvedModel, { timeout });
+  const left = fallbackBudget(deadline, mode, resolvedModel);
+  if (!left) return null;
+  const res = await callModelCLIAsync(prompt, resolvedModel, { timeout: left });
   return res?.text ? parseJsonFromLLM(res.text) : null;
 }
 

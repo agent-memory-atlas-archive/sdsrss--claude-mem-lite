@@ -19,7 +19,7 @@
 // you're changing it.
 
 import { randomUUID } from 'crypto';
-import { join, resolve as resolvePath } from 'path';
+import { join, basename, resolve as resolvePath } from 'path';
 import {
   readFileSync,
   writeFileSync,
@@ -174,8 +174,16 @@ import { formatTaskImperative } from './lib/task-imperative.mjs';
 import { gcOldMetricShards, recordMetric } from './lib/metrics.mjs';
 import { detectMemOverride } from './lib/mem-override.mjs';
 import { injectedIdsFileName, keyContextIdsFileName, readInjectedMarker } from './lib/injected-ids.mjs';
+import { threadKey } from './lib/cooldown-path.mjs';
 import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-marker.mjs';
-import { RECALL_SHOWN_PREFIX, clearRecallShown, markCooldownCompacted } from './lib/recall-shown.mjs';
+import {
+  RECALL_SHOWN_PREFIX,
+  clearRecallShown,
+  markCooldownCompacted,
+  errorRecallShownPath,
+  readErrorRecallShown,
+  markErrorRecallShown,
+} from './lib/recall-shown.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
 import { errorRecallSuppression } from './lib/error-recall-gate.mjs';
@@ -851,7 +859,8 @@ async function handlePostToolUse() {
     !errorRecallSuppressed(toolInput, resp, hookData.session_id, true, bashWrites)
   ) {
     const d = getDb();
-    if (d) triggerErrorRecall(d, toolInput, resp);
+    if (d)
+      triggerErrorRecall(d, toolInput, resp, { thread: threadKey(hookData.session_id, hookData.agent_id) });
   }
 
   // D#69: a subagent's calls (the host sets `agent_id` only inside a subagent) stay out of
@@ -1003,7 +1012,17 @@ function triggerErrorRecall(db, toolInput, response, opts = {}) {
       project,
     });
     if (!selected) return;
-    const rows = selected.rows;
+    // Per-thread dedup, like the PreToolUse and UserPromptSubmit faces: a red/green loop re-sent
+    // the identical block on every failing run (lib/recall-shown.mjs ERROR_RECALL_REPEAT_MS).
+    const shownPath = errorRecallShownPath(RUNTIME_DIR, opts.thread);
+    const shown = readErrorRecallShown(shownPath);
+    const rows = selected.rows.filter((r) => !shown.has(String(r.id)));
+    if (rows.length === 0) return;
+    markErrorRecallShown(
+      shownPath,
+      shown,
+      rows.map((r) => r.id),
+    );
 
     const out = formatErrorRecallHints(rows);
     if (out) {
@@ -1130,6 +1149,7 @@ async function handlePostToolFailure() {
     // name on the envelope differs. A second copy of the query here is the twin-drift
     // defect this project keeps paying for.
     triggerErrorRecall(db, toolInput, error, {
+      thread: threadKey(hookData.session_id, hookData.agent_id),
       eventName: 'PostToolUseFailure',
       // A separate counter, so the volume this event adds is readable on its own rather
       // than merged into the existing surface's total. The citation funnel deliberately
@@ -3140,7 +3160,12 @@ async function handleSessionStart() {
     // inferProject(), not `project`: that const is declared further down this function, and
     // reading it here is a TDZ ReferenceError that eslint's no-undef cannot see.
     const proj = inferProject();
-    for (const name of [injectedIdsFileName(proj, ccSessionId), keyContextIdsFileName(proj, ccSessionId)]) {
+    const errShown = basename(errorRecallShownPath(RUNTIME_DIR, ccSessionId));
+    for (const name of [
+      injectedIdsFileName(proj, ccSessionId),
+      keyContextIdsFileName(proj, ccSessionId),
+      errShown,
+    ]) {
       try {
         unlinkSync(join(RUNTIME_DIR, name));
       } catch {

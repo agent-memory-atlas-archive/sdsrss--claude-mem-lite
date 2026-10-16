@@ -380,6 +380,10 @@ describe('hook.mjs post-tool-use: co-firing receipts stay one document', () => {
 
   it('emits ONE JSON document when an error recall and an episode flush co-fire', () => {
     fillEpisodeBuffer('cc-1env-a');
+    // The fill's first entry is this same failure in this thread, and error recall shows a
+    // thread the same memories once per 30 minutes (E2E 2026-10-16); clear that marker so the
+    // co-firing call recalls again, which is the state this case is about.
+    rmSync(join(tmpHome, '.claude-mem-lite', 'runtime', 'recall-shown-err-cc-1env-a.json'), { force: true });
     const stdout = postToolUse({
       session_id: 'cc-1env-a',
       tool_name: 'Bash',

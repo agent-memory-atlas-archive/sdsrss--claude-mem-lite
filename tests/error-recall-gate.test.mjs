@@ -388,6 +388,10 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
   });
 
   function fire(cmd, args, { cwd: dir, stdin = '', timeout = 30000 } = {}) {
+    // These cases test the GATE, firing the same failure in one session as their own control.
+    // Error recall now skips ids a thread was shown in the last 30 minutes (E2E 2026-10-16), so
+    // that marker is cleared before every fire; the dedup has its own test.
+    rmSync(join(dataDir, 'runtime', 'recall-shown-err-cc-errgate.json'), { force: true });
     return new Promise((resolve, reject) => {
       const child = spawn(cmd, args, { cwd: dir, env: BASE_ENV, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '',
@@ -603,5 +607,29 @@ describe('error-recall wiring: hook.mjs honours the gate', () => {
       'FAIL tests/a.test.mjs > shared temp file\nAssertionError: expected 2 to be 3',
     );
     expect(script.block, 'a script file is not a data printer').toBeTruthy();
+  }, 60000);
+
+  // E2E 2026-10-16 (hooks F10): no thread dedup on this face, so a red/green loop re-sent the
+  // identical block on every failing run. Session ids other than cc-errgate keep their marker
+  // (fire() clears only that one).
+  it('the same failure in one thread injects once; another thread still gets it', async () => {
+    const failing = async (session) => {
+      const r = await fire(process.execPath, [HOOK_PATH, 'post-tool-failure'], {
+        cwd,
+        stdin: JSON.stringify({
+          hook_event_name: 'PostToolUseFailure',
+          session_id: session,
+          cwd,
+          tool_name: 'Bash',
+          tool_input: { command: 'npx vitest run tests/a.test.mjs' },
+          error: 'FAIL tests/a.test.mjs > shared temp file\nAssertionError: expected 2 to be 3',
+        }),
+      });
+      expect(r.code, r.stderr).toBe(0);
+      return r.stdout.includes('Related memories found for this error');
+    };
+    expect(await failing('cc-dedup-1'), 'premise: the failure injects').toBe(true);
+    expect(await failing('cc-dedup-1'), 'the identical block again in the same thread').toBe(false);
+    expect(await failing('cc-dedup-2'), 'another thread has not seen it').toBe(true);
   }, 60000);
 });

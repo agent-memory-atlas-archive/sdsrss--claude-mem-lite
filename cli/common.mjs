@@ -18,7 +18,7 @@ import { neutralizeContextDelimiters, neutralizeSkillDelimiters } from '../forma
  * `--key value` → flags.key = value; `--flag` (no value) → flags.key = true.
  * `-h` → flags.help = true.
  */
-export function parseArgs(argv) {
+export function parseArgs(argv, { track = true } = {}) {
   const positional = [];
   const flags = {};
   // Canonical flag name for a raw `--key`. Two normalizations, both aimed at the
@@ -91,7 +91,9 @@ export function parseArgs(argv) {
       i++;
     }
   }
-  return { positional, flags: trackFlagReads(flags) };
+  // `track: false` for the dispatcher's own peeks (typo hints, the unknown-project note): a read
+  // there is not the command consuming the flag, and recording it hid the inert-flag notice.
+  return { positional, flags: track ? trackFlagReads(flags) : flags };
 }
 
 // ─── Inert selection flags ───────────────────────────────────────────────────

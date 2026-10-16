@@ -15,7 +15,7 @@ import {
   COMPRESSED_PENDING_PURGE,
 } from './utils.mjs';
 import { isBlankText } from './lib/blank-text.mjs';
-import { resolveProject, checkWriteProject } from './project-utils.mjs';
+import { resolveProject, checkWriteProject, unknownProjectNote } from './project-utils.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
 // falls back to the enclosing work-tree root, so `cd src/auth && … recent` reads what the
 // session's hooks wrote. WRITE commands (save / defer add / restore / import-jsonl) keep
@@ -3820,6 +3820,8 @@ const SEARCH_SOURCE_SPELLINGS = {
   event: 'events',
 };
 const GET_SOURCE_SPELLINGS = { observations: 'obs', sessions: 'session', prompts: 'prompt', events: 'event' };
+// Commands whose --project names where rows are WRITTEN (a new project is theirs to create).
+const PROJECT_WRITE_CMDS = new Set(['save', 'defer add', 'activity save', 'import-jsonl', 'verify-apply']);
 // Commands whose first argument is free text, so a bare `--word` there may be text, not a flag.
 const TEXT_COMMANDS = new Set(['save', 'search', 'defer add']);
 // The mutating runs of the maintenance commands and the filter flags each actually reads.
@@ -3957,7 +3959,7 @@ async function runDispatch(argv) {
   // project — a misspelled flag changed results with zero signal. Warn (stderr, non-fatal)
   // when a flag looks like a misspelling of a real one; stdout + exit code stay untouched,
   // so JSON/text consumers are unaffected. Mirrors the unknown-COMMAND suggester in cli.mjs.
-  const parsedForTypos = parseArgs(cmdArgs);
+  const parsedForTypos = parseArgs(cmdArgs, { track: false });
   for (const { flag, suggestion, owner } of suggestUnknownFlags(parsedForTypos.flags, cmd)) {
     // The words before the first flag, so a subcommand keeps its place: `defer add -- "…"`, not
     // `defer -- "…"`, which fails (E2E 2026-10-16 round 4).
@@ -4150,6 +4152,19 @@ async function runDispatch(argv) {
     process.stderr.write(
       `[mem] Note: --json is supported only on: ${[...JSON_SUPPORTED_CMDS].join(', ')}. "${cmd}" outputs text.\n`,
     );
+  }
+
+  // A read naming no project says so once here, for every command that takes --project; the
+  // writes check it themselves and refuse a near miss (E2E 2026-10-16, cli F14).
+  const projectFlag = parseArgs(cmdArgs, { track: false }).flags.project;
+  const subKey = cmd === 'defer' || cmd === 'activity' ? `${cmd} ${cmdArgs[0]}` : cmd;
+  if (
+    typeof projectFlag === 'string' &&
+    !['.', 'current'].includes(projectFlag) &&
+    !PROJECT_WRITE_CMDS.has(subKey)
+  ) {
+    const note = unknownProjectNote(db, projectFlag);
+    if (note) process.stderr.write(`[mem] ${note}\n`);
   }
 
   try {

@@ -288,6 +288,18 @@ export function checkWriteProject(db, project) {
   return { ok: true, note: ` (new project "${project}")` };
 }
 
+/**
+ * For a READ: the note when `name` resolves to a project with no rows anywhere, else ''. Such a
+ * read answered "No results" exactly like a real project with nothing matching (E2E 2026-10-16,
+ * cli F14).
+ */
+export function unknownProjectNote(db, name) {
+  const resolved = resolveProject(db, name);
+  if (!resolved || projectHasRows(db, resolved)) return '';
+  const near = similarProjects(db, name);
+  return `No project "${name}" has any rows${near.length ? ` — did you mean ${near.map((p) => `"${p}"`).join(', ')}?` : '.'}`;
+}
+
 /** Reset cache (for tests). */
 export function _resetProjectCache() {
   _cache.clear();

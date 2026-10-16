@@ -222,6 +222,25 @@ describe('a write naming a project that does not exist', () => {
   });
 });
 
+// E2E 2026-10-16 (cli F14, read side): a --project naming no project answered "No results"
+// exactly like a real project with nothing matching.
+describe('a read naming a project that does not exist', () => {
+  it('says so once, with the near names', () => {
+    expect(cli('save', 'Limiter note for reads', '--project', 'work--other-api').status).toBe(0);
+    for (const args of [
+      ['search', 'limiter', '--project', 'otherr-api'],
+      ['recent', '--project', 'otherr-api'],
+    ]) {
+      const r = cli(...args);
+      expect(r.stderr, args.join(' ')).toMatch(
+        /No project "otherr-api" has any rows — did you mean "work--other-api"\?/,
+      );
+    }
+    expect(cli('search', 'limiter', '--project', 'work--other-api').stderr).not.toMatch(/No project/);
+    expect(cli('search', 'limiter', '--project', 'other-api').stderr).not.toMatch(/No project/);
+  });
+});
+
 // E2E 2026-10-16 (cli F5): NOT / -term / OR were dropped with no word.
 describe('search says which operators it ignored', () => {
   it('on stderr, so --json stdout stays parseable', () => {

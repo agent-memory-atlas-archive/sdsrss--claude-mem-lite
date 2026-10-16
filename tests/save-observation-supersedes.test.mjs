@@ -571,3 +571,23 @@ describe('near-duplicate guard: force', () => {
     );
   });
 });
+
+// E2E 2026-10-16 (MCP P2-15): a whitespace-only title is truthy, so it was stored as the
+// title and every listing showed a blank line where the memory's name should be.
+describe('saveObservation blank title', () => {
+  it('a whitespace-only title is treated as absent and derived from the content', () => {
+    const db = createTestDb();
+    try {
+      const r = saveObservation(db, {
+        content: 'Blank title content about otters and rivers',
+        title: '   ',
+        project: 'test',
+      });
+      expect(r.kind).toBe('saved');
+      const row = db.prepare('SELECT title FROM observations WHERE id = ?').get(r.id);
+      expect(row.title).toBe('Blank title content about otters and rivers');
+    } finally {
+      db.close();
+    }
+  });
+});

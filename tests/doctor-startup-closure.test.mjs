@@ -251,6 +251,22 @@ describe('the CLI entry explains a broken install instead of stack-tracing', () 
     expect(out, 'a raw parser stack reached the user').not.toMatch(/SyntaxError|node:internal/);
   });
 
+  // E2E 2026-10-16 (install P1-7): the remedy was `npm install -g claude-mem-lite@latest`,
+  // which installs a separate global package and leaves a broken ~/.claude-mem-lite (and the
+  // settings.json hooks that run from it) exactly as broken. For that tree the remedy that
+  // rebuilds it from outside is `npx claude-mem-lite@latest install`.
+  it('names the npx reinstall when the broken tree is the managed ~/.claude-mem-lite', () => {
+    const root = buildCopyInstall(join(cliHome, '.claude-mem-lite'));
+    rmSync(join(root, 'lib', 'atomic-write.mjs'));
+    const managed = runCli(root, ['doctor']);
+    expect(`${managed.stdout}${managed.stderr}`).toMatch(/npx claude-mem-lite@latest install/);
+
+    const other = buildCopyInstall(join(cliHome, 'global-pkg'));
+    rmSync(join(other, 'lib', 'atomic-write.mjs'));
+    const g = runCli(other, ['doctor']);
+    expect(`${g.stdout}${g.stderr}`).toMatch(/npm install -g claude-mem-lite@latest --force/);
+  });
+
   it('explains a truncated install.mjs rather than dying on a missing export', () => {
     const root = buildCopyInstall(join(cliHome, 'cli-noexport'));
     writeFileSync(join(root, 'install.mjs'), '// truncated before anything was exported\n');

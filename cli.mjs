@@ -60,7 +60,15 @@ function explainBrokenInstall(what) {
   const w = (s) => process.stderr.write(`[claude-mem-lite] ${s}\n`);
   w(`This install is incomplete — ${what}`);
   w('That is why this command cannot run: these files load before any of their code executes.');
-  w('Repair: npm install -g claude-mem-lite@latest --force');
+  // The managed code home (~/.claude-mem-lite, where settings.json hooks run from) is rebuilt by
+  // the installer run from OUTSIDE it; `npm install -g` installs a separate global package and
+  // left this tree as broken as before (E2E 2026-10-16). Read off import.meta.url: no imports.
+  const here = decodeURIComponent(new URL('.', import.meta.url).pathname);
+  if (/[\\/]\.claude-mem-lite[\\/]?$/.test(here)) {
+    w('Repair: npx claude-mem-lite@latest install   (rebuilds ~/.claude-mem-lite; your memories are kept)');
+  } else {
+    w('Repair: npm install -g claude-mem-lite@latest --force');
+  }
   w('Or, in Claude Code: /plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss');
   process.exit(1);
 }

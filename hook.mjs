@@ -205,7 +205,7 @@ import {
   buildCiteRecallNudge as libBuildCiteRecallNudge,
   nextCiteStreakState,
 } from './lib/cite-back-hint.mjs';
-import { citeRecallPathFor } from './lib/cite-recall-path.mjs';
+import { citeRecallPathFor, projectFileKey } from './lib/cite-recall-path.mjs';
 import { detectUnpersistedDecision } from './lib/persist-reminder.mjs';
 // plugin-cache-guard.mjs loaded dynamically — pre-2.31.2 installs that auto-upgraded
 // from an older hook-update.mjs SOURCE_FILES (which did not list this module) would
@@ -1977,7 +1977,9 @@ function runSessionStartDbMutations(db, { sessionId, project, prevSessionId, now
 function markCompressibleGateFile(project) {
   // Project names arrive already mangled by inferProject (`projects--mem`), but this is
   // a filename, so do not trust that — one stray separator writes outside RUNTIME_DIR.
-  return join(RUNTIME_DIR, `last-mark-compressible-${String(project).replace(/[^A-Za-z0-9._-]/g, '-')}.json`);
+  // projectFileKey: an id outside ASCII is made unique with a hash, or two such projects shared
+  // one 24 h gate and one's marking suppressed the other's (lib/cite-recall-path.mjs).
+  return join(RUNTIME_DIR, `last-mark-compressible-${projectFileKey(project)}.json`);
 }
 
 function markAutoCompressibleIfDue(db, project) {

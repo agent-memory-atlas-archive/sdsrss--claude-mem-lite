@@ -131,3 +131,32 @@ describe('cite-recall path — one definition', () => {
     expect(read('lib/cite-recall-path.mjs')).toMatch(/\.replace\(\/\[\^a-zA-Z0-9_\.-\]\/g/);
   });
 });
+
+// E2E 2026-10-16 (hooks F6): project ids keep the letters of every script since v6.21.0, but this
+// key squashed them to '-', so `项目--博客` and `项目--商城` shared one snapshot and one 24 h
+// auto-compress gate. A non-ASCII id now gets a hash of the id; an ASCII one is unchanged.
+describe('per-project file keys stay distinct for non-ASCII ids', () => {
+  it('two CJK ids of the same shape get different keys, ASCII ids keep theirs', async () => {
+    const { citeRecallProjectKey, projectFileKey } = await import('../lib/cite-recall-path.mjs');
+    expect(citeRecallProjectKey('项目--博客')).not.toBe(citeRecallProjectKey('项目--商城'));
+    expect(projectFileKey('项目--博客')).not.toBe(projectFileKey('项目--商城'));
+    expect(citeRecallProjectKey('projects--mem')).toBe('projects--mem');
+    expect(projectFileKey('a/b c')).toMatch(/^[a-zA-Z0-9_.-]+$/);
+    expect(citeRecallProjectKey('项'.repeat(80)).length).toBeLessThanOrEqual(64);
+  });
+
+  it('the nudge reader ignores a snapshot written for another project', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { citeRecallPathFor } = await import('../lib/cite-recall-path.mjs');
+    const { buildCiteRecallNudge } = await import('../lib/cite-back-hint.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'mem-citerecall-'));
+    try {
+      const snap = { project: '项目--博客', unsavedBugfix: 3, nudged: 3, saved: 0, ts: Date.now() };
+      writeFileSync(citeRecallPathFor(dir, '项目--商城'), JSON.stringify(snap));
+      expect(buildCiteRecallNudge('项目--商城', dir, {})).toBe('');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

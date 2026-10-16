@@ -4313,6 +4313,17 @@ async function runLockedInstall() {
     process.exitCode = 1;
     return;
   }
+  // Claude Code's config home gets settings.json and the MCP registration. A root-owned one (a
+  // `sudo claude` run) let install copy files, run npm and register MCP, then die on the
+  // settings.json write with a raw EACCES stack: half installed (E2E 2026-10-16). Absent is fine.
+  const configDenied = dirAccessError(claudeConfigDir());
+  if (configDenied) {
+    console.error(
+      `[install] ${claudeConfigDir()} is not writable (${configDenied}) — nothing was done. Fix: ${dataDirRemedy(configDenied, claudeConfigDir())}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   const { release, error: blocked } = takeLock(INSTALL_LOCK_PATH);
   if (!release) {
     if (blocked) {

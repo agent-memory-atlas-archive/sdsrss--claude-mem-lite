@@ -20,6 +20,7 @@ import {
   symlinkSync,
   readlinkSync,
   lstatSync,
+  chmodSync,
 } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
@@ -532,6 +533,31 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     });
     expect(out).toMatch(/written by a newer claude-mem-lite/);
     expect(out).not.toMatch(/✓ Database accessible/);
+  });
+
+  // E2E 2026-10-16 (install P2-4): a root-owned ~/.claude (after a `sudo claude` run) let install
+  // copy files, run npm and register MCP, then die on the settings.json write with a raw stack.
+  it.skipIf(process.getuid?.() === 0)('install refuses an unwritable ~/.claude before doing anything', () => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    chmodSync(join(home, '.claude'), 0o555);
+    try {
+      let out = '';
+      let status = 0;
+      try {
+        out = runInstall('install', home, ['--dev', '--skip-repos'], {
+          PATH: `${binDir}:${process.env.PATH}`,
+        });
+      } catch (e) {
+        status = e.status;
+        out = `${e.stdout || ''}${e.stderr || ''}`;
+      }
+      expect(status).toBe(1);
+      expect(out).toMatch(/is not writable .* nothing was done/);
+      expect(out).not.toMatch(/\n\s+at /); // no stack
+      expect(existsSync(join(home, '.claude-mem-lite', 'server.mjs'))).toBe(false);
+    } finally {
+      chmodSync(join(home, '.claude'), 0o755);
+    }
   });
 
   it('uninstall --purge removes data directory', () => {

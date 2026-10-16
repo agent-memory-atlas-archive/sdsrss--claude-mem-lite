@@ -124,6 +124,7 @@
     "lib/hook-text-cap.mjs",
     "lib/recall-framing.mjs",
     "lib/recall-shown.mjs",
+    "lib/recent-table.mjs",
     "lib/proc-lock.mjs",
     "lib/atomic-write.mjs",
     "lib/platform-gate.mjs",

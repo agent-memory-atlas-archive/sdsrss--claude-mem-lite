@@ -46,23 +46,7 @@ import { inferProjectDir } from './project-utils.mjs';
 import { TYPE_QUALITY, TYPE_QUALITY_DEFAULT } from './scoring-sql.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
-import { envNumber } from './lib/env-number.mjs';
-
-/**
- * How many rows the SessionStart `### Recent` table shows (injection budget C4). Read per call
- * so the CLI `context` command and tests see the current env. 0 hides the table.
- *
- * @param {Record<string, string|undefined>} [env]
- * @returns {number}
- */
-export function recentTableRowCap(env = process.env) {
-  return envNumber(env.CLAUDE_MEM_STARTUP_RECENT_ROWS, {
-    name: 'CLAUDE_MEM_STARTUP_RECENT_ROWS',
-    defaultValue: 5,
-    min: 0,
-    integer: true,
-  });
-}
+import { capRecentRows, recentTableRowCap } from './lib/recent-table.mjs';
 
 /**
  * Compute adaptive recall time windows based on project activity velocity.
@@ -557,7 +541,9 @@ const MIN_LOCAL_OBS = 3;
  * fallback row that way, max gain 2. Preferring the project's own rows over cross-project
  * ones inside a fixed window is the intended order, and saying so is the point: a new
  * population entering a limit-bounded window without a stated ranking is this repo's
- * recorded failure shape.
+ * recorded failure shape. The table site has been capped since the injection-budget change
+ * (5 rows), and its cut keeps that order too — capRecentRows ranks own rows first; a newest-5
+ * cut over the union evicted them (pre-ship defect review P2-1).
  */
 function withFallbackTopUp(observations, fallbackObs) {
   if (observations.length >= MIN_LOCAL_OBS) return observations;
@@ -933,14 +919,16 @@ export function buildSessionContextLines(
   // tests/hook-context.test.mjs). Tiebroken on id for the same reason D#9 gives — an
   // untiebroken tie flips direction, and two saves in one millisecond are common.
   //
-  // Injection budget C4: the display is then cut to the newest `recentTableRowCap()` rows (5).
-  // The knapsack still picks as before; on the frozen 52-session corpus the table cost 1.02
-  // KB/session and its ids were cited 2 times in 498 (session, id) pairs
-  // (docs/audits/20261016-injection-budget-baseline.md).
+  // Injection budget C4: the display is then cut to `recentTableRowCap()` rows (5), the project's
+  // own rows ranked before the cross-project top-up (lib/recent-table.mjs). The knapsack still
+  // picks as before.
   const obsLines = [];
-  const obsToShow = [...withFallbackTopUp(observations, fallbackObs)]
-    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)
-    .slice(0, recentTableRowCap());
+  const obsToShow = capRecentRows(
+    withFallbackTopUp(observations, fallbackObs),
+    project,
+    recentTableRowCap(),
+    (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id,
+  );
   if (obsToShow.length > 0) {
     const today = now.toISOString().slice(0, 10);
     obsLines.push(`### Recent (${today})`);

@@ -118,3 +118,68 @@ describe('isPromptEcho', () => {
     expect(isPromptEcho(P, '')).toBe(false);
   });
 });
+
+// Pre-ship defect review P2-2: dropping an identical question from an EARLIER session is a
+// behaviour change (not the self-match bug), so it keeps a switch. The current session's own
+// prompts stay excluded either way — returning the prompt just typed is the bug being fixed.
+describe('CLAUDE_MEM_UPS_PROMPT_ECHO=0', () => {
+  let dir;
+  let db;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ups-echo-sw-'));
+    mkdirSync(join(dir, 'runtime'), { recursive: true });
+    db = new Database(join(dir, 'claude-mem-lite.db'));
+    initSchema(db);
+    insertSession(db, { id: 'mem-1', project: 'test--project' });
+  });
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const seed = (text, ccSessionId, minutesAgo) => {
+    const at = Date.now() - minutesAgo * 60000;
+    db.prepare(
+      `INSERT INTO user_prompts (content_session_id, prompt_text, prompt_number, cc_session_id, created_at, created_at_epoch)
+       VALUES ('mem-1', ?, 1, ?, ?, ?)`,
+    ).run(text, ccSessionId, new Date(at).toISOString(), at);
+    db.pragma('wal_checkpoint(FULL)');
+  };
+  const run = (prompt, sessionId, extra = {}) =>
+    new Promise((ok) => {
+      const env = {
+        ...process.env,
+        CLAUDE_MEM_DIR: dir,
+        CLAUDE_PROJECT_DIR: '/test/project',
+        PWD: '/test/project',
+        CLAUDE_MEM_UPS_TOP_MIN: '0',
+        CLAUDE_MEM_HOOK_RUNNING: '',
+        ...extra,
+      };
+      const proc = spawn(process.execPath, [SCRIPT], { env });
+      let stdout = '';
+      proc.stdout.on('data', (d) => (stdout += d.toString()));
+      proc.on('close', () => ok(stdout));
+      proc.stdin.end(
+        JSON.stringify({
+          prompt,
+          hook_event_name: 'UserPromptSubmit',
+          cwd: '/test/project',
+          session_id: sessionId,
+        }),
+      );
+    });
+  const PROMPT = 'why does the retry loop in fetcher.mjs ignore the timeout';
+
+  it('restores an identical question from an earlier session', async () => {
+    seed(PROMPT, 'sess-three-days-ago', 3 * 24 * 60);
+    expect(await run(PROMPT, 'sess-now')).not.toContain(HEADER);
+    expect(await run(PROMPT, 'sess-now-2', { CLAUDE_MEM_UPS_PROMPT_ECHO: '0' })).toContain(HEADER);
+  });
+
+  it('still never returns a prompt of the current session', async () => {
+    seed(PROMPT, 'sess-now', 0);
+    expect(await run(PROMPT, 'sess-now', { CLAUDE_MEM_UPS_PROMPT_ECHO: '0' })).not.toContain(HEADER);
+  });
+});

@@ -211,6 +211,37 @@ describe('startup dashboard (T10c)', () => {
     expect(text).not.toMatch(/mem events/);
   });
 
+  // Pre-ship defect review P2-2: the removed line keeps a switch back.
+  test('CLAUDE_MEM_DASHBOARD_EVENTS=1 restores the events count', () => {
+    const prev = process.env.CLAUDE_MEM_DASHBOARD_EVENTS;
+    process.env.CLAUDE_MEM_DASHBOARD_EVENTS = '1';
+    try {
+      const db = createTestDb();
+      const now = Date.now();
+      for (let i = 0; i < 5; i++) {
+        db.prepare(
+          `INSERT INTO events (project, event_type, title, importance, created_at_epoch)
+                  VALUES (?, ?, ?, ?, ?)`,
+        ).run('mem', 'lesson', `t${i}`, 1, now);
+      }
+      const text = buildDashboard({
+        db,
+        project: 'mem',
+        projectPath: process.cwd(),
+        stubs: {
+          git: { changed: [], stashes: [], branch: null, headSha: null },
+          tasks: [],
+          plans: [],
+          handoff: null,
+        },
+      });
+      expect(text).toMatch(/mem events: 5 entries/);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_MEM_DASHBOARD_EVENTS;
+      else process.env.CLAUDE_MEM_DASHBOARD_EVENTS = prev;
+    }
+  });
+
   test('omits events line when count is zero', () => {
     const db = createTestDb();
     const text = buildDashboard({

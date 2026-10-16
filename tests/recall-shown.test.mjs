@@ -143,14 +143,17 @@ describe('SessionStart wiring (hook.mjs)', () => {
     });
   };
 
-  it('compact clears the main thread; startup leaves it; a subagent thread survives both', () => {
+  it('compact and startup clear the main thread; resume keeps it; a subagent thread survives', () => {
     const main = recallShownPath(runtime, 'sess-c');
     const sub = recallShownPath(runtime, 'sess-c-agent1');
     markRecallShown(main, { header: true, directive: true });
     markRecallShown(sub, { header: true, directive: true });
-    start('sess-c', 'startup');
+    start('sess-c', 'resume');
     expect(existsSync(main)).toBe(true);
     start('sess-c', 'compact');
+    expect(existsSync(main)).toBe(false);
+    markRecallShown(main, { header: true, directive: true });
+    start('sess-c', 'startup');
     expect(existsSync(main)).toBe(false);
     expect(existsSync(sub)).toBe(true);
   });

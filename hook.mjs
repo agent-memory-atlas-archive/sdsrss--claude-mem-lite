@@ -3106,9 +3106,10 @@ async function handleSessionStart() {
   }
   // Injection budget C1/C3 (lib/recall-shown.mjs): the recall header and full directive are
   // shown once per thread because the thread still holds the first copy. Compaction is when it
-  // stops holding it, so the main thread starts over. (A /clear rotates the session id, which
-  // starts over on its own; `resume` restores the transcript, copies included.)
-  if (startSource === 'compact' && ccSessionId) clearRecallShown(RUNTIME_DIR, ccSessionId);
+  // stops holding it, so the main thread starts over; so does any fresh context (startup, or a
+  // /clear, which also rotates the session id). Only `resume` restores the transcript, copies
+  // included, and keeps the marker. Clearing errs safe: the worst case is one more header.
+  if (ccSessionId && startSource !== 'resume') clearRecallShown(RUNTIME_DIR, ccSessionId);
 
   // Snapshot episode BEFORE flush for handoff extraction
   const episodeSnapshot = readEpisodeRaw();

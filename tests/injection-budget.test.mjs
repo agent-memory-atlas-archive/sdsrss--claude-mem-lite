@@ -332,4 +332,15 @@ describe('after-arm projection (shipped decision functions over recorded blocks)
     ];
     expect(() => assertNoLessonRowLost(lost)).toThrow(/lost lesson rows/);
   });
+
+  it('the lesson-row check covers every face, not only pretool', () => {
+    const fyi = '[mem] FYI — Related memories (continue your task):\n#42 🔴 a title — a lesson';
+    const emptied = [[{ kind: 'hook', face: 'ups_search', before: fyi, text: '' }]];
+    expect(() => assertNoLessonRowLost(emptied)).toThrow(/ups_search/);
+    // ...while the rows a change removes on purpose (past questions) do not count.
+    const pq = '[mem] FYI — Past similar questions (continue your task):\nP#9 💬 x';
+    expect(() =>
+      assertNoLessonRowLost([[{ kind: 'hook', face: 'ups_search', before: pq, text: '' }]]),
+    ).not.toThrow();
+  });
 });

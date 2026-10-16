@@ -69,7 +69,7 @@ import {
 import { TASK_IMPERATIVE_PREFIX } from '../lib/task-imperative.mjs';
 import { ACK_DIRECTIVE, ACK_DIRECTIVE_SHORT, planRecallBlock } from '../lib/recall-shown.mjs';
 import { fileIntelEnabled } from '../lib/file-intel.mjs';
-import { recentTableRowCap } from '../hook-context.mjs';
+import { capRecentRows, recentTableRowCap } from '../lib/recent-table.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CORPUS_FORMAT = 'injection-budget/1';
@@ -798,7 +798,8 @@ export function sessionStartAndUpsValue(sessions, sessionsEvents) {
 // the same sessions as the before-arm (doctrine rule 2) without re-running them:
 //   C1/C3  planRecallBlock (lib/recall-shown.mjs), per main thread, reset at compact_boundary
 //   C2     fileIntelEnabled (lib/file-intel.mjs) — the file-info line goes unless opted in
-//   C4     recentTableRowCap (hook-context.mjs) — Recent rows past the cap go
+//   C4     recentTableRowCap + capRecentRows (lib/recent-table.mjs) — the rows the shipped cut drops
+//          go; a row's project is read off its ` (project)` suffix, which only foreign rows carry
 //   C5     past-question rows that echo the triggering prompt or an earlier prompt of the
 //          session go. APPROXIMATE: production compares full texts (isPromptEcho) and excludes
 //          the session in SQL; a recorded row is cut to 80 chars, so this uses the prefix test
@@ -839,17 +840,25 @@ function projectPretool(text, state, env) {
     .join('\n');
 }
 
+// hook-context renders ` (${o.project})` after a foreign row's title; project names are `a--b`.
+const FOREIGN_ROW_RE = /\(([\w.-]*--[\w.-]+)\) \|$/;
+
 function projectSessionStart(text, env, opts) {
   const cls = classifyLines('session_start', text);
   const cap = recentTableRowCap(env);
-  let rows = 0;
+  // The recorded table is newest-first (its display order), so a row's index is its age rank.
+  const tableRows = cls
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => c.cls.startsWith('ctx:recent') && /^\| #/.test(c.line))
+    .map(({ c, i }) => ({ i, project: FOREIGN_ROW_RE.exec(c.line)?.[1] || null }));
+  const keep = new Set(capRecentRows(tableRows, '', cap, (a, b) => a.i - b.i).map((r) => r.i));
   let out = [];
   let inRecent = false;
-  for (const c of cls) {
+  for (const [i, c] of cls.entries()) {
     if (c.cls.startsWith('ctx:recent') && /^### /.test(c.line)) inRecent = true;
     else if (inRecent && !c.cls.startsWith('ctx:recent') && c.cls !== 'blank') inRecent = false;
     if (inRecent && cap === 0) continue; // the whole section goes
-    if (inRecent && /^\| #/.test(c.line) && ++rows > cap) continue;
+    if (inRecent && /^\| #/.test(c.line) && !keep.has(i)) continue;
     if (opts.c6 && c.cls === 'dashboard' && c.line.startsWith('💡 mem events')) continue;
     out.push(c);
   }
@@ -921,21 +930,32 @@ export function assertIdentityProjection(sessionsEvents, project = projectSessio
   return blocks;
 }
 
-const LESSON_ID_RE = new RegExp(`^\\s{0,6}(E?#${OBS_ID_DIGITS}) \\[`);
-const lessonIds = (face, text) =>
+// Every memory id a block names (`#NN` and `E#NN`, never `P#N`/`D#N`), outside the lines a
+// change removes on purpose — past-question rows (C5) and Recent-table rows (C4), neither of which
+// any cite face counts — and outside lines whose text comes from a FILE, not the memory store:
+// the file-info summary (C2 drops it, and a header comment can say "issue #35"), the framing line
+// and `Lessons for` line naming the file, the re-read warning.
+const NOT_MEMORY_ROWS = new Set(['past_questions', 'file_info', 'header', 'lessons_for', 'reread_warn']);
+const MEMORY_ID_RE = new RegExp(`(?<![A-Za-z0-9])(E?#${OBS_ID_DIGITS})\\b`, 'g');
+const memoryIds = (face, text) =>
   classifyLines(face, text)
-    .filter((c) => c.cls === 'lesson_row')
-    .map((c) => LESSON_ID_RE.exec(c.line)?.[1])
-    .filter(Boolean);
+    .filter((c) => !NOT_MEMORY_ROWS.has(c.cls) && !c.cls.startsWith('ctx:recent'))
+    .flatMap((c) => [...c.line.matchAll(MEMORY_ID_RE)].map((m) => m[1]))
+    .sort()
+    .join(',');
 
-/** No projected block may lose a lesson row: that is what keeps the cite pairs. */
+/**
+ * No projected block of any face may lose a memory id it named: that is what keeps the cite
+ * pairs. (Pre-ship defect review P3-3: a first version checked the pretool face only, so a
+ * projector that emptied every UserPromptSubmit block passed it.)
+ */
 export function assertNoLessonRowLost(projectedSessions) {
   for (const events of projectedSessions) {
     for (const ev of events) {
-      if (ev.kind !== 'hook' || ev.before === undefined || ev.face !== 'pretool') continue;
-      const a = lessonIds('pretool', ev.before).join(',');
-      const b = lessonIds('pretool', ev.text).join(',');
-      if (a !== b) throw new Error(`projection lost lesson rows: [${a}] → [${b}]`);
+      if (ev.kind !== 'hook' || ev.before === undefined) continue;
+      const a = memoryIds(ev.face, ev.before);
+      const b = memoryIds(ev.face, ev.text);
+      if (a !== b) throw new Error(`projection lost lesson rows (${ev.face}): [${a}] → [${b}]`);
     }
   }
 }

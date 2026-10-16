@@ -608,7 +608,12 @@ function searchByUserPrompts(db, queryText, project, limit, ccSessionId = null) 
   // The echo filter runs BEFORE the OR relaxation decides: the current prompt matches every one
   // of its own AND terms, so an echo is often the AND query's only row — filtering it after
   // would leave nothing and never try the OR pool (the LIMIT-upstream-of-a-JS-filter shape).
-  const notEcho = (rs) => rs.filter((r) => !isPromptEcho(r.prompt_text, queryText));
+  // CLAUDE_MEM_UPS_PROMPT_ECHO=0 keeps echoes from EARLIER sessions (the pre-change behaviour);
+  // the current session's rows stay excluded in SQL either way — that half is the bug fix.
+  const echoFilterOn = !['0', 'off', 'false', 'no'].includes(
+    String(process.env.CLAUDE_MEM_UPS_PROMPT_ECHO || '').toLowerCase(),
+  );
+  const notEcho = (rs) => (echoFilterOn ? rs.filter((r) => !isPromptEcho(r.prompt_text, queryText)) : rs);
   let rows = notEcho(db.prepare(sql).all(ftsQuery, project, cutoff, session, session, poolLimit));
 
   if (rows.length === 0) {

@@ -1327,3 +1327,68 @@ describe('buildSessionContextLines: Recent table row cap (injection budget C4)',
     expect(tableRows(buildSessionContextLines(db, 'test'))).toEqual([]);
   });
 });
+
+// Pre-ship defect review P2-1: on a thin project the table is topped up with other projects'
+// rows (withFallbackTopUp), and a newest-5 cut over that union evicted the project's OWN rows
+// (5 of 60 tables in the frozen corpus). The cap must keep the project's own rows first.
+describe('buildSessionContextLines: Recent cap keeps the project’s own rows first', () => {
+  let db;
+  const HOUR = 3600000;
+  const saved = process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS;
+  beforeEach(() => {
+    delete process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS;
+    db = createTestDb();
+    insertSession(db, { id: 'sess-own', project: 'test' });
+    insertSession(db, { id: 'sess-other', project: 'other--proj' });
+    insertObs(db, {
+      sessionId: 'sess-own',
+      project: 'test',
+      title: 'own row A',
+      epochOffset: -19 * HOUR,
+      importance: 2,
+      type: 'bugfix',
+    });
+    insertObs(db, {
+      sessionId: 'sess-own',
+      project: 'test',
+      title: 'own row B',
+      epochOffset: -20 * HOUR,
+      importance: 2,
+      type: 'decision',
+    });
+    for (let i = 1; i <= 5; i++) {
+      insertObs(db, {
+        sessionId: 'sess-other',
+        project: 'other--proj',
+        title: `foreign row ${i}`,
+        epochOffset: -i * HOUR,
+        importance: 2,
+        type: 'change',
+      });
+    }
+  });
+  afterEach(() => {
+    db.close();
+    if (saved === undefined) delete process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS;
+    else process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS = saved;
+  });
+  const rows = (out) => out.split('\n').filter((l) => l.startsWith('| #'));
+
+  it('premise: the uncapped table holds both own rows and more than 5 rows in all', () => {
+    process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS = '100';
+    const all = rows(buildSessionContextLines(db, 'test'));
+    expect(all.length).toBeGreaterThan(5);
+    expect(all.filter((l) => l.includes('own row'))).toHaveLength(2);
+  });
+
+  it('the 5-row table keeps both own rows, topped up with the newest foreign ones, newest first', () => {
+    const shown = rows(buildSessionContextLines(db, 'test'));
+    expect(shown).toHaveLength(5);
+    expect(shown.filter((l) => l.includes('own row'))).toHaveLength(2);
+    expect(shown.filter((l) => l.includes('foreign row')).map((l) => l.match(/foreign row (\d)/)[1])).toEqual(
+      ['1', '2', '3'],
+    );
+    // display order stays chronological: the foreign rows (1–3 h old) above the own ones (19–20 h)
+    expect(shown.findIndex((l) => l.includes('own row'))).toBe(3);
+  });
+});

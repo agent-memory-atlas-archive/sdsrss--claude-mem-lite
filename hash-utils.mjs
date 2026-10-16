@@ -8,14 +8,37 @@
  * @returns {number} Similarity score between 0 and 1
  */
 export function jaccardSimilarity(a, b) {
+  return jaccardOfTokens(a, b, false);
+}
+
+const CJK_RUN_RE = /[\u4e00-\u9fff\u3400-\u4dbf]{2,}/g;
+
+/**
+ * jaccardSimilarity for the save-time near-duplicate window, where a CJK sentence is one or two
+ * whitespace tokens, so one changed character gave 0 and only an identical CJK save was caught
+ * (E2E 2026-10-16, MCP 5 / data S4). Each CJK run also contributes its character bigrams; text
+ * with no CJK scores exactly as jaccardSimilarity. Kept out of the merge and maintain paths, which
+ * act on their own (cluster-merge auto-merges at 0.85 with no model call).
+ */
+export function jaccardSimilarityCjk(a, b) {
+  return jaccardOfTokens(a, b, true);
+}
+
+function jaccardOfTokens(a, b, cjk) {
   if (!a || !b) return 0;
   // Strip trailing punctuation from tokens to match MinHash normalization
   // (prevents "server.rs," ≠ "server.rs" dedup failures)
-  const norm = (s) =>
-    s
+  const norm = (s) => {
+    const tokens = s
       .toLowerCase()
       .split(/\s+/)
       .map((t) => t.replace(/[,;:!?]+$/, ''));
+    if (!cjk) return tokens;
+    for (const run of s.match(CJK_RUN_RE) || []) {
+      for (let i = 0; i + 1 < run.length; i++) tokens.push(`\u0000${run[i]}${run[i + 1]}`);
+    }
+    return tokens;
+  };
   const setA = new Set(norm(a));
   const setB = new Set(norm(b));
   let intersection = 0;

@@ -241,7 +241,7 @@ function projectHasRows(db, project) {
  * last "--" segment within a small edit distance, case-insensitive. Short names need a closer
  * match (3 letters or fewer: none; under 8: one edit; else two), so "api" never means "app".
  */
-export function similarProjects(db, name) {
+function similarProjects(db, name) {
   const want = String(name).toLowerCase();
   const max = want.length <= 3 ? 0 : want.length < 8 ? 1 : 2;
   const ids = db

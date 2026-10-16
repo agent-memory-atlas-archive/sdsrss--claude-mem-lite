@@ -155,3 +155,12 @@ describe('deep search that could not rewrite does not claim it did', () => {
     expect(r.text).toMatch(/could not rewrite/);
   }, 60000);
 });
+
+describe('mem_export states what a backup leaves out', () => {
+  it('carries the same fidelity note the CLI prints', async () => {
+    insertForeignRow('b--export', 'Export probe row about retention windows');
+    const r = await call('mem_export', { format: 'jsonl', project: 'b--export' });
+    expect(r.text).toMatch(/^Exported \d+ observations:/);
+    expect(r.text).toMatch(/not events, deferred items, sessions or prompts/);
+  });
+});

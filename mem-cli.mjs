@@ -124,7 +124,7 @@ import {
   formatSupersededNote,
 } from './lib/save-observation.mjs';
 import { normalizeScope, applyObsUpdate } from './lib/observation-write.mjs';
-import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
+import { EXPORT_COLUMNS_SQL, EXPORT_FIDELITY_NOTE, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile, countRecallableByFile } from './lib/recall-core.mjs';
 import { fetchRecent, RECENT_MAX } from './lib/recent-core.mjs';
 import {
@@ -2294,9 +2294,7 @@ function cmdExport(db, args) {
   }
   // Fidelity caveat at backup-creation time (mirrors the restore-side note). stderr,
   // so stdout stays a clean JSON/JSONL stream for `export > backup.json`.
-  process.stderr.write(
-    '[mem] Note: export omits related_ids and supersession links (superseded rows are excluded) — content and value-signals round-trip, the relationship graph does not.\n',
-  );
+  process.stderr.write(`[mem] Note: ${EXPORT_FIDELITY_NOTE}\n`);
 }
 
 // ─── Restore ───────────────────────────────────────────────────────────────

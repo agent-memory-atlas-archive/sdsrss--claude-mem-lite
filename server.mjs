@@ -127,7 +127,7 @@ import {
 } from './lib/id-routing.mjs';
 import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
 import { applyObsUpdate } from './lib/observation-write.mjs';
-import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
+import { EXPORT_COLUMNS_SQL, EXPORT_FIDELITY_NOTE, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
 import { isFtsCorruptionError, ftsCorruptionRemedy } from './lib/db-unusable.mjs';
 import { fetchRecent } from './lib/recent-core.mjs';
@@ -1974,7 +1974,14 @@ async function runExport(db, args) {
       `\nFor a complete backup, write it to a FILE instead of pulling it through this conversation: \`${CLI_INVOKE} export --format jsonl > backup.jsonl\` (the CLI exports the complete set by default). Narrowing with date_from/date_to also works.` +
       `\nRaising \`limit\` here is the last resort, not the first: this result is model context, so all ${total} rows would be loaded into the transcript.`;
   }
-  return { content: [{ type: 'text', text: `Exported ${rows.length} observations:${cap}\n${output}` }] };
+  return {
+    content: [
+      {
+        type: 'text',
+        text: `Exported ${rows.length} observations:${cap}\nNote: ${EXPORT_FIDELITY_NOTE}\n${output}`,
+      },
+    ],
+  };
 }
 
 server.registerTool(

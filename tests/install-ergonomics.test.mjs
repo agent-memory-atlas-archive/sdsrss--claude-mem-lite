@@ -423,7 +423,10 @@ describe('doctor surfaces orphan hooks (v2.79)', () => {
 
       expect(output).toMatch(/Orphan hooks:.*settings\.json/);
       expect(output).toContain('/tmp/nonexistent-claude-mem-lite-doctor/hook.mjs');
-      expect(output).toMatch(/Repair:.*install\.mjs"? uninstall/);
+      // cleanup-hooks, never uninstall: uninstall also removes the MCP registration and a
+      // working plugin (E2E 2026-10-16, install P1-3).
+      expect(output).toMatch(/Repair:.*install\.mjs"? cleanup-hooks/);
+      expect(output).not.toMatch(/Repair:.*uninstall/);
     } finally {
       try {
         rmSync(home, { recursive: true, force: true });

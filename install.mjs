@@ -2559,9 +2559,17 @@ async function doctor() {
     );
     for (const p of orphanPaths.slice(0, 5)) log(`    missing: ${p}`);
     if (orphanPaths.length > 5) log(`    ... +${orphanPaths.length - 5} more`);
+    // cleanup-hooks, not uninstall: uninstall also removes the MCP registration and, on a machine
+    // that moved to the plugin, the working plugin itself (E2E 2026-10-16). cleanup-hooks touches
+    // settings.json hook entries only, which is all an orphan is.
     log(
-      `    Repair: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} uninstall    # removes the dead hook entries`,
+      `    Repair: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} cleanup-hooks    # removes claude-mem-lite's settings.json hook entries; the plugin and your memories stay`,
     );
+    if (existsSync(join(INSTALL_DIR, 'scripts', 'hook-launcher.mjs'))) {
+      log(
+        `    Then, if you use the direct install at ${INSTALL_DIR}: node ${shellWord(join(INSTALL_DIR, 'install.mjs'))} install    # writes its hook entries again`,
+      );
+    }
     issues++;
   } else if (hasHooks) {
     ok('Orphan hooks: none (all hook targets present)');

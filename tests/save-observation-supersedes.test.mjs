@@ -385,6 +385,14 @@ describe('saveObservation supersedes', () => {
 
     // E2E 2026-10-16 round 2 (data N3): `#N` is how every listing prints an observation id, and
     // get / timeline / delete take it; supersedes reported it malformed and left the row live.
+    // Round 3 (data NEW-3): Number() reads JavaScript number literals, so `1e1` retired #10,
+    // `0x4` #4, `5.` #5 and `+3` #3 with no warning; the MCP schema refuses all four.
+    it('a JavaScript number literal is malformed, not an id', () => {
+      const r = splitSupersedeTokens(['1e1', '0x4', '5.', '+3', ' 07 ']);
+      expect(r.obs).toEqual([7]);
+      expect(r.malformed.map((m) => m.id)).toEqual(['1e1', '0x4', '5.', '+3']);
+    });
+
     it('#N names an observation, as listings print it', () => {
       const r = splitSupersedeTokens(['#7', ' #8 ', '#', '##9', '#E9']);
       expect(r.obs).toEqual([7, 8]);

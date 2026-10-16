@@ -23,6 +23,7 @@ import {
   writeFileSync,
   unlinkSync,
   readFileSync,
+  realpathSync,
 } from 'fs';
 import { claudeConfigDir, claudeStatePath } from './lib/data-paths.mjs';
 import { join, isAbsolute, relative, dirname } from 'path';
@@ -100,8 +101,22 @@ function log(msg) {
   console.log(msg);
 }
 
-function detectCwd() {
-  return process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd();
+// $PWD keeps a symlinked project's logical spelling (the one Claude Code's CLAUDE_PROJECT_DIR
+// uses), but only when it names the directory this process is in: a program that spawns `adopt`
+// with `cwd` set leaves its OWN PWD in the env, and adopt wrote into the caller's directory
+// instead of the one it ran in (E2E 2026-10-16).
+export function detectCwd() {
+  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
+  const cwd = process.cwd();
+  const pwd = process.env.PWD;
+  if (pwd) {
+    try {
+      if (realpathSync(pwd) === realpathSync(cwd)) return pwd;
+    } catch {
+      /* PWD names nothing that exists: use the real cwd */
+    }
+  }
+  return cwd;
 }
 
 function projectsRoot() {

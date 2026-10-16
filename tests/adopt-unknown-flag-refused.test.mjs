@@ -79,3 +79,22 @@ describe('adopt / unadopt refuse a flag they do not know', () => {
     expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')).toBe(TEAM_RULES);
   });
 });
+
+// E2E 2026-10-16 (install P2-2): adopt took $PWD before the real cwd. A program that spawns
+// `adopt` with `cwd: repoA` leaves its OWN PWD in the child's env, so the block was written
+// into the caller's directory and repoA was untouched. $PWD still wins when it names the
+// directory the process is in (a symlinked project's logical spelling).
+describe('adopt targets the directory it runs in, not a stale $PWD', () => {
+  it('a spawned adopt with an inherited PWD writes into its cwd', () => {
+    const caller = join(root, 'caller');
+    mkdirSync(caller, { recursive: true });
+    const r = spawnSync(process.execPath, [CLI, 'adopt'], {
+      cwd: repo,
+      env: { ...env, PWD: caller },
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')).toMatch(/claude-mem-lite:begin/);
+    expect(existsSync(join(caller, 'CLAUDE.md'))).toBe(false);
+  });
+});

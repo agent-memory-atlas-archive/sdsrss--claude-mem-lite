@@ -67,7 +67,7 @@
 - **观察关联** -- 基于文件重叠自动建立观察之间的双向链接
 - **用户提示捕获** -- 通过 UserPromptSubmit 钩子记录用户提示，追踪用户意图
 - **Read 文件追踪** -- 追踪会话中读取的文件，丰富 episode 上下文
-- **LLM 失败时的降级保存** -- 修掉了报错的 episode 用推断的元数据保存（作为活动事件），而非丢弃；只有编辑的 episode（包括改配置、改 schema）只能用原始工具输出拼成摘要，多数会被噪声规则丢掉（`Modified a.js, b.js` 且没有 lesson；只有很短的单文件摘要能留下）——模型成功但没给 lesson 时也一样——所以 LLM 不可用期间这类 episode 会丢失，除非设了 `CLAUDE_MEM_KEEP_LOW_SIGNAL=1`。`claude-mem-lite doctor` 会在要调用的 `claude` CLI 不存在时告警
+- **LLM 失败时的降级保存** -- 修掉了报错的 episode 用推断的元数据保存（作为活动事件），而非丢弃，前提是报错由一条正常退出的命令打印出来（如 `npm test 2>&1 | tail`）：Claude Code 报告为失败的命令不进入 episode，紧随其后的修复按只有编辑的 episode 处理；只有编辑的 episode（包括改配置、改 schema）只能用原始工具输出拼成摘要，多数会被噪声规则丢掉（`Modified a.js, b.js` 且没有 lesson；只有很短的单文件摘要能留下）——模型成功但没给 lesson 时也一样——所以 LLM 不可用期间这类 episode 会丢失，除非设了 `CLAUDE_MEM_KEEP_LOW_SIGNAL=1`。`claude-mem-lite doctor` 会在要调用的 `claude` CLI 不存在时告警
 - **两级去重** -- Jaccard 相似度（5 分钟窗口）+ MinHash 签名（7 天跨会话窗口）双重防重
 - **同义词扩展** -- 缩写如 `K8s`、`DB`、`auth` 在 FTS5 搜索时自动扩展为全称（48+ 对）
 - **伪相关反馈（PRF）** -- 首轮结果作为种子扩展查询，提升召回率
@@ -660,7 +660,7 @@ Episode 是一批相关操作（对同一组文件的编辑），由后台 LLM w
 Episode 缓冲区 -> 刷新为 JSON -> claude -p --model haiku -> 结构化观察 -> SQLite
 ```
 
-每条观察包含类型、标题、叙述、概念、事实和重要度（1-3），并通过两级机制自动去重：Jaccard 相似度（5 分钟内 >70%）和 MinHash 签名（7 天跨会话 >80%）。LLM 调用失败时，修掉了报错的 episode 用推断的元数据保存降级记录；只有编辑的 episode（包括改配置、改 schema）多数会作为噪声丢掉。相关观察通过 FTS5 标题相似度和文件重叠自动建立 `related_ids` 链接。
+每条观察包含类型、标题、叙述、概念、事实和重要度（1-3），并通过两级机制自动去重：Jaccard 相似度（5 分钟内 >70%）和 MinHash 签名（7 天跨会话 >80%）。LLM 调用失败时，修掉了报错（报错由正常退出的命令打印；报告为失败的命令不进入 episode）的 episode 用推断的元数据保存降级记录；只有编辑的 episode（包括改配置、改 schema）多数会作为噪声丢掉。相关观察通过 FTS5 标题相似度和文件重叠自动建立 `related_ids` 链接。
 
 ## 管理命令
 

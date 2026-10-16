@@ -88,7 +88,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Observation relations** -- Bidirectional links between related observations based on file overlap
 - **User prompt capture** -- Records user prompts via UserPromptSubmit hook for intent tracking
 - **Read file tracking** -- Tracks files read during sessions for richer episode context
-- **Degraded fallback when the LLM fails** -- An episode that fixed an error is saved with inferred metadata (as an activity event) instead of being discarded. An edit-only episode, config and schema changes included, is summarised from raw tool output, which the noise rules drop in most cases (`Modified a.js, b.js` with no lesson; only a short single-file summary survives) — as they do when the model answers without a lesson — so a failing provider loses those episodes unless `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` is set; `claude-mem-lite doctor` warns when the `claude` CLI it would call does not resolve
+- **Degraded fallback when the LLM fails** -- An episode that fixed an error is saved with inferred metadata (as an activity event) instead of being discarded, when a command that exited 0 printed the error (`npm test 2>&1 | tail`): a command Claude Code reports as failed does not enter the episode, so a fix that follows one counts as edit-only. An edit-only episode, config and schema changes included, is summarised from raw tool output, which the noise rules drop in most cases (`Modified a.js, b.js` with no lesson; only a short single-file summary survives) — as they do when the model answers without a lesson — so a failing provider loses those episodes unless `CLAUDE_MEM_KEEP_LOW_SIGNAL=1` is set; `claude-mem-lite doctor` warns when the `claude` CLI it would call does not resolve
 - **Two-tier dedup** -- Jaccard similarity (5-minute window) + MinHash signatures (7-day cross-session window) prevent duplicates
 - **Synonym expansion** -- Abbreviations like `K8s`, `DB`, `auth` automatically expand to full forms in FTS5 search (100+ pairs including CJK↔EN cross-language mappings)
 - **CJK synonym extraction** -- Unsegmented Chinese text is scanned for known vocabulary words (数据库→database, 搜索→search, etc.) enabling cross-language memory recall
@@ -824,7 +824,7 @@ Episodes are batched related operations (edits to the same file group) that get 
 Episode buffer -> Flush to JSON -> claude -p --model haiku -> Structured observation -> SQLite
 ```
 
-Each observation includes type, title, narrative, concepts, facts, importance (1-3), and is automatically deduplicated via two tiers: Jaccard similarity (>70% within 5 minutes) and MinHash signatures (>80% within 7 days across sessions). If the LLM call fails, an episode that fixed an error is saved with inferred metadata; an edit-only episode (config and schema changes included) is usually dropped as noise. Related observations are linked via `related_ids` based on FTS5 title similarity and file overlap.
+Each observation includes type, title, narrative, concepts, facts, importance (1-3), and is automatically deduplicated via two tiers: Jaccard similarity (>70% within 5 minutes) and MinHash signatures (>80% within 7 days across sessions). If the LLM call fails, an episode that fixed an error a successful command printed is saved with inferred metadata (a command reported as failed does not enter the episode); an edit-only episode (config and schema changes included) is usually dropped as noise. Related observations are linked via `related_ids` based on FTS5 title similarity and file overlap.
 
 ## Management Commands
 
@@ -1232,7 +1232,7 @@ what is already stored — only whether new work runs.
 |----------|-------------|---------|
 | `CLAUDE_MEM_SKIP_SUMMARY` | Skip the background LLM session summary at **both** of its spawn sites — `Stop`, and the SessionStart `/clear`-handoff path. Until v5.3.0 only the `Stop` one honoured it. | _(runs)_ |
 | `CLAUDE_MEM_LEGACY_STOP_UNLINK` | Restore the pre-v5.4.0 behaviour where `Stop` deletes the session file. Documented revert path for the session-lifecycle change, not a supported configuration: it re-mints a mem session per turn and makes the `/clear` handoff unreachable again. Only reach for it on a host that fires `Stop` once per session rather than once per turn. | _(file kept)_ |
-| `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush. Episodes are still batched and pass through the same degraded fallback as a failed call: one that fixed an error is saved with inferred metadata, an edit-only one is usually dropped as noise. | _(runs)_ |
+| `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush. Episodes are still batched and pass through the same degraded fallback as a failed call: one that fixed an error a successful command printed is saved with inferred metadata (a command reported as failed does not enter the episode), an edit-only one is usually dropped as noise. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SAVE_ENRICH` | Skip the background Haiku call that backfills `lesson_learned` / search aliases after a save. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_COMPRESS` | Skip auto-compression of old observations. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_MAINTAIN` | Skip the 24h auto-maintain pass (decay, purge, backup). | _(runs)_ |

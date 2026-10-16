@@ -559,7 +559,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       if (type === 'change' && cand.type && cand.type !== 'change') type = cand.type;
       // An explicit save gets what its failed save-time enrichment would have written and no
       // more (lib/save-enrich.mjs): its own type and importance, a lesson only for a type that
-      // obligates one, and the side fields. A discovery at importance 1 came back a decision at
+      // obligates one (in narrow; wide backfills lessons by design), and the side fields. A discovery at importance 1 came back a decision at
       // importance 3 with a lesson the person never wrote, under their name (E2E round 2).
       if (manualSave && cand.type) type = cand.type;
       const concepts = Array.isArray(parsed.concepts) ? parsed.concepts.slice(0, 10) : [];
@@ -576,7 +576,10 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // head that scrubSecrets's value-length floor no longer matches (the scrubRecord
       // below would then miss it too). Mirrors the hook-llm save-path fix.
       const lessonLearned =
-        (!manualSave || ENRICH_OBLIGATED_TYPES.has(type)) &&
+        // Wide is the lesson backfill for substantive rows, explicit saves included; narrow
+        // retries a failed save-time enrichment, which writes a lesson for these types only (E2E
+        // 2026-10-16 round 3: applied to wide too, explicit feature/refactor saves lost it).
+        (!manualSave || scope === 'wide' || ENRICH_OBLIGATED_TYPES.has(type)) &&
         typeof parsed.lesson_learned === 'string' &&
         parsed.lesson_learned.toLowerCase() !== 'none' &&
         parsed.lesson_learned.trim().length > 0

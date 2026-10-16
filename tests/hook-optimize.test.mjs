@@ -206,6 +206,34 @@ describe('re-enrich', () => {
     expect(obs.concepts, 'side fields are still filled').toBe('redis');
   });
 
+  // Round 3 (hooks REGRESSION-2): the rule above was meant for narrow and applied to every scope,
+  // so the daily WIDE pass — the lesson backfill for substantive rows — gave an explicit feature
+  // or refactor save no lesson and stamped it out of the pool. Wide keeps backfilling the lesson;
+  // type and importance stay the person's in both scopes.
+  it("wide re-enrich still backfills an explicit feature save's lesson, keeping its type and importance", async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertSession(db, { id: 'manual-wide', project: 'test' });
+    insertObs(db, {
+      sessionId: 'manual-wide',
+      type: 'feature',
+      importance: 2,
+      title: 'Export streams rows in batches',
+      narrative:
+        'The export command now streams rows in fixed-size batches of 500 instead of loading the whole table, which kept memory flat on a 2 GB store during the staging run.',
+    });
+    callModelJSONAsync.mockResolvedValue({
+      ...narrowReply,
+      type: 'refactor',
+      importance: 3,
+      lesson_learned: 'Stream large exports in fixed-size batches to bound memory.',
+    });
+    expect((await executeReenrich(db, 10, { scope: 'wide' })).processed).toBe(1);
+    const obs = db.prepare('SELECT type, importance, lesson_learned FROM observations LIMIT 1').get();
+    expect(obs.lesson_learned).toBe('Stream large exports in fixed-size batches to bound memory.');
+    expect(obs.type).toBe('feature');
+    expect(obs.importance).toBe(2);
+  });
+
   it('control: a machine-written row still takes the model type and a raised importance', async () => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
     insertObs(db, { type: 'discovery', importance: 1, title: 'Modified cache.js', narrative: 'x' });

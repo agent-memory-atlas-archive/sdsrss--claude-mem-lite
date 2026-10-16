@@ -136,6 +136,7 @@ import {
   insertDeferred,
   listOpenWithOrdinal,
   openOrdinalOf,
+  deferredDropLabel,
   dropDeferred,
   formatDropReasonHint,
   resolveDeferredIds,
@@ -1449,7 +1450,7 @@ server.registerTool(
     // D#195 (c): same advisory as the CLI's `defer drop`, so an agent reaching
     // this through MCP gets the same steer toward `mem_save(closes_deferred)`.
     const hint = formatDropReasonHint(args.reason);
-    const dropText = `Dropped D#${realId} in project "${project}". Reason: ${args.reason}`;
+    const dropText = `Dropped ${deferredDropLabel(db, realId)} in project "${project}". Reason: ${args.reason}`;
     return { content: [{ type: 'text', text: hint ? `${dropText}\n${hint}` : dropText }] };
   }),
 );

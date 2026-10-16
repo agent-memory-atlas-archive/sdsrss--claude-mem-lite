@@ -132,3 +132,14 @@ describe('mem_optimize resolves a short project name like its sibling tools', ()
     expect(r.text).toContain('Project filter: b--opt');
   });
 });
+
+describe('mem_defer_drop names what it dropped', () => {
+  // Ordinals follow priority: two adds can both be told "item 1", and `id: 1` then drops the
+  // urgent one. The confirmation carries the title so the model sees which row it hit.
+  it('a drop by ordinal echoes the dropped title', async () => {
+    await call('mem_defer', { title: 'Rename helper (cosmetic)', priority: 2, project: 'b--ord' });
+    await call('mem_defer', { title: 'Backup job skips WAL file', priority: 3, project: 'b--ord' });
+    const r = await call('mem_defer_drop', { id: 1, reason: 'rename not needed', project: 'b--ord' });
+    expect(r.text).toMatch(/Dropped D#\d+ "Backup job skips WAL file"/);
+  });
+});

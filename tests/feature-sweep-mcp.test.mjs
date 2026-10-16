@@ -456,7 +456,9 @@ describe('MCP feature sweep: public tools', () => {
     );
 
     const dropped = await call('mem_defer_drop', { id: `D#${id}`, reason: 'covered elsewhere', project: P });
-    expect(dropped).toContain(`Dropped D#${id} in project "${P}". Reason: covered elsewhere`);
+    expect(dropped).toContain(
+      `Dropped D#${id} "Retire the legacy uploader shim" in project "${P}". Reason: covered elsewhere`,
+    );
     const row = withDb((db) =>
       db.prepare('SELECT status, drop_reason FROM deferred_work WHERE id = ?').get(id),
     );

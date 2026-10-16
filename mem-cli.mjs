@@ -167,6 +167,7 @@ import {
   insertDeferred,
   listOpenWithOrdinal,
   openOrdinalOf,
+  deferredDropLabel,
   dropDeferred,
   formatDropReasonHint,
   resolveDeferredIds,
@@ -1537,7 +1538,7 @@ function cmdDeferDrop(db, args) {
   }
   if (dropped.length > 0) {
     out(
-      `[mem] Dropped ${dropped.map((id) => `D#${id}`).join(', ')} in project "${project}". Reason: ${reason.trim()}`,
+      `[mem] Dropped ${dropped.map((id) => deferredDropLabel(db, id)).join(', ')} in project "${project}". Reason: ${reason.trim()}`,
     );
   }
   if (noop.length > 0) {

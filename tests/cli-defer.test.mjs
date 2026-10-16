@@ -125,6 +125,17 @@ describe('claude-mem-lite defer CLI', () => {
     expect(list.stdout).toMatch(/No open deferred items/);
   });
 
+  // E2E 2026-10-16 (MCP P1-4): ordinals follow priority, so the "item 1" an add reported can
+  // name a different row by the time `drop 1` runs. The confirmation names the title it
+  // dropped, so a drop that hit the wrong item is visible at once.
+  it('defer drop by ordinal names the title of the item it dropped', () => {
+    runCli(['defer', 'add', 'Rename helper (cosmetic)', '--priority', '2']);
+    runCli(['defer', 'add', 'Backup job skips WAL file', '--priority', '3']);
+    const { stdout, exitCode } = runCli(['defer', 'drop', '1', '--reason', 'not needed']);
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatch(/Dropped D#\d+ "Backup job skips WAL file"/);
+  });
+
   // ── MCP-field flag aliases (#233 family): mem_defer.title → --title,
   // mem_defer_drop.id → --id. Flags-only invocations previously fell to a
   // stderr-only usage line (same shape as the save --text incident).
@@ -255,7 +266,7 @@ describe('claude-mem-lite defer CLI', () => {
     runCli(['defer', 'add', 'batch-B', '--priority', '2']);
     const { stdout, exitCode } = runCli(['defer', 'drop', '1,2', '--reason', 'batch test']);
     expect(exitCode).toBe(0);
-    expect(stdout).toMatch(/Dropped D#\d+, D#\d+/);
+    expect(stdout).toMatch(/Dropped D#\d+ "batch-A", D#\d+ "batch-B"/);
     const list = runCli(['defer', 'list']);
     expect(list.stdout).toMatch(/No open deferred items/);
   });

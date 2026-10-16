@@ -625,6 +625,43 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     },
   );
 
+  // Round 3 (install NEW-6): status and doctor read the user scope only, so in a project whose
+  // .claude/settings(.local).json overrides it they reported the opposite of what the hooks do.
+  it('status and doctor name a project-scope override of the plugin switch', () => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({ enabledPlugins: { 'claude-mem-lite@sdsrss': false } }),
+    );
+    const proj = join(home, 'work', 'app');
+    mkdirSync(join(proj, '.claude'), { recursive: true });
+    writeFileSync(
+      join(proj, '.claude', 'settings.json'),
+      JSON.stringify({ enabledPlugins: { 'claude-mem-lite@sdsrss': true } }),
+    );
+    for (const cmd of ['status', 'doctor']) {
+      let out;
+      try {
+        out = execFileSync(process.execPath, [INSTALL_PATH, cmd], {
+          encoding: 'utf8',
+          cwd: proj,
+          env: {
+            ...process.env,
+            HOME: home,
+            CLAUDE_MEM_SKIP_REPOS: '1',
+            MEM_NO_AUTO_ADOPT: '1',
+            CLAUDE_PROJECT_DIR: proj,
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 60000,
+        });
+      } catch (e) {
+        out = `${e.stdout || ''}${e.stderr || ''}`;
+      }
+      expect(out, cmd).toMatch(/enabled in this project/);
+    }
+  });
+
   // Round 2 (install B8): any failure of `claude mcp remove` but ENOENT read as "not found or
   // already removed" while ~/.claude.json still registered the server.
   it('uninstall names a registration `claude mcp remove` failed to remove', () => {

@@ -65,7 +65,13 @@ const SERVER_PATH = join(INSTALL_DIR, 'server.mjs');
 const HOOK_PATH = join(INSTALL_DIR, 'hook.mjs');
 // P2-7: both constants and the predicate come from lib/plugin-key.mjs, which hook.mjs also
 // imports — this pair used to be typed out in each.
-import { MARKETPLACE_KEY, PLUGIN_KEY, PLUGIN_NAME, isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
+import {
+  MARKETPLACE_KEY,
+  PLUGIN_KEY,
+  PLUGIN_NAME,
+  isPluginExplicitlyDisabled,
+  pluginSettingsScopes,
+} from './lib/plugin-key.mjs';
 import { isNpxRun } from './lib/npx-run.mjs';
 import { doctorDbModeHint } from './lib/doctor-modes.mjs';
 // Static, matching doctor-modes above. Safe here where it would not be for a heavier
@@ -1567,6 +1573,32 @@ async function install() {
 // ─── Uninstall ──────────────────────────────────────────────────────────────
 
 /**
+ * The plugin switch a project's own settings set where it differs from the user scope, or null.
+ * Claude Code merges enabledPlugins user < project < local, and the hooks follow the merge
+ * (lib/plugin-key.mjs); status and doctor read the user scope, and in such a project reported
+ * the opposite of what the hooks do (E2E 2026-10-16 round 3).
+ *
+ * @param {object|null} userSettings parsed user-scope settings.json
+ * @returns {{enabled: boolean, file: string}|null}
+ */
+function projectPluginOverride(userSettings) {
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const userValue = userSettings?.enabledPlugins?.[PLUGIN_KEY];
+  let found = null;
+  for (const file of pluginSettingsScopes(claudeConfigDir(), projectDir).slice(1)) {
+    try {
+      const v = JSON.parse(readFileSync(file, 'utf8'))?.enabledPlugins?.[PLUGIN_KEY];
+      if (typeof v === 'boolean') found = { enabled: v, file };
+    } catch {
+      /* missing or unparseable: sets nothing */
+    }
+  }
+  if (!found) return null;
+  // The user scope's effective reading: an absent key is enabled unless set false.
+  return found.enabled === (userValue !== false) ? null : found;
+}
+
+/**
  * Refuse, before any side effect, when the Claude config home cannot be written: every command
  * that edits settings.json would otherwise act and then die on that write with a raw EACCES
  * stack — install after copying files and registering MCP, uninstall after removing the MCP
@@ -1967,6 +1999,14 @@ async function status() {
   else if (pluginDisabled)
     push('warn', 'plugin', 'Plugin: disabled in settings', { enabled: false, disabled: true });
   else push('warn', 'plugin', 'Plugin: not present in enabledPlugins', { enabled: false, disabled: false });
+  const override = projectPluginOverride(settings);
+  if (override)
+    push(
+      'warn',
+      'plugin-project',
+      `Plugin: ${override.enabled ? 'enabled' : 'disabled'} in this project by ${override.file} — the hooks here follow that, not the line above`,
+      { projectEnabled: override.enabled, file: override.file },
+    );
 
   if (hasHooks && pluginDisabled) {
     push(
@@ -2692,6 +2732,12 @@ async function doctor() {
   }
   const hasHooks = settings !== null && hasMemHooksConfigured(settings);
   const pluginDisabled = settings !== null && isPluginExplicitlyDisabled(settings);
+  const projectOverride = settings === null ? null : projectPluginOverride(settings);
+  if (projectOverride) {
+    dwarn(
+      `Plugin: ${projectOverride.enabled ? 'enabled' : 'disabled'} in this project by ${projectOverride.file} — the hooks here follow that; the lifecycle line reads the user scope`,
+    );
+  }
   if (settings === null) {
     dwarn('Plugin lifecycle: not checked (settings.json unreadable)');
   } else if (pluginDisabled && hasHooks) {

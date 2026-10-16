@@ -3399,20 +3399,28 @@ Commands:
     --files (plural, comma-split) preferred; --file (singular) kept for back-compat.
     Use /lesson or /bug slash commands for faster capture (T8).
 
-  adopt                 Write the claude-mem-lite managed block into this project's
-                        CLAUDE.md + a plugin_claude_mem_lite.md detail doc under
-                        .claude/ (loaded as project instructions). Runs automatically
-                        on each SessionStart; use this to force it now.
+  adopt                 Put the claude-mem-lite managed block into this project's
+                        CLAUDE.md (normally committed, so the team gets it) + a
+                        plugin_claude_mem_lite.md detail doc under .claude/, and remove
+                        the auto-written local copy (CLAUDE.local.md, or
+                        .claude/rules/claude-mem-lite.md). Acts on the directory it runs
+                        in and takes no argument. SessionStart keeps an adopted block in
+                        sync but never adds one to CLAUDE.md.
     --all               Legacy sweep: strip old memory-dir (MEMORY.md) sentinels from
-                        known projects. Does NOT adopt — CLAUDE.md adoption is
-                        per-project, on each project's next SessionStart.
+                        known projects. Does NOT adopt — run adopt in each project
+                        whose CLAUDE.md should carry the block.
     --force             Also remove a legacy memory-dir block that has no state
                         sidecar. (The CLAUDE.md block is always rewritten to the
                         current template, edits inside it included.)
     --dry-run           Print intended writes without touching disk
     --status            List adopted projects + version
+    --disable           Stop SessionStart auto-adopt for this project (with --all: every
+                        known project); removes the CLAUDE.local.md block, keeps a
+                        CLAUDE.md one
+    --enable            Undo --disable (with --all: every known project)
 
-  unadopt               Precise removal of the sentinel block + plugin_claude_mem_lite.md.
+  unadopt               Precise removal of the sentinel block + plugin_claude_mem_lite.md,
+                        and of the auto-written CLAUDE.local.md (or rules file) block.
     --all               Unadopt every project
     --status            Read-only: list adopted projects (same as adopt --status)
     --dry-run           Preview what would be removed; no filesystem writes
@@ -3837,6 +3845,17 @@ async function runDispatch(argv) {
       fail(
         `[mem] ${cmd}: unknown flag ${unknown.join(', ')} — nothing was changed. ` +
           `${cmd} takes: ${writerFlags.join(' ')}`,
+      );
+      return;
+    }
+    // None of these flags takes a value, so any other word is a positional, and none is read:
+    // `adopt api` adopted the directory it ran in, `unadopt api` removed the block there, and
+    // `/adopt <dir>` passes its words on (E2E 2026-10-16 round 2).
+    const words = cmdArgs.filter((a) => !a.startsWith('-'));
+    if (words.length > 0) {
+      fail(
+        `[mem] ${cmd}: takes no directory or other argument (got ${words.join(' ')}) — nothing was ` +
+          `changed. It acts on the project it runs in: cd there and run \`${cmd}\` again.`,
       );
       return;
     }

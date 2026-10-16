@@ -73,6 +73,26 @@ describe('adopt / unadopt refuse a flag they do not know', () => {
     expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')).toBe(TEAM_RULES);
   });
 
+  // E2E round 2 (install B4): a positional was ignored, so `adopt api` adopted the directory it
+  // ran in and `unadopt api` removed the block there, exit 0 — also through `/adopt <dir>`,
+  // whose command file passes $ARGUMENTS on.
+  it('adopt <dir> refuses instead of adopting the cwd', () => {
+    mkdirSync(join(repo, 'api'), { recursive: true });
+    const r = cli('adopt', 'api');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/api/);
+    expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')).toBe(TEAM_RULES);
+    expect(existsSync(join(repo, 'api', 'CLAUDE.md'))).toBe(false);
+  });
+
+  it('unadopt <dir> refuses instead of removing the cwd block', () => {
+    expect(cli('adopt').status).toBe(0);
+    const adopted = readFileSync(join(repo, 'CLAUDE.md'), 'utf8');
+    const r = cli('unadopt', 'keep', 'my', 'CLAUDE.md');
+    expect(r.status).toBe(1);
+    expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')).toBe(adopted);
+  });
+
   it('a documented flag still works', () => {
     const r = cli('adopt', '--dry-run');
     expect(r.status).toBe(0);

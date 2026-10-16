@@ -109,6 +109,7 @@ import {
   rejectBareStringFlags,
   resolvePositionalAlias,
   suggestUnknownFlags,
+  KNOWN_CLI_FLAGS,
   resetFlagTracking,
   inertFilterFlags,
   inertFilterFlagNotice,
@@ -3797,6 +3798,8 @@ const SEARCH_SOURCE_SPELLINGS = {
   event: 'events',
 };
 const GET_SOURCE_SPELLINGS = { observations: 'obs', sessions: 'session', prompts: 'prompt', events: 'event' };
+// Commands whose first argument is free text, so a bare `--word` there may be text, not a flag.
+const TEXT_COMMANDS = new Set(['save', 'search', 'defer add']);
 // The mutating runs of the maintenance commands and the filter flags each actually reads.
 const isTrue = (v) => v === true || v === 'true';
 const MUTATING_FILTER_READS = {
@@ -3932,19 +3935,44 @@ async function runDispatch(argv) {
   // project — a misspelled flag changed results with zero signal. Warn (stderr, non-fatal)
   // when a flag looks like a misspelling of a real one; stdout + exit code stay untouched,
   // so JSON/text consumers are unaffected. Mirrors the unknown-COMMAND suggester in cli.mjs.
-  for (const { flag, suggestion, owner } of suggestUnknownFlags(parseArgs(cmdArgs).flags, cmd)) {
+  const parsedForTypos = parseArgs(cmdArgs);
+  for (const { flag, suggestion, owner } of suggestUnknownFlags(parsedForTypos.flags, cmd)) {
+    // The words before the first flag, so a subcommand keeps its place: `defer add -- "…"`, not
+    // `defer -- "…"`, which fails (E2E 2026-10-16 round 4).
+    const firstFlag = cmdArgs.findIndex((a) => a.startsWith('-'));
+    const dashLead = [cmd, ...cmdArgs.slice(0, firstFlag < 0 ? 0 : firstFlag)].join(' ');
     // No flag name holds a space: this is a value or text that starts with `-`, and "Unknown
     // flag … ignored" before the refusal that follows contradicted it (E2E 2026-10-16 round 3).
     if (/\s/.test(flag)) {
-      // The words before the first flag, so a subcommand keeps its place: `defer add -- "…"`, not
-      // `defer -- "…"`, which fails (E2E 2026-10-16 round 4).
-      const firstFlag = cmdArgs.findIndex((a) => a.startsWith('-'));
-      const dashLead = [cmd, ...cmdArgs.slice(0, firstFlag < 0 ? 0 : firstFlag)].join(' ');
       process.stderr.write(
         `[mem] "--${flag}" was read as a flag. A value that starts with - is written --name="…"; ` +
           `text that starts with - goes after a bare --: ${dashLead} -- "…"\n`,
       );
       continue;
+    }
+    // A one-word value has no space to give it away (`--lesson "--no-verify"`, `save "--draft"`),
+    // so the same contradiction survived round 3 (E2E 2026-10-16 round 4). Two shapes say it may be
+    // a value or text: it follows a known flag that was left with no value, or it is the bare first
+    // argument of a command that then has no text at all.
+    if (!owner) {
+      const at = cmdArgs.indexOf(`--${flag}`);
+      const prev = at > 0 ? cmdArgs[at - 1] : '';
+      const prevKey = prev.startsWith('--') && !prev.includes('=') ? prev.slice(2) : null;
+      const asFlag = suggestion ? ` As a flag, did you mean --${suggestion}?` : ' As a flag it is unknown.';
+      if (prevKey && KNOWN_CLI_FLAGS.has(prevKey) && parsedForTypos.flags[prevKey] === true) {
+        process.stderr.write(
+          `[mem] "--${flag}" right after --${prevKey} was read as a flag, not as its value. A value ` +
+            `that starts with - is written --${prevKey}="--${flag}".${asFlag}\n`,
+        );
+        continue;
+      }
+      if (at === firstFlag && parsedForTypos.positional.length === 0 && TEXT_COMMANDS.has(dashLead)) {
+        process.stderr.write(
+          `[mem] "--${flag}" was read as a flag. Text that starts with - goes after a bare --: ` +
+            `${dashLead} -- "--${flag}".${asFlag}\n`,
+        );
+        continue;
+      }
     }
     process.stderr.write(
       owner

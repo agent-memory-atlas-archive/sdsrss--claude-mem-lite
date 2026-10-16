@@ -175,6 +175,25 @@ describe('round-3 CLI wording', () => {
     const r = cli('defer', 'add', '--no-verify skips the pre-commit hooks');
     expect(r.stderr).toMatch(/defer add -- "/);
   });
+  // Round 4 (data S-2): a ONE-word value has no space, so it was still read as a real flag name and
+  // got "Unknown flag … ignored" / "did you mean" before the refusal that followed.
+  it('a one-word value starting with -- names the --flag="…" form, not "Unknown flag"', () => {
+    const lesson = cli('update', '1', '--lesson', '--no-verify');
+    expect(lesson.stderr).not.toMatch(/Unknown flag|ignored, it had no effect/);
+    expect(lesson.stderr).toMatch(/--lesson="--no-verify"/);
+    const title = cli('update', '1', '--title', '--wip');
+    expect(title.stderr).not.toMatch(/Unknown flag/);
+    expect(title.stderr).toMatch(/--title="--wip"/);
+  });
+  it('one-word text starting with -- points at the bare -- form', () => {
+    const r = cli('save', '--draft');
+    expect(r.stderr).not.toMatch(/Unknown flag/);
+    expect(r.stderr).toMatch(/save -- "/);
+  });
+  it('a misspelled flag after a bare flag still gets its suggestion', () => {
+    const r = cli('search', 'redis', '--json', '--projcet', 'x');
+    expect(r.stderr).toMatch(/did you mean --project\?/);
+  });
   it('the activity promote refusal names --min-importance', () => {
     const r = cli('activity', 'promote', '--execute', '--importance', '2');
     expect(r.status).toBe(1);

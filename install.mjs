@@ -736,7 +736,11 @@ function createCliSymlink() {
       ok(`CLI: ${cliLink} → ${cliSource}`);
       // Only `status` said so, and the command this line announces was not found (E2E
       // 2026-10-16 round 2).
-      const onPath = (process.env.PATH || '').split(delimiter).some((d) => d && resolve(d) === localBin);
+      // A leading ~ counts as home: a quoted `export PATH="~/.local/bin:$PATH"` leaves it
+      // literal, and bash expands it at lookup (E2E 2026-10-16 round 3).
+      const onPath = (process.env.PATH || '')
+        .split(delimiter)
+        .some((d) => d && resolve(d.replace(/^~(?=$|[\\/])/, homedir())) === localBin);
       if (!onPath)
         warn(
           `${localBin} is not on PATH, so the command is not found yet — add it: export PATH=${shellWord(localBin)}:"$PATH"`,

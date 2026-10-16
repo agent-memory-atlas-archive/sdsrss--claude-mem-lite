@@ -656,6 +656,12 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     });
     expect(on).toMatch(/CLI: .*claude-mem-lite →/);
     expect(on).not.toMatch(/\.local\/bin is not on PATH/);
+    // Round 3 (install NEW-7): a quoted `export PATH="~/.local/bin:$PATH"` leaves a literal ~,
+    // which bash expands at lookup; it was called off PATH.
+    const tilde = runInstall('install', home, ['--dev', '--skip-repos'], {
+      PATH: `~/.local/bin:${binDir}:${process.env.PATH}`,
+    });
+    expect(tilde).not.toMatch(/\.local\/bin is not on PATH/);
   });
 
   it('uninstall --purge removes data directory', () => {

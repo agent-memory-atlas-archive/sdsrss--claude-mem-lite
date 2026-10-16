@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import { insertSession } from './test-helpers.mjs';
+import { isPromptEcho } from '../scripts/prompt-search-utils.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'user-prompt-search.js');
 const HEADER = '[mem] FYI — Past similar questions';
@@ -96,5 +97,24 @@ describe('past-question fallback excludes its own session and echoes of the prom
     const out = await run(PROMPT, 'sess-now');
     expect(out).toContain('ignore the timeout');
     expect(out.split('\n').filter((l) => l.startsWith('P#') && l.includes('fix the retry loop'))).toEqual([]);
+  });
+});
+
+describe('isPromptEcho', () => {
+  const P = 'fix the retry loop timeout handling in fetcher.mjs';
+  it('same text after whitespace and case folding', () => {
+    expect(isPromptEcho(`  ${P.toUpperCase()}\n`, P)).toBe(true);
+  });
+  it('a re-paste with a short addition (prefix covering >= 80%)', () => {
+    expect(isPromptEcho(`${P} now`, P)).toBe(true);
+    expect(isPromptEcho(P, `${P} now`)).toBe(true);
+  });
+  it('a prefix covering less than 80% is a different question', () => {
+    expect(isPromptEcho('fix the retry loop', P)).toBe(false);
+    expect(isPromptEcho(`${P} and then also rewrite the backoff table to use jitter`, P)).toBe(false);
+  });
+  it('empty sides are never echoes', () => {
+    expect(isPromptEcho('', P)).toBe(false);
+    expect(isPromptEcho(P, '')).toBe(false);
   });
 });

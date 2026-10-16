@@ -487,7 +487,12 @@ function buildHybridCtx(query, params) {
 }
 
 function defaultSearchFn(db, query, params) {
-  return searchObservationsHybrid(db, buildHybridCtx(query, params));
+  const ctx = buildHybridCtx(query, params);
+  // A variant that sanitises to nothing (operators, punctuation) would run as the engine's
+  // listing of recent rows, and deep search handed those back as matches: `***` returned the
+  // whole store (E2E 2026-10-16 round 2).
+  if (!ctx.ftsQuery) return [];
+  return searchObservationsHybrid(db, ctx);
 }
 
 /**

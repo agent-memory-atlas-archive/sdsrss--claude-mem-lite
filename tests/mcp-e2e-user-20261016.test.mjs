@@ -164,3 +164,15 @@ describe('mem_export states what a backup leaves out', () => {
     expect(r.text).toMatch(/not events, deferred items, sessions or prompts/);
   });
 });
+
+// Round 2 (data N2): a deep search whose query sanitises to nothing listed the whole store as
+// its "results", where the plain search says the query was filtered.
+describe('deep search on an operator-only query', () => {
+  it('answers like the plain search, not with every row', async () => {
+    const plain = await call('mem_search', { query: '***' });
+    const deep = await call('mem_search', { query: '***', deep: true });
+    expect(plain.text).toMatch(/filtered/);
+    expect(deep.text).toMatch(/filtered/);
+    expect(deep.text).not.toMatch(/Found \d+ result/);
+  });
+});

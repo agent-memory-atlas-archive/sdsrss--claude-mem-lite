@@ -444,7 +444,13 @@ function formatSearchOutput(
 ) {
   if (paginatedResults.length === 0) {
     const hint = [];
-    if (isDeepSearch && deepVariantCount !== null && deepVariantCount <= 1) {
+    if (isDeepSearch && deepVariantCount !== null && deepVariantCount <= 1 && args.query && !ftsQuery) {
+      // Nothing was searched at all: the original query is operators or punctuation only.
+      hint.push(
+        `Query "${queryLabel(args.query)}" was filtered (FTS5 keywords/special chars only), and deep search could not rewrite it (the LLM call failed or returned no usable variants).`,
+      );
+      hint.push('Tip: use content words instead of operators (AND, OR, NOT, NEAR).');
+    } else if (isDeepSearch && deepVariantCount !== null && deepVariantCount <= 1) {
       // The rewrite failed (LLM unavailable, timed out, or no usable variants), so deep search
       // was the plain search. Saying "the rewrite ran … the memory likely has no related
       // observations" told the model a search that did not happen had come back empty.

@@ -41,11 +41,20 @@ _mem_is_abs() {
 _mem_config_home="${HOME}/.claude"
 _mem_is_abs "${CLAUDE_CONFIG_DIR:-}" && _mem_config_home="$CLAUDE_CONFIG_DIR"
 _mem_settings_file="$_mem_config_home/settings.json"
+# The user, project and local scopes, merged as the host merges enabledPlugins (highest last;
+# lib/plugin-key.mjs isPluginDisabledInScopes): the user scope alone missed a plugin a project
+# enabled, and a project's settings.local.json false (E2E 2026-10-16 round 2).
+_mem_project_dir="${CLAUDE_PROJECT_DIR:-$PWD}"
 _mem_plugin_disabled() {
-  [[ -r "$_mem_settings_file" ]] || return 1
-  local _settings
-  _settings=$(<"$_mem_settings_file")
-  [[ "$_settings" =~ \"claude-mem-lite@sdsrss\"[[:space:]]*:[[:space:]]*false ]]
+  local _f _settings _value=""
+  for _f in "$_mem_settings_file" "$_mem_project_dir/.claude/settings.json" \
+    "$_mem_project_dir/.claude/settings.local.json"; do
+    [[ -r "$_f" ]] || continue
+    _settings=$(<"$_f")
+    [[ "$_settings" =~ \"claude-mem-lite@sdsrss\"[[:space:]]*:[[:space:]]*(true|false) ]] &&
+      _value="${BASH_REMATCH[1]}"
+  done
+  [[ "$_value" == false ]]
 }
 
 # Read stdin (tool hook JSON). The whole-file tier (8 MB, lib/hook-stdin.mjs

@@ -192,16 +192,28 @@ if (swapInProgress()) process.exit(0);
 // only entry that checked: the recall scripts behind this launcher kept injecting memory on
 // every prompt and before every Read and Edit for a plugin the user had switched off (E2E
 // 2026-10-16). Same file, key and fail-open as lib/plugin-key.mjs isPluginExplicitlyDisabled
-// and hook.mjs pluginDisabledHere — inline per the pure-node charter above.
+// and hook.mjs pluginDisabledHere — inline per the pure-node charter above. The user, project
+// and local scopes are merged as the host merges them, highest last (lib/plugin-key.mjs
+// pluginSettingsScopes / isPluginDisabledInScopes): reading the user scope alone killed a
+// plugin a project enabled (E2E 2026-10-16 round 2).
 function pluginDisabled() {
-  try {
-    const d = process.env.CLAUDE_CONFIG_DIR;
-    const configHome = d && isAbsolute(d) ? d : join(homedir(), '.claude');
-    const settings = JSON.parse(readFileSync(join(configHome, 'settings.json'), 'utf8'));
-    return settings?.enabledPlugins?.['claude-mem-lite@sdsrss'] === false;
-  } catch {
-    return false; // missing or unparseable settings.json: not disabled (fail open)
+  const d = process.env.CLAUDE_CONFIG_DIR;
+  const configHome = d && isAbsolute(d) ? d : join(homedir(), '.claude');
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  let value;
+  for (const path of [
+    join(configHome, 'settings.json'),
+    join(projectDir, '.claude', 'settings.json'),
+    join(projectDir, '.claude', 'settings.local.json'),
+  ]) {
+    try {
+      const v = JSON.parse(readFileSync(path, 'utf8'))?.enabledPlugins?.['claude-mem-lite@sdsrss'];
+      if (typeof v === 'boolean') value = v;
+    } catch {
+      /* missing or unparseable: sets nothing (fail open) */
+    }
   }
+  return value === false;
 }
 
 if (pluginDisabled()) process.exit(0);

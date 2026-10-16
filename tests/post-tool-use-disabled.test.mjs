@@ -155,6 +155,50 @@ describe('P3-4 disabled plugin stops appending reads-<project>.txt', () => {
   });
 });
 
+// E2E 2026-10-16 round 2 (hooks REGRESSION-1): Claude Code merges enabledPlugins user <
+// project < local; the guard read the user scope only.
+describe('the bash guard merges the project and local scopes like the host', () => {
+  function scopedRead({ user, project, local }) {
+    const home = sandbox('mem-disabled-home-');
+    const memDir = sandbox('mem-disabled-data-');
+    const proj = join(sandbox('mem-disabled-proj-'), 'org', 'proj');
+    mkdirSync(join(proj, '.claude'), { recursive: true });
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    if (user !== undefined) writeFileSync(join(home, '.claude', 'settings.json'), settingsWith(user));
+    if (project !== undefined) writeFileSync(join(proj, '.claude', 'settings.json'), settingsWith(project));
+    if (local !== undefined) writeFileSync(join(proj, '.claude', 'settings.local.json'), settingsWith(local));
+    const r = spawnSync('bash', [SCRIPT], {
+      input: JSON.stringify({
+        session_id: 'scoped',
+        tool_name: 'Read',
+        tool_input: { file_path: `${proj}/a.md` },
+      }),
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_MEM_DIR: memDir,
+        CLAUDE_PROJECT_DIR: proj,
+        CLAUDE_MEM_HOOK_RUNNING: '',
+      },
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(0);
+    return existsSync(join(memDir, 'runtime', 'reads-org--proj.txt'));
+  }
+  it('user false, project true: runs', () => {
+    expect(scopedRead({ user: false, project: true })).toBe(true);
+  });
+  it('user true, local false: off', () => {
+    expect(scopedRead({ user: true, local: false })).toBe(false);
+  });
+  it('project false, local true: runs', () => {
+    expect(scopedRead({ project: false, local: true })).toBe(true);
+  });
+  it('control: user false alone is still off', () => {
+    expect(scopedRead({ user: false })).toBe(false);
+  });
+});
+
 describe('bash/Node disable-detection parity', () => {
   const bash = readFileSync(SCRIPT, 'utf8');
   const nodeSrc = readFileSync(HOOK_MJS, 'utf8');

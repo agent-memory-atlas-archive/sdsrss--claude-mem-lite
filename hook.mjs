@@ -51,7 +51,7 @@ import {
 // their canonical module.
 import { inferProjectDir } from './project-utils.mjs';
 import { extractFileTargets } from './bash-utils.mjs';
-import { isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
+import { isPluginDisabledInScopes, pluginSettingsScopes } from './lib/plugin-key.mjs';
 import { readHookStdin, salvageTruncatedHookEvent, TOOL_INPUT_FILE_MAX_BYTES } from './lib/hook-stdin.mjs';
 // Aliased: `acquireLock` from hook-episode.mjs below is the episode buffer's own
 // (argument-less) lock — a different mutex with a different staleness policy.
@@ -281,15 +281,19 @@ const BG_EVENTS = new Set([
 // same decision, and a key that drifts on one side leaves the user with a plugin they
 // switched off and a settings.json hook set that never noticed. Reading the file stays here:
 // install.mjs already holds a parsed settings object when it asks, this process does not.
+// The user, project and local scopes are merged as the host merges them (lib/plugin-key.mjs).
 function pluginDisabledHere() {
-  try {
-    const settingsPath = join(claudeConfigDir(), 'settings.json');
-    return isPluginExplicitlyDisabled(JSON.parse(readFileSync(settingsPath, 'utf8')));
-  } catch {
-    // Missing or unparseable settings.json → not disabled. Fail OPEN: a corrupt file must
-    // not switch the plugin off for a user who never asked for that.
-    return false;
-  }
+  const read = (path) => {
+    try {
+      return JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      // Missing or unparseable → sets nothing. Fail OPEN: a corrupt file must not switch the
+      // plugin off for a user who never asked for that.
+      return null;
+    }
+  };
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  return isPluginDisabledInScopes(pluginSettingsScopes(claudeConfigDir(), projectDir).map(read));
 }
 
 if (event && pluginDisabledHere()) process.exit(0);

@@ -95,6 +95,44 @@ describe('the hook launcher honours a disabled plugin', () => {
     expect(pretool().stdout).toContain('Math.round');
   });
 
+  // E2E round 2 (hooks REGRESSION-1): Claude Code merges enabledPlugins user < project <
+  // local, so a plugin a project enables runs there even when the user scope says false, and
+  // `.claude/settings.local.json` false is the documented way to switch a project-enabled
+  // plugin off. The launcher read the user scope only, so the first case went fully dead.
+  const projectSettings = (name, obj) => {
+    mkdirSync(join(proj, '.claude'), { recursive: true });
+    writeFileSync(join(proj, '.claude', name), JSON.stringify(obj));
+  };
+  it('user false, project true: the plugin runs in that project', () => {
+    settings({ enabledPlugins: { [PLUGIN_KEY]: false } });
+    projectSettings('settings.json', { enabledPlugins: { [PLUGIN_KEY]: true } });
+    expect(pretool().stdout).toContain('Math.round after percentage ops');
+  });
+  it('user true, local false: the plugin is off in that project', () => {
+    settings({ enabledPlugins: { [PLUGIN_KEY]: true } });
+    projectSettings('settings.local.json', { enabledPlugins: { [PLUGIN_KEY]: false } });
+    expect(pretool().stdout).toBe('');
+  });
+  it('local beats project', () => {
+    settings({ enabledPlugins: { [PLUGIN_KEY]: true } });
+    projectSettings('settings.json', { enabledPlugins: { [PLUGIN_KEY]: true } });
+    projectSettings('settings.local.json', { enabledPlugins: { [PLUGIN_KEY]: false } });
+    expect(pretool().stdout).toBe('');
+  });
+  it('hook.mjs agrees: user false, project true still runs SessionStart', () => {
+    settings({ enabledPlugins: { [PLUGIN_KEY]: false } });
+    projectSettings('settings.json', { enabledPlugins: { [PLUGIN_KEY]: true } });
+    const ss = () =>
+      spawnSync(process.execPath, [LAUNCHER, 'hook.mjs', 'session-start'], {
+        input: JSON.stringify({ session_id: 'ss-1', source: 'startup', cwd: proj }),
+        env: { ...env, MEM_NO_AUTO_ADOPT: '1' },
+        encoding: 'utf8',
+      });
+    expect(ss().stdout).toContain('applyDiscount');
+    projectSettings('settings.local.json', { enabledPlugins: { [PLUGIN_KEY]: false } });
+    expect(ss().stdout).toBe('');
+  });
+
   it('the launcher spells the same key as lib/plugin-key.mjs', () => {
     expect(readFileSync(LAUNCHER, 'utf8')).toContain(`'${PLUGIN_KEY}'`);
   });

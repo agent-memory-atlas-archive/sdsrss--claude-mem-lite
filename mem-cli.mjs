@@ -2712,6 +2712,10 @@ function cmdMaintain(db, args) {
     );
     out(formatHiddenLine(stats.hidden));
     out(formatPendingPurgeLine(stats.pendingPurge));
+    if (stats.explicitToShowAgain > 0)
+      out(
+        `  Explicit saves an earlier release hid (the next execute shows them again): ${stats.explicitToShowAgain}`,
+      );
     if (duplicates.length > 0) {
       const autoMergeable = duplicates.filter((d) => parseFloat(d.similarity) >= AUTO_MERGE_THRESHOLD);
       const manualReview = duplicates.filter((d) => parseFloat(d.similarity) < AUTO_MERGE_THRESHOLD);

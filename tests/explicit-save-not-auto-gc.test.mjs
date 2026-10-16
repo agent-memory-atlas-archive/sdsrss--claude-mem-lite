@@ -21,6 +21,7 @@ import {
   maintenanceStats,
   purgeStale,
   purgeStalePreview,
+  hardDeleteCandidateCount,
   HIDE_GRACE_MS,
   STALE_AGE_MS,
 } from '../lib/maintain-core.mjs';
@@ -152,6 +153,30 @@ describe('explicit saves past 60 days, and those an earlier release took', () =>
     expect(col(db, manual, 'hidden_at') ?? null).toBeNull();
     expect(col(db, second, 'compressed_into') ?? 0).toBe(0);
     expect(col(db, hook, 'compressed_into')).toBe(COMPRESSED_AUTO); // a machine row stays hidden
+    db.close();
+  });
+
+  // Round 3 (data REG-1): scan still counted explicit saves under "Pending purge … purge_stale
+  // deletes them" and "Hidden", which purge now skips and decay shows again; the snapshot gate
+  // counted them as hard-delete candidates too.
+  it("maintain scan's hidden / pending-purge counts match what execute does", () => {
+    const { db, manual, hook } = seed();
+    const second = Number(
+      insertObs(db, { sessionId: 'manual-p', project: 'p', title: 'queued by hand', epochOffset: -120 * DAY })
+        .lastInsertRowid,
+    );
+    db.prepare(
+      `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, hidden_at = ? WHERE id IN (?, ?)`,
+    ).run(Date.now() - DAY, manual, hook);
+    db.prepare(`UPDATE observations SET compressed_into = ${COMPRESSED_PENDING_PURGE} WHERE id = ?`).run(
+      second,
+    );
+    const stats = maintenanceStats(db, ctx);
+    expect(stats.hidden).toBe(1); // the hook row
+    expect(stats.pendingPurge).toBe(0);
+    expect(stats.explicitToShowAgain).toBe(2);
+    expect(hardDeleteCandidateCount(db, ctx, { purge: true })).toBe(0);
+    expect(decayAndMarkIdle(db, ctx).restoredExplicit).toBe(stats.explicitToShowAgain);
     db.close();
   });
 

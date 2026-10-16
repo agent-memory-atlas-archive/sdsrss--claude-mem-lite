@@ -1658,6 +1658,11 @@ server.registerTool(
         `  Boostable (accessed>3, imp<3): ${stats.boostable}`,
         formatHiddenLine(stats.hidden),
         formatPendingPurgeLine(stats.pendingPurge),
+        ...(stats.explicitToShowAgain > 0
+          ? [
+              `  Explicit saves an earlier release hid (the next execute shows them again): ${stats.explicitToShowAgain}`,
+            ]
+          : []),
       ];
       if (duplicates.length > 0) {
         const autoMergeable = duplicates.filter((d) => parseFloat(d.similarity) >= AUTO_MERGE_THRESHOLD);

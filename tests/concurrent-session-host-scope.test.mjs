@@ -172,6 +172,113 @@ describe('two sessions open in one project', () => {
   });
 });
 
+// E2E 2026-10-16 F5: a second session opened while the first is still running got the first
+// one's exit handoff as "Resumed context from previous session". Concurrent sessions in one repo
+// share HEAD, so the git anchor (Stage -1) continued on any short first prompt.
+describe('a handoff whose writer is still running', () => {
+  const inRepo = (event, payload, host) => {
+    const env = {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PROJECT_DIR: projectDir,
+      CLAUDE_PID: host ?? '',
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+      CLAUDE_MEM_SKIP_COMPRESS: '1',
+      CLAUDE_MEM_SKIP_OPTIMIZE: '1',
+      CLAUDE_MEM_SKIP_MAINTAIN: '1',
+      CLAUDE_MEM_SKIP_SUMMARY: '1',
+      CLAUDE_MEM_SKIP_EPISODE_LLM: '1',
+      MEM_NO_AUTO_ADOPT: '1',
+    };
+    delete env.CLAUDE_MEM_HOOK_RUNNING;
+    // The anchor reads HEAD from the hook's cwd, so the hooks run inside the project repo.
+    return execFileSync(process.execPath, [HOOK, event], {
+      input: JSON.stringify({ cwd: projectDir, hook_event_name: event, ...payload }),
+      env,
+      cwd: projectDir,
+      encoding: 'utf8',
+      timeout: 20000,
+    });
+  };
+  const git = (...args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8' });
+  const workAndEnd = (sid, host) => {
+    inRepo('session-start', { session_id: sid, source: 'startup' }, host);
+    inRepo('user-prompt', { session_id: sid, prompt: 'Fix the ALPHA_ROUNDING bug in invoice totals' }, host);
+    inRepo(
+      'post-tool-use',
+      {
+        session_id: sid,
+        tool_name: 'Edit',
+        tool_input: {
+          file_path: join(projectDir, 'src/server.js'),
+          old_string: 'export function addTodo(body) {',
+          new_string:
+            "export function addTodo(body) {\n  // ALPHA_ROUNDING: round half up\n  if (!body) throw new Error('x');",
+        },
+        tool_response: { filePath: join(projectDir, 'src/server.js') },
+      },
+      host,
+    );
+    inRepo('stop', { session_id: sid }, host);
+  };
+  const exitRow = (sid) =>
+    q(
+      "SELECT git_sha_at_handoff sha, consumed_at FROM session_handoffs WHERE session_id = ? AND type = 'exit'",
+      sid,
+    )[0];
+
+  beforeEach(() => {
+    git('init', '-q');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '.');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  });
+
+  it('is not resumed into a second session opened at the same HEAD', () => {
+    workAndEnd('cc-A', HOST_A);
+    expect(exitRow('cc-A')?.sha, 'premise: A wrote an exit handoff anchored at HEAD').toBe(
+      git('rev-parse', 'HEAD').trim(),
+    );
+
+    inRepo('session-start', { session_id: 'cc-B', source: 'startup' }, HOST_B);
+    const out = inRepo('user-prompt', { session_id: 'cc-B', prompt: 'add BRAVO_DOCS to README' }, HOST_B);
+
+    expect(out).not.toContain('Resumed context');
+    expect(out).not.toContain('ALPHA_ROUNDING');
+    expect(exitRow('cc-A').consumed_at, 'B consumed the live session’s handoff').toBeNull();
+  });
+
+  it('stays out of the second session after its writer ran /clear', () => {
+    workAndEnd('cc-A', HOST_A);
+    inRepo('session-start', { session_id: 'cc-A2', source: 'clear' }, HOST_A); // same process
+    inRepo('session-start', { session_id: 'cc-B', source: 'startup' }, HOST_B);
+    const out = inRepo('user-prompt', { session_id: 'cc-B', prompt: 'add BRAVO_DOCS to README' }, HOST_B);
+
+    expect(out).not.toContain('ALPHA_ROUNDING');
+    expect(exitRow('cc-A').consumed_at).toBeNull();
+  });
+
+  it('a new process does not inherit the record of a gone one that had its pid', () => {
+    // A recycled pid: the session file a gone process left under HOST_A still lists its handoff.
+    const file = join(runtime, `session-work--todo-app@h${HOST_A}`);
+    writeFileSync(file, JSON.stringify({ id: 'hook-old', startedAt: Date.now(), handoffIds: ['cc-old'] }));
+    inRepo('session-start', { session_id: 'cc-A', source: 'startup' }, HOST_A);
+    expect(JSON.parse(readFileSync(file, 'utf8')).handoffIds).toBeUndefined();
+  });
+
+  it('is resumed once its writer has exited', () => {
+    const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], {
+      encoding: 'utf8',
+    }).stdout;
+    workAndEnd('cc-A', dead);
+
+    inRepo('session-start', { session_id: 'cc-B', source: 'startup' }, HOST_B);
+    const out = inRepo('user-prompt', { session_id: 'cc-B', prompt: 'add BRAVO_DOCS to README' }, HOST_B);
+
+    expect(out).toContain('Resumed context');
+    expect(out).toContain('ALPHA_ROUNDING');
+  });
+});
+
 describe('the buffer of a session whose process is gone', () => {
   it('is flushed by the next session in the project instead of waiting out the 7-day sweep', async () => {
     // A process that has exited: its pid is dead, exactly like a host closed mid-turn (no Stop).

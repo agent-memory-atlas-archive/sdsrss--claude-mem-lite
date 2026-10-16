@@ -96,6 +96,8 @@ import {
   deadHostFiles,
   getSessionId,
   createSessionId,
+  recordHandoffWriter,
+  liveOtherHostHandoffIds,
   openDb,
   spawnBackground,
   sweepOrphanEpisodeFiles,
@@ -1348,6 +1350,8 @@ function markSessionCompletedAndSaveHandoff(
   // user_prompts and the handoff row is silently skipped (see hook-handoff.mjs).
   try {
     buildAndSaveHandoff(db, sessionId, project, 'exit', episodeSnapshot, ccSessionId || sessionId);
+    // So a session opened beside this one does not resume this live session's handoff (F5).
+    recordHandoffWriter(ccSessionId || sessionId);
   } catch (e) {
     debugCatch(e, 'handleStop-handoff');
   }
@@ -2416,6 +2420,7 @@ function saveHandoffAndFastSummary(
         episodeSnapshot,
         handoffScopeId,
       );
+      recordHandoffWriter(handoffScopeId);
     } catch (e) {
       debugCatch(e, 'session-start-handoff');
     }
@@ -2599,7 +2604,15 @@ async function buildStartupDashboardText(db, project, { skipHandoff = false } = 
     // process.cwd(): otherwise the dashboard renders directory A's git state and task list
     // under directory B's project name whenever the hook process was not spawned at the
     // project root. See inferProjectDir()'s docblock for the case this closed.
-    let dashboardText = buildDashboard({ db, project, projectPath: inferProjectDir(), skipHandoff });
+    // The continuation pointer promises a resumable handoff, so it skips the ones the prompt-time
+    // injection will not resume: those written by another Claude Code process still running (F5).
+    let dashboardText = buildDashboard({
+      db,
+      project,
+      projectPath: inferProjectDir(),
+      skipHandoff,
+      excludeHandoffIds: liveOtherHostHandoffIds(project),
+    });
     const citeNudge = buildCiteRecallNudge(project);
     if (citeNudge) {
       dashboardText = dashboardText ? `${citeNudge}\n${dashboardText}` : citeNudge;
@@ -3251,8 +3264,10 @@ async function handleSessionStart() {
     } catch {} // No session file = fresh startup, nothing to recover
   }
 
-  // Tier 1 A: Create unique session ID
-  const sessionId = createSessionId();
+  // Tier 1 A: Create unique session ID. A /clear or /compact is the same host process, so its
+  // record of the handoffs it wrote carries over; a startup is a new process whose pid may be a
+  // dead one's, and must not inherit that process's record (F5).
+  const sessionId = createSessionId({ keepHandoffIds: startSource !== 'startup' });
   const project = inferProject();
 
   const db = openDb();
@@ -3577,10 +3592,14 @@ function injectHandoffIfEarly(db, { project, promptText, promptNumber, ccSession
     : promptNumber;
   if (windowPos <= 3) {
     try {
-      if (detectContinuationIntent(db, promptText, project, ccSessionId)) {
-        const picked = pickHandoffToInject(db, project, ccSessionId);
+      // A handoff whose writer is another Claude Code process still running belongs to that
+      // open session, not to a previous one. Concurrent sessions in one repo share HEAD, so
+      // the commit anchor would otherwise resume it on any short first prompt (E2E 2026-10-16 F5).
+      const liveWriters = liveOtherHostHandoffIds(project);
+      if (detectContinuationIntent(db, promptText, project, ccSessionId, liveWriters)) {
+        const picked = pickHandoffToInject(db, project, ccSessionId, liveWriters);
         if (picked) {
-          const injection = renderHandoffInjection(db, project, ccSessionId);
+          const injection = renderHandoffInjection(db, project, ccSessionId, liveWriters);
           if (injection) writePlainHookText(injection);
           // Consume ONLY the row we just injected — leave other projects' exit
           // handoffs intact so future sessions can still resume from them.

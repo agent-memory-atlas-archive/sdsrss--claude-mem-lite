@@ -485,14 +485,94 @@ export function getSessionId() {
   return createSessionId();
 }
 
-export function createSessionId() {
+// How many handoff ids one host's session file remembers (newest kept). Each /clear rotates the
+// host session id, so a long-lived process writes one id per /clear; handoffs expire in 7 days.
+const HANDOFF_IDS_MAX = 20;
+
+function writeSessionFile(file, data) {
+  const tmp = file + `.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
+  renameSync(tmp, file);
+}
+
+/**
+ * Mint a new memory session id and write this host's session file.
+ *
+ * `keepHandoffIds` carries the file's `handoffIds` (recordHandoffWriter) into the new one. Pass
+ * false when a NEW Claude Code process starts: a recycled pid must not inherit a dead process's
+ * handoffs and hide them from everyone while it lives (E2E 2026-10-16 F5).
+ *
+ * @param {{keepHandoffIds?: boolean}} [opts]
+ * @returns {string}
+ */
+export function createSessionId({ keepHandoffIds = true } = {}) {
   const project = inferProject();
   const id = hookSessionId(project, randomUUID().slice(0, 8));
   const file = sessionFile();
-  const tmp = file + `.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify({ id, startedAt: Date.now(), project }), { mode: 0o600 });
-  renameSync(tmp, file);
+  const data = { id, startedAt: Date.now(), project };
+  if (keepHandoffIds) {
+    try {
+      const prev = JSON.parse(readFileSync(file, 'utf8')).handoffIds;
+      if (Array.isArray(prev) && prev.length > 0) data.handoffIds = prev;
+    } catch {
+      /* no previous file */
+    }
+  }
+  writeSessionFile(file, data);
   return id;
+}
+
+/**
+ * Record in this host's session file that it wrote a handoff under `handoffSessionId` (the
+ * `session_handoffs.session_id` value), so a concurrent session can tell that the handoff's
+ * writer is still running (liveOtherHostHandoffIds). Only with a host pid: without one no
+ * reader can test the writer's liveness. Never throws.
+ *
+ * @param {string|null|undefined} handoffSessionId
+ */
+export function recordHandoffWriter(handoffSessionId) {
+  if (!handoffSessionId || !hostScopeSuffix()) return;
+  try {
+    const file = sessionFile();
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    const ids = Array.isArray(data.handoffIds) ? data.handoffIds.filter((x) => x !== handoffSessionId) : [];
+    ids.push(String(handoffSessionId));
+    data.handoffIds = ids.slice(-HANDOFF_IDS_MAX);
+    writeSessionFile(file, data);
+  } catch {
+    /* no session file yet, or unwritable: the handoff stays resumable, as before */
+  }
+}
+
+/**
+ * Handoff session ids written by ANOTHER Claude Code process that is still running, for
+ * `project`. Such a handoff is not a previous session's: its writer is open in another window,
+ * and resuming it there hands one session's work to a second one (E2E 2026-10-16 F5). Read from
+ * the per-host session files; a writer without a host pid, or one that has exited, adds nothing.
+ *
+ * @param {string} project
+ * @param {string} [runtimeDir]
+ * @returns {string[]}
+ */
+export function liveOtherHostHandoffIds(project, runtimeDir = RUNTIME_DIR) {
+  const stem = `session-${project}`;
+  let names;
+  try {
+    names = readdirSync(runtimeDir);
+  } catch {
+    return [];
+  }
+  const out = new Set();
+  for (const f of names) {
+    if (!f.startsWith(`${stem}@h`) || !isOtherLiveHost(f.slice(stem.length))) continue;
+    try {
+      const ids = JSON.parse(readFileSync(join(runtimeDir, f), 'utf8')).handoffIds;
+      if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') out.add(id);
+    } catch {
+      /* unreadable or mid-rename: treat as no record */
+    }
+  }
+  return [...out];
 }
 
 // ─── Database ────────────────────────────────────────────────────────────────

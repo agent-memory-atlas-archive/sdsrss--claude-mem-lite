@@ -25,7 +25,7 @@ import {
   CONTINUE_KEYWORDS,
   UNCONSUMED_HANDOFF_SQL,
 } from './hook-shared.mjs';
-import { RESUME_PAST_KEYWORDS } from './lib/handoff-constants.mjs';
+import { RESUME_PAST_KEYWORDS, NOT_EXCLUDED_HANDOFF_SQL } from './lib/handoff-constants.mjs';
 // T10d: import the whole module (not a named export) so tests can spy on
 // gitStateModule.readGitState via vi.spyOn. Named-import bindings are
 // immutable in ESM and cannot be mocked after the fact.
@@ -697,9 +697,18 @@ export function buildAndSaveHandoff(db, sessionId, project, type, episodeSnapsho
  * @param {string} promptText User's prompt text
  * @param {string} project Project identifier
  * @param {string|null} [currentCcSessionId=null] Claude Code session id for scoping
+ * @param {string[]} [excludeSessionIds=[]] handoff session ids never to resume — those whose
+ *   writer is another Claude Code process still running (liveOtherHostHandoffIds)
  * @returns {boolean}
  */
-export function detectContinuationIntent(db, promptText, project, currentCcSessionId = null) {
+export function detectContinuationIntent(
+  db,
+  promptText,
+  project,
+  currentCcSessionId = null,
+  excludeSessionIds = [],
+) {
+  const excludedJson = JSON.stringify(excludeSessionIds);
   // Input guard: empty / whitespace / single-char prompts never trigger auto-injection.
   // The bug was a single-char 'a' + fresh clear handoff → Stage 0 auto-match.
   if (!promptText || typeof promptText !== 'string') return false;
@@ -766,20 +775,21 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
               `
             SELECT created_at_epoch, match_keywords FROM session_handoffs
             WHERE project = ? AND git_sha_at_handoff = ? AND (type = 'exit' OR session_id = ?)
-              AND ${UNCONSUMED_HANDOFF_SQL}
+              AND ${UNCONSUMED_HANDOFF_SQL} AND ${NOT_EXCLUDED_HANDOFF_SQL}
             ORDER BY created_at_epoch DESC LIMIT 1
           `,
             )
-            .get(project, currentSha, currentCcSessionId)
+            .get(project, currentSha, currentCcSessionId, excludedJson)
         : db
             .prepare(
               `
             SELECT created_at_epoch, match_keywords FROM session_handoffs
             WHERE project = ? AND git_sha_at_handoff = ? AND ${UNCONSUMED_HANDOFF_SQL}
+              AND ${NOT_EXCLUDED_HANDOFF_SQL}
             ORDER BY created_at_epoch DESC LIMIT 1
           `,
             )
-            .get(project, currentSha);
+            .get(project, currentSha, excludedJson);
       if (anchor && Date.now() - anchor.created_at_epoch <= HANDOFF_ANCHOR_MAX_AGE) {
         // Unmoved HEAD is a strong resume signal, but must not hijack a NEW task typed at the
         // same commit: gate long prompts on keyword overlap (mirror Stage 0). Short prompts
@@ -802,19 +812,20 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
           `
         SELECT created_at_epoch, match_keywords FROM session_handoffs
         WHERE project = ? AND type = 'clear' AND session_id = ? AND ${UNCONSUMED_HANDOFF_SQL}
+          AND ${NOT_EXCLUDED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 1
       `,
         )
-        .get(project, currentCcSessionId)
+        .get(project, currentCcSessionId, excludedJson)
     : db
         .prepare(
           `
         SELECT created_at_epoch, match_keywords FROM session_handoffs
-        WHERE project = ? AND type = 'clear' AND ${UNCONSUMED_HANDOFF_SQL}
+        WHERE project = ? AND type = 'clear' AND ${UNCONSUMED_HANDOFF_SQL} AND ${NOT_EXCLUDED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 1
       `,
         )
-        .get(project);
+        .get(project, excludedJson);
 
   if (clearHandoff && Date.now() - clearHandoff.created_at_epoch <= HANDOFF_EXPIRY_CLEAR) {
     const pTokens = tokenizeHandoff(promptText);
@@ -851,19 +862,20 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
         SELECT type, match_keywords, created_at_epoch FROM session_handoffs
         WHERE project = ?
           AND ((type = 'clear' AND session_id = ?) OR type = 'exit')
-          AND ${UNCONSUMED_HANDOFF_SQL}
+          AND ${UNCONSUMED_HANDOFF_SQL} AND ${NOT_EXCLUDED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC
       `,
         )
-        .all(project, currentCcSessionId)
+        .all(project, currentCcSessionId, excludedJson)
     : db
         .prepare(
           `
         SELECT type, match_keywords, created_at_epoch FROM session_handoffs
-        WHERE project = ? AND ${UNCONSUMED_HANDOFF_SQL} ORDER BY created_at_epoch DESC
+        WHERE project = ? AND ${UNCONSUMED_HANDOFF_SQL} AND ${NOT_EXCLUDED_HANDOFF_SQL}
+        ORDER BY created_at_epoch DESC
       `,
         )
-        .all(project);
+        .all(project, excludedJson);
   if (handoffs.length === 0) return false;
 
   // Filter expired handoffs
@@ -902,10 +914,12 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
  * @param {Database} db Opened main database
  * @param {string} project Project identifier
  * @param {string|null} [currentCcSessionId=null] Claude Code session id for scoping
+ * @param {string[]} [excludeSessionIds=[]] see detectContinuationIntent
  * @returns {string|null} Injection text or null if no handoff
  */
-export function pickHandoffToInject(db, project, currentCcSessionId = null) {
+export function pickHandoffToInject(db, project, currentCcSessionId = null, excludeSessionIds = []) {
   const now = Date.now();
+  const excludedJson = JSON.stringify(excludeSessionIds);
   // Fetch recent handoffs and find the most recent non-expired one.
   // A newer but expired 'clear' handoff must not shadow a still-valid 'exit' handoff.
   // No id tiebreaker on this or the Stage -1/0/2 reads above, on purpose: session_handoffs has
@@ -920,19 +934,20 @@ export function pickHandoffToInject(db, project, currentCcSessionId = null) {
         SELECT * FROM session_handoffs
         WHERE project = ?
           AND ((type = 'clear' AND session_id = ?) OR (type = 'exit' AND session_id != ?))
-          AND ${UNCONSUMED_HANDOFF_SQL}
+          AND ${UNCONSUMED_HANDOFF_SQL} AND ${NOT_EXCLUDED_HANDOFF_SQL}
         ORDER BY created_at_epoch DESC LIMIT 5
       `,
         )
-        .all(project, currentCcSessionId, currentCcSessionId)
+        .all(project, currentCcSessionId, currentCcSessionId, excludedJson)
     : db
         .prepare(
           `
         SELECT * FROM session_handoffs
-        WHERE project = ? AND ${UNCONSUMED_HANDOFF_SQL} ORDER BY created_at_epoch DESC LIMIT 5
+        WHERE project = ? AND ${UNCONSUMED_HANDOFF_SQL} AND ${NOT_EXCLUDED_HANDOFF_SQL}
+        ORDER BY created_at_epoch DESC LIMIT 5
       `,
         )
-        .all(project);
+        .all(project, excludedJson);
   return (
     handoffs.find((h) => {
       const age = now - h.created_at_epoch;
@@ -972,8 +987,8 @@ export function consumeHandoff(db, handoff, now = Date.now()) {
   return res.changes;
 }
 
-export function renderHandoffInjection(db, project, currentCcSessionId = null) {
-  const handoff = pickHandoffToInject(db, project, currentCcSessionId);
+export function renderHandoffInjection(db, project, currentCcSessionId = null, excludeSessionIds = []) {
+  const handoff = pickHandoffToInject(db, project, currentCcSessionId, excludeSessionIds);
   if (!handoff) return null;
   return renderHandoffFromRow(handoff, db, project);
 }

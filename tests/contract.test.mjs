@@ -724,3 +724,38 @@ describe('output format contracts', () => {
     expect(errorText.startsWith('Error:')).toBe(true);
   });
 });
+
+// E2E 2026-10-16 (MCP P2-16): MCP bridges JSON-stringify complex args, and files / ids /
+// fields already tolerated that. supersedes, closes_deferred, operations and tasks rejected the
+// same shapes ("expected array, received string"), so one tool call worked and the next did not.
+describe('array fields accept the serialised shapes their siblings accept', () => {
+  it('supersedes: JSON-array string, single number, comma string', () => {
+    expect(parseSchema(memSaveSchema, { content: 'x', supersedes: '[5]' }).data.supersedes).toEqual([5]);
+    expect(parseSchema(memSaveSchema, { content: 'x', supersedes: 5 }).data.supersedes).toEqual([5]);
+    expect(parseSchema(memSaveSchema, { content: 'x', supersedes: '5, E#7' }).data.supersedes).toEqual([
+      5,
+      'E#7',
+    ]);
+    expect(parseSchema(memSaveSchema, { content: 'x', supersedes: '1.5' }).success).toBe(false);
+  });
+  it('closes_deferred: single number and JSON-array string', () => {
+    expect(parseSchema(memSaveSchema, { content: 'x', closes_deferred: 1 }).data.closes_deferred).toEqual([
+      1,
+    ]);
+    expect(
+      parseSchema(memSaveSchema, { content: 'x', closes_deferred: '["D#4", 2]' }).data.closes_deferred,
+    ).toEqual(['D#4', 2]);
+  });
+  it('operations and tasks: a bare string and a JSON-array string', () => {
+    expect(
+      parseSchema(memMaintainSchema, { action: 'execute', operations: 'decay' }).data.operations,
+    ).toEqual(['decay']);
+    expect(
+      parseSchema(memMaintainSchema, { action: 'execute', operations: '["decay","boost"]' }).data.operations,
+    ).toEqual(['decay', 'boost']);
+    expect(parseSchema(memMaintainSchema, { action: 'execute', operations: 'nope' }).success).toBe(false);
+    expect(parseSchema(memOptimizeSchema, { action: 'run', tasks: 're-enrich' }).data.tasks).toEqual([
+      're-enrich',
+    ]);
+  });
+});

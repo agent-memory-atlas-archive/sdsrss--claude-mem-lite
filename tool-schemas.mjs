@@ -90,6 +90,31 @@ const stringArrayOrRaw = (v) => {
 };
 const coerceStringArray = z.preprocess(stringArrayOrRaw, z.array(z.string()));
 
+// The same serialised shapes for an array whose ELEMENTS a field maps itself (ids that may be
+// numbers, enum members): a JSON-array string, a comma string, or one scalar. Elements pass
+// through untouched. supersedes / closes_deferred / operations / tasks rejected these shapes
+// while files / ids / fields took them, so one call worked and the next did not (E2E 2026-10-16).
+const asArrayOrRaw = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'number') return [v];
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (s.startsWith('[') && s.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        /* fall through to comma-split */
+      }
+    }
+    return s
+      .split(',')
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+  }
+  return v;
+};
+
 // Coerce mixed ID tokens (#N / P#N / S#N / D#N / bare N) for mem_get. Accepts:
 //   - native arrays: [1, "P#2", "#3"]
 //   - single number: 1
@@ -304,7 +329,8 @@ export const memDeleteSchema = {
 // bridges that JSON-stringify ints don't drop them); D#-prefixed strings stay
 // strings for the resolver. Other string shapes reject early at schema layer.
 const coerceDeferredTokens = z.preprocess(
-  (v) => {
+  (raw) => {
+    const v = asArrayOrRaw(raw);
     if (Array.isArray(v)) {
       return v.map((x) => {
         if (typeof x === 'number') return x;
@@ -336,10 +362,12 @@ const coerceDeferredTokens = z.preprocess(
 // a number here would lose the only thing that says which table it names.
 // Empty/other shapes reject.
 const coerceSupersedes = z.preprocess(
-  (v) =>
-    Array.isArray(v)
+  (raw) => {
+    const v = asArrayOrRaw(raw);
+    return Array.isArray(v)
       ? v.map((x) => (typeof x === 'string' && /^\d+$/.test(x.trim()) ? parseInt(x.trim(), 10) : x))
-      : v,
+      : v;
+  },
   z
     .array(
       z.union([
@@ -418,7 +446,7 @@ export const memOptimizeSchema = {
     .default('preview')
     .describe('preview=scan candidates, run=execute with limits, run_all=bypass gates'),
   tasks: z
-    .array(z.enum(['re-enrich', 'normalize', 'cluster-merge', 'smart-compress']))
+    .preprocess(asArrayOrRaw, z.array(z.enum(['re-enrich', 'normalize', 'cluster-merge', 'smart-compress'])))
     .optional()
     .describe('Which optimization tasks to run (default: all)'),
   max_items: boundedInt(z.number().int().min(1).max(100))
@@ -446,7 +474,10 @@ export const memOptimizeSchema = {
 export const memMaintainSchema = {
   action: z.enum(['scan', 'execute']).describe('scan=analyze candidates, execute=apply changes'),
   operations: z
-    .array(z.enum(['dedup', 'decay', 'cleanup', 'boost', 'demote_pinned', 'purge_stale', 'vacuum']))
+    .preprocess(
+      asArrayOrRaw,
+      z.array(z.enum(['dedup', 'decay', 'cleanup', 'boost', 'demote_pinned', 'purge_stale', 'vacuum'])),
+    )
     .optional()
     .describe(
       'Operations: dedup=find/merge duplicate observations, decay=reduce importance of old low-value obs, cleanup=remove orphaned records, boost=promote frequently-accessed obs, demote_pinned=floor importance for obs injected>=8 times but never cited — to 1 with no lesson_learned, to 2 with one (v3.76.1: a lesson-bearing row keeps eligibility on every importance>=2 injection face) (clears pinned noise the decay op cannot reach; in the default set since v3.76.0 and ordered after boost, since boost would otherwise raise the row straight back — set CLAUDE_MEM_SKIP_DEMOTE_PINNED=1 to drop it from the DEFAULT set only), purge_stale=DELETE pending-purge obs older than retain_days (requires confirm=true; first call previews), vacuum=reclaim freelist dead space (whole-DB)',

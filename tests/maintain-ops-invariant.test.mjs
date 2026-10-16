@@ -20,7 +20,7 @@ import { memMaintainSchema } from '../tool-schemas.mjs';
 // Pull the literal members out of the Zod enum without depending on Zod internals
 // beyond the documented `.options` accessor that z.enum exposes.
 function zodEnumMembers(schema) {
-  // memMaintainSchema.operations is `z.array(z.enum([...])).optional().describe(...)`.
+  // memMaintainSchema.operations is `z.preprocess(…, z.array(z.enum([...]))).optional().describe(...)`.
   // Unwrap optional -> array -> element enum, tolerating wrapper nesting.
   let node = schema.operations;
   const seen = new Set();
@@ -30,6 +30,8 @@ function zodEnumMembers(schema) {
     if (node.element) node = node.element;
     else if (node.unwrap && typeof node.unwrap === 'function') node = node.unwrap();
     else if (node._def?.innerType) node = node._def.innerType;
+    // A z.preprocess is a pipe; the enum the model reads is its output side.
+    else if (node._def?.out) node = node._def.out;
     else if (node._def?.type) node = node._def.type;
     else break;
   }

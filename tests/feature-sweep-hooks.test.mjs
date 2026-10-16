@@ -235,6 +235,23 @@ function withDb(fn) {
     }
   }
 }
+/**
+ * Re-attribute a project's rows to a machine writer. The idle GC passes skip explicit saves
+ * (E2E 2026-10-16), and these sweeps seed through `save`, so the GC cases hand their rows to
+ * the population GC exists for: rows a hook or worker wrote.
+ */
+function asMachineWritten(project) {
+  return withDb((db) => {
+    const sid = `hook-sweep-${project}`;
+    db.prepare(
+      `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+       VALUES (?, ?, ?, ?, ?, 'active')`,
+    ).run(sid, sid, project, new Date().toISOString(), Date.now());
+    return db.prepare('UPDATE observations SET memory_session_id = ? WHERE project = ?').run(sid, project)
+      .changes;
+  });
+}
+
 /** Backdate a project's rows so the age-gated workers (compress / maintain) engage. */
 function ageProject(project, days) {
   return withDb((db) => {
@@ -1414,6 +1431,7 @@ describe('hook feature sweep: hook.mjs background workers', () => {
       P,
     ]);
     expect(ageProject(P, 90)).toBe(1);
+    expect(asMachineWritten(P)).toBe(1);
 
     const r = await hookEvent('auto-maintain', { cwd, stdin: '', env: BG, timeout: 60000 });
     expectSilentWorker('hook.mjs auto-maintain', r);

@@ -62,6 +62,7 @@ import { stripTestSuffix } from './bash-utils.mjs';
 // Static, and deliberately the dependency-free resolver (node:os + node:path only) —
 // debugCatch's sampler must not pull in the DB layer. See its comment below.
 import { resolveDataDir } from './lib/resolve-data-dir.mjs';
+import { MANUAL_SESSION_ID_PREFIX } from './lib/provenance.mjs';
 
 // ─── Sentinel Values ────────────────────────────────────────────────────────
 
@@ -78,6 +79,15 @@ export const COMPRESSED_PENDING_PURGE = -2;
  */
 export const NOT_COMPRESSION_KEEPER_SQL =
   'id NOT IN (SELECT compressed_into FROM observations WHERE compressed_into > 0)';
+/**
+ * SQL clause: this row is not an explicit save (mem_save, `save`, /lesson, /bug — the `manual-`
+ * writer in lib/provenance.mjs). Every idle-GC writer of the two sentinels above carries it.
+ * An explicit save without a lesson (a discovery or change: save-enrich gives lessons only to
+ * bugfix and decision) was decayed, hidden, queued and hard-deleted about 41 days after it was
+ * written, importance 3 included, while Key Context showed it every session (E2E 2026-10-16).
+ * A person's save is not idle machine output; `delete` still removes it on request.
+ */
+export const NOT_EXPLICIT_SAVE_SQL = `COALESCE(memory_session_id, '') NOT LIKE '${MANUAL_SESSION_ID_PREFIX}%'`;
 
 // ─── Path Safety ──────────────────────────────────────────────────────────
 

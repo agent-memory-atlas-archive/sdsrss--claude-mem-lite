@@ -6,17 +6,32 @@
 // lower its importance; only the GC chain skips it. One case per writer: a single mutation for
 // several sites would prove nothing about each.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawnSync } from 'child_process';
+import { mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join, resolve } from 'path';
+import Database from 'better-sqlite3';
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
-import { COMPRESSED_AUTO } from '../utils.mjs';
+import { initSchema } from '../schema.mjs';
+import { COMPRESSED_AUTO, COMPRESSED_PENDING_PURGE } from '../utils.mjs';
 import {
   decayAndMarkIdle,
   markAutoCompressible,
   maintenanceStats,
+  purgeStale,
+  purgeStalePreview,
   HIDE_GRACE_MS,
   STALE_AGE_MS,
 } from '../lib/maintain-core.mjs';
 import { runIdleCleanup } from '../search-scoring.mjs';
+import { findSmartCompressCandidates } from '../hook-optimize.mjs';
+
+const HOOK = resolve(import.meta.dirname, '../hook.mjs');
+const dirs = [];
+afterEach(() => {
+  while (dirs.length) rmSync(dirs.pop(), { recursive: true, force: true });
+});
 
 const DAY = 86400000;
 const ctx = { projectFilter: '', baseParams: [], staleAge: Date.now() - STALE_AGE_MS, opCap: 1000 };
@@ -48,13 +63,14 @@ describe('the idle GC passes skip explicit saves', () => {
     db.close();
   });
 
+  // Was "stays hidden, not queued"; since round 2 such a row is shown again (case below).
   it('decayAndMarkIdle: does not queue an explicit save hidden before this release', () => {
     const { db, manual } = seed();
     db.prepare(
       `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, hidden_at = ? WHERE id = ?`,
     ).run(Date.now() - HIDE_GRACE_MS - DAY, manual);
     decayAndMarkIdle(db, ctx);
-    expect(col(db, manual, 'compressed_into')).toBe(COMPRESSED_AUTO);
+    expect(col(db, manual, 'compressed_into') ?? 0).not.toBe(COMPRESSED_PENDING_PURGE);
     db.close();
   });
 
@@ -88,5 +104,99 @@ describe('the idle GC passes skip explicit saves', () => {
     expect(col(db, hook, 'compressed_into')).toBe(COMPRESSED_AUTO);
     expect(col(db, manual, 'compressed_into') ?? 0).toBe(0);
     db.close();
+  });
+});
+
+// E2E 2026-10-16 round 2 (data S1/S2, hooks STILL-BROKEN-3): the exemption missed the passes
+// that run past 60 days and the rows an earlier release had already hidden or queued.
+describe('explicit saves past 60 days, and those an earlier release took', () => {
+  it('purgeStale does not delete an explicit save an earlier release queued', () => {
+    const { db, manual, hook } = seed();
+    db.prepare(
+      `UPDATE observations SET compressed_into = ${COMPRESSED_PENDING_PURGE} WHERE id IN (?, ?)`,
+    ).run(manual, hook);
+    const cutoff = Date.now() - 30 * DAY;
+    expect(purgeStalePreview(db, ctx, cutoff).candidates).toBe(1);
+    expect(purgeStale(db, ctx, cutoff)).toBe(1);
+    expect(col(db, hook, 'id')).toBeUndefined(); // premise: the machine row went
+    expect(col(db, manual, 'id')).toBe(manual);
+    db.close();
+  });
+
+  it('decayAndMarkIdle shows again an explicit save an earlier release hid or queued', () => {
+    const { db, manual, hook } = seed();
+    const second = Number(
+      insertObs(db, { sessionId: 'manual-p', project: 'p', title: 'queued by hand', epochOffset: -120 * DAY })
+        .lastInsertRowid,
+    );
+    db.prepare(
+      `UPDATE observations SET compressed_into = ${COMPRESSED_AUTO}, hidden_at = ? WHERE id IN (?, ?)`,
+    ).run(Date.now() - DAY, manual, hook);
+    db.prepare(`UPDATE observations SET compressed_into = ${COMPRESSED_PENDING_PURGE} WHERE id = ?`).run(
+      second,
+    );
+    const r = decayAndMarkIdle(db, ctx);
+    expect(r.restoredExplicit).toBe(2);
+    expect(col(db, manual, 'compressed_into') ?? 0).toBe(0);
+    expect(col(db, manual, 'hidden_at') ?? null).toBeNull();
+    expect(col(db, second, 'compressed_into') ?? 0).toBe(0);
+    expect(col(db, hook, 'compressed_into')).toBe(COMPRESSED_AUTO); // a machine row stays hidden
+    db.close();
+  });
+
+  it('smart-compress candidates leave explicit saves out', () => {
+    const { db, manual, hook } = seed({ ageDays: 40 });
+    const ids = findSmartCompressCandidates(db, 30, { project: 'p' }).map((r) => r.id);
+    expect(ids).toContain(hook);
+    expect(ids).not.toContain(manual);
+    db.close();
+  });
+
+  it('the daily auto-compress worker folds machine rows, not explicit saves', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mem-autocompress-explicit-'));
+    dirs.push(dir);
+    mkdirSync(join(dir, 'home', '.claude'), { recursive: true });
+    const db = new Database(join(dir, 'claude-mem-lite.db'));
+    db.pragma('journal_mode = WAL');
+    initSchema(db);
+    insertSession(db, { id: 'manual-p', project: 'p' });
+    insertSession(db, { id: 'hook-sess', project: 'p' });
+    // One ISO week, 70 days back; three of each writer, so either group alone could compress.
+    const base = -70 * DAY;
+    const manual = [0, 1, 2].map((i) =>
+      Number(
+        insertObs(db, {
+          sessionId: 'manual-p',
+          project: 'p',
+          title: `hand note ${i}`,
+          epochOffset: base + i * 1000,
+        }).lastInsertRowid,
+      ),
+    );
+    const hook = [0, 1, 2].map((i) =>
+      Number(
+        insertObs(db, {
+          sessionId: 'hook-sess',
+          project: 'p',
+          title: `hook note ${i}`,
+          epochOffset: base + i * 1000,
+        }).lastInsertRowid,
+      ),
+    );
+    db.close();
+    const env = { ...process.env, HOME: join(dir, 'home'), CLAUDE_MEM_DIR: dir, MEM_NO_AUTO_ADOPT: '1' };
+    delete env.CLAUDE_CONFIG_DIR;
+    delete env.CLAUDE_PROJECT_DIR;
+    const r = spawnSync(process.execPath, [HOOK, 'auto-compress'], { env, encoding: 'utf8', timeout: 30000 });
+    expect(r.status, r.stderr).toBe(0);
+    const check = new Database(join(dir, 'claude-mem-lite.db'), { readonly: true });
+    const ci = (id) =>
+      check.prepare('SELECT compressed_into AS v FROM observations WHERE id = ?').get(id).v ?? 0;
+    expect(
+      hook.map(ci).every((v) => v > 0),
+      'premise: the machine rows were compressed',
+    ).toBe(true);
+    expect(manual.map(ci)).toEqual([0, 0, 0]);
+    check.close();
   });
 });

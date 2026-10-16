@@ -14,6 +14,7 @@ import {
   debugCatch,
   COMPRESSED_AUTO,
   NOT_COMPRESSION_KEEPER_SQL,
+  NOT_EXPLICIT_SAVE_SQL,
   computeMinHash,
   estimateJaccardFromMinHash,
   jaccardSimilarity,
@@ -1504,6 +1505,9 @@ export function findSmartCompressCandidates(db, ageDays = 30, { project } = {}) 
       -- canonical compress sibling selectCompressionCandidates (compress-core.mjs) —
       -- "lessons never auto-GC" (also enforced in decayAndMarkIdle, maintain-core.mjs).
       AND (lesson_learned IS NULL OR lesson_learned = '' OR lesson_learned = 'none')
+      -- An explicit save is a person's text: an unattended summary dropped its specifics
+      -- (E2E 2026-10-16 round 2; the idle passes skip it for the same reason).
+      AND ${NOT_EXPLICIT_SAVE_SQL}
       AND created_at_epoch < ?
       ${projectClause}
     ORDER BY project, created_at_epoch, id

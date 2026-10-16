@@ -3924,6 +3924,7 @@ function handleAutoCompress() {
     const compressCandidates = selectCompressionCandidates(db, {
       cutoff: compressCutoff,
       includeAutoMarked: true,
+      skipExplicitSaves: true,
     });
     if (compressCandidates.length < 3) return;
 

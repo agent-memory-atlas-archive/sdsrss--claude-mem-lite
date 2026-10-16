@@ -1399,6 +1399,22 @@ describe('hook feature sweep: hook.mjs background workers', () => {
     ])
       await cli(['save', text, '--importance', '1', '--project', P], cwd);
     expect(ageProject(P, 90)).toBe(3);
+    // The worker leaves explicit saves alone (E2E 2026-10-16 round 2), so the rows move to a
+    // hook writer's session, whose rows it folds; the session id cascades to the rows.
+    expect(
+      withDb((db) => {
+        db.pragma('foreign_keys = ON');
+        const sid = db
+          .prepare('SELECT memory_session_id AS s FROM observations WHERE project = ? LIMIT 1')
+          .get(P).s;
+        db.prepare(
+          "UPDATE sdk_sessions SET memory_session_id = 'hook-sweep-compress' WHERE memory_session_id = ?",
+        ).run(sid);
+        return db
+          .prepare("SELECT COUNT(*) AS n FROM observations WHERE memory_session_id = 'hook-sweep-compress'")
+          .get().n;
+      }),
+    ).toBe(3);
 
     const r = await hookEvent('auto-compress', { cwd, stdin: '', env: BG, timeout: 60000 });
     expectSilentWorker('hook.mjs auto-compress', r);

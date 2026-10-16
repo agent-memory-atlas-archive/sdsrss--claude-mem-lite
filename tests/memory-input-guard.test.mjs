@@ -28,9 +28,14 @@ import { MEMORY_INPUT_GUARD } from '../lib/memory-input-guard.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
 
-// Every module that interpolates the guard into a prompt. A new consumer belongs here, and
-// the count assertion below is what makes forgetting it fail rather than pass quietly.
-const CONSUMERS = ['hook-llm.mjs', 'hook-optimize.mjs'];
+// Every module that interpolates the guard into a prompt, with the specifier it imports the
+// guard by. A new consumer belongs here, and the count assertion below is what makes
+// forgetting it fail rather than pass quietly.
+const CONSUMERS = {
+  'hook-llm.mjs': './lib/memory-input-guard.mjs',
+  'hook-optimize.mjs': './lib/memory-input-guard.mjs',
+  'lib/save-enrich.mjs': './memory-input-guard.mjs',
+};
 
 describe('MEMORY_INPUT_GUARD', () => {
   it('keeps its load-bearing security semantics', () => {
@@ -43,10 +48,10 @@ describe('MEMORY_INPUT_GUARD', () => {
   it('has exactly one home, which every consumer imports', () => {
     // The point of the move. A consumer that re-declares its own copy is the failure this
     // catches — it would still read as guarded while drifting from the real one.
-    for (const f of CONSUMERS) {
+    for (const [f, specifier] of Object.entries(CONSUMERS)) {
       const src = read(f);
-      expect(src, `${f} must import the shared guard`).toMatch(
-        /import \{ MEMORY_INPUT_GUARD \} from '\.\/lib\/memory-input-guard\.mjs'/,
+      expect(src, `${f} must import the shared guard`).toContain(
+        `import { MEMORY_INPUT_GUARD } from '${specifier}';`,
       );
       expect(src, `${f} must not re-declare it`).not.toMatch(/const MEMORY_INPUT_GUARD\s*=/);
     }
@@ -55,13 +60,17 @@ describe('MEMORY_INPUT_GUARD', () => {
   it('is wired into every prompt path that ingests already-stored content', () => {
     // hook-llm.mjs: SHARED_OBS_SCHEMA_TAIL (covers single- and multi-entry episode
     // extraction) and the session-summary system prompt = 2.
-    // hook-optimize.mjs: identifySynonymGroups, the normalize path R10-P3-21 was about = 1.
-    // A prompt edit that drops one injection point regresses this count.
+    // hook-optimize.mjs: identifySynonymGroups (the normalize path R10-P3-21 was about),
+    // cluster-merge and the narrow/wide re-enrich prompt (D367) = 3.
+    // lib/save-enrich.mjs: the save-time enrich prompt (D367) = 1.
+    // A prompt edit that drops one injection point regresses this count. Which channel the
+    // stored text travels in is asserted behaviourally in stored-text-prompt-boundary.test.mjs.
     const counts = Object.fromEntries(
-      CONSUMERS.map((f) => [f, (read(f).match(/\$\{MEMORY_INPUT_GUARD\}/g) || []).length]),
+      Object.keys(CONSUMERS).map((f) => [f, (read(f).match(/\$\{MEMORY_INPUT_GUARD\}/g) || []).length]),
     );
     expect(counts['hook-llm.mjs']).toBeGreaterThanOrEqual(2);
-    expect(counts['hook-optimize.mjs']).toBeGreaterThanOrEqual(1);
+    expect(counts['hook-optimize.mjs']).toBeGreaterThanOrEqual(3);
+    expect(counts['lib/save-enrich.mjs']).toBeGreaterThanOrEqual(1);
   });
 
   it('leads the shared episode schema tail with the guard', () => {

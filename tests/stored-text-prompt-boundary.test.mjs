@@ -104,3 +104,26 @@ describe('narrow and wide re-enrich send the stored row as data', () => {
     });
   }
 });
+
+describe('save-enrich sends the saved row as data', () => {
+  it('title, context and type in user; the enrich contract plus the guard in system', async () => {
+    const db = createTestDb();
+    const { saveObservation } = await import('../lib/save-observation.mjs');
+    const { executeSaveEnrich } = await import('../lib/save-enrich.mjs');
+    const { id } = saveObservation(db, { project: 'p', type: 'bugfix', title: TITLE, content: NARRATIVE });
+    const prompts = [];
+    const callJson = async (prompt) => {
+      prompts.push(prompt);
+      return null;
+    };
+    const res = await executeSaveEnrich(db, id, { callJson, acquire: async () => true, release: () => {} });
+    expect(res).toEqual({ enriched: false, reason: 'llm-null' });
+    expect(prompts).toHaveLength(1);
+    expectStoredTextIsData(prompts[0], {
+      stored: [TITLE, DIRECTIVE],
+      instruction: 'Enrich its retrievability',
+    });
+    expect(prompts[0].user).toContain('Type: bugfix');
+    db.close();
+  });
+});

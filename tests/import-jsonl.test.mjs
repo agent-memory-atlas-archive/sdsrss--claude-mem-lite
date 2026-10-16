@@ -469,3 +469,57 @@ describe('importJsonl — file edges reach the recall path', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n).toBe(2);
   });
 });
+
+// E2E 2026-10-16 (cli F2): `.slice(0, 4000)` bound only to the array branch of the tool-result
+// ternary, so a STRING tool_result (what Bash and Read return in real transcripts) was stored
+// whole, twice (narrative and text): a 200 000-char Read became a ~100 000-token row.
+describe('importJsonl — tool output is capped whatever its shape', () => {
+  it('a string tool_result is capped like an array one', async () => {
+    const db = createTestDb();
+    const dir = mkdtempSync(join(tmpdir(), 'mem-import-cap-'));
+    try {
+      const sid = '22222222-3333-4444-5555-666666666666';
+      const big = 'x'.repeat(200000);
+      const lines = [
+        {
+          type: 'assistant',
+          sessionId: sid,
+          timestamp: '2026-10-10T08:00:05.000Z',
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'tool_use', id: 's1', name: 'Read', input: { file_path: '/repo/a.ts' } },
+              { type: 'tool_use', id: 'a1', name: 'Read', input: { file_path: '/repo/b.ts' } },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          sessionId: sid,
+          timestamp: '2026-10-10T08:00:06.000Z',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 's1', content: big },
+              { type: 'tool_result', tool_use_id: 'a1', content: [{ type: 'text', text: big }] },
+            ],
+          },
+        },
+      ];
+      const f = join(dir, 'cap.jsonl');
+      writeFileSync(f, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      await importJsonl(db, f, { project: 'proj' });
+      const rows = db
+        .prepare('SELECT title, length(narrative) AS n, length(text) AS t FROM observations')
+        .all();
+      expect(rows).toHaveLength(2);
+      for (const r of rows) {
+        expect(r.n, r.title).toBeLessThan(5000);
+        expect(r.t, r.title).toBeLessThan(5000);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      db.close();
+    }
+  });
+});

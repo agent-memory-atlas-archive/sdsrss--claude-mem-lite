@@ -12,7 +12,7 @@
 // a live worker. These cases drive the real `handleLLMSummary` and measure the thing that
 // actually went wrong — elapsed time — rather than asserting on the shape of the filter.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync, existsSync, renameSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -179,6 +179,32 @@ describe('handleLLMSummary flush wait', () => {
       await vi.advanceTimersByTimeAsync(31_000);
       expect(done, 'gave up on an episode worker that was still working').toBe(false);
       rmSync(inFlight);
+      await vi.advanceTimersByTimeAsync(2 * POLL_MS);
+      await run;
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // D#383: an episode worker renames its flush file to carry its pid when it starts, and a
+  // hand-off renames it again; the episode is in flight until no file of that flush is left.
+  it('keeps waiting on a flush file its worker renamed, until no name of it is left', async () => {
+    process.env.CLAUDE_MEM_FLUSH_TIMEOUT = String(SLOW_TIMEOUT_S);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { handleLLMSummary } = await import('../hook-llm.mjs');
+      const handed = flushFile('ep-flush-8-claimed.json');
+      let done = false;
+      const run = handleLLMSummary().then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(0.5 * POLL_MS);
+      const claimed = join(runtimeDir, 'ep-flush-8-claimed.w4242.json');
+      renameSync(handed, claimed);
+      await vi.advanceTimersByTimeAsync(3 * POLL_MS);
+      expect(done, 'stopped waiting when the worker claimed its file').toBe(false);
+      rmSync(claimed);
       await vi.advanceTimersByTimeAsync(2 * POLL_MS);
       await run;
       expect(done).toBe(true);

@@ -425,7 +425,7 @@ export function sessionFile() {
 }
 
 /** True unless `pid` is certainly gone (ESRCH); EPERM means it exists under another user. */
-function processAlive(pid) {
+export function processAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;

@@ -1,7 +1,7 @@
 // claude-mem-lite: Background LLM workers for episode extraction and session summaries
 // Extracted from hook.mjs for testability and reduced complexity
 
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 import { existsSync, readFileSync, unlinkSync, readdirSync, statSync, renameSync } from 'fs';
 import {
   jaccardSimilarity,
@@ -47,6 +47,7 @@ import {
   callLLM,
   sleep,
   spawnBackground,
+  processAlive,
 } from './hook-shared.mjs';
 import { EVENT_TYPES, saveEvent } from './lib/activity.mjs';
 import { isNoiseObservation, capNoiseImportance, isLowYieldChangeObs } from './lib/low-signal-patterns.mjs';
@@ -1024,6 +1025,32 @@ export const RECOVERED_FLUSH_SUFFIX = '.recovered.json';
 // Per SessionStart: LLM_SEM_MAX workers can call the model at once, and a backlog after a reboot
 // drains over the next few starts rather than all at once.
 const FLUSH_RECOVERIES_PER_START = 2;
+// `ep-flush-<ts>-<rand>` (flushEpisode), then `.recovered` once handed on, then `.w<pid>` once a
+// worker has claimed it. The stem is what every rename keeps.
+const FLUSH_NAME_RE = /^(ep-flush-[^.]+)(\.recovered)?(?:\.w(\d+))?\.json$/;
+
+/**
+ * Rename a flush file to carry this worker's pid, before the worker reads it, so
+ * recoverOrphanEpisodeFlushes can tell a live worker's file from a dead one's however old it is
+ * (D#383). Returns the path the worker now owns, or null when the file is gone: another worker
+ * took it, and the episode is that worker's to save. A name that is not a flush file's, or a
+ * rename that fails otherwise, keeps the path as handed.
+ *
+ * @param {string} path
+ * @param {number} [pid]
+ * @returns {string|null}
+ */
+export function claimFlushFile(path, pid = process.pid) {
+  const m = FLUSH_NAME_RE.exec(basename(path));
+  if (!m) return path;
+  const claimed = join(dirname(path), `${m[1]}${m[2] || ''}.w${pid}.json`);
+  try {
+    renameSync(path, claimed);
+    return claimed;
+  } catch (e) {
+    return e?.code === 'ENOENT' ? null : path;
+  }
+}
 
 /**
  * Hand flush files that no live worker can still own to a new `llm-episode` worker, oldest first,
@@ -1034,13 +1061,16 @@ const FLUSH_RECOVERIES_PER_START = 2;
  * read the file again and the 1 h sweep deleted it. Three properties make the hand-off safe:
  *
  *   - Not a live worker's file: only files older than episodeWorkerMaxMs(), the longest a worker
- *     can legitimately run. A suspended machine is the gap: a worker paused mid-call past that
- *     bound can still finish after its file was handed on.
+ *     can legitimately run, and none whose claiming worker (claimFlushFile) is still running. A
+ *     worker paused past that bound by a suspended machine finishes and saves once the machine
+ *     wakes, so handing its file on too stored the episode twice (D#383: events have no
+ *     duplicate check). A pid reused by an unrelated process reads as alive, and that file is
+ *     left to the 1 h sweep, as every flush file was before this hand-off existed.
  *   - One taker: the file is renamed before the spawn, and of two SessionStarts only one rename
- *     succeeds.
- *   - No loop: the new name ends in RECOVERED_FLUSH_SUFFIX, which this never hands on. If the
- *     second worker dies too, the file waits for the 1 h sweep (`ep-flush-` prefix; the rename
- *     keeps the mtime, so that clock still runs from the original flush).
+ *     succeeds; of a SessionStart and a worker claiming the same file, likewise.
+ *   - No loop: the new name carries `.recovered`, which this never hands on, claimed or not. If
+ *     the second worker dies too, the file waits for the 1 h sweep (`ep-flush-` prefix; renames
+ *     keep the mtime, so that clock still runs from the original flush).
  *
  * Files at or past ORPHAN_EPISODE_AGE_MS are the sweep's, as before.
  *
@@ -1065,7 +1095,8 @@ export function recoverOrphanEpisodeFlushes(
   const minAge = episodeWorkerMaxMs();
   const candidates = [];
   for (const f of names) {
-    if (!f.startsWith('ep-flush-') || !f.endsWith('.json') || f.endsWith(RECOVERED_FLUSH_SUFFIX)) continue;
+    const m = FLUSH_NAME_RE.exec(f);
+    if (!m || m[2] || (m[3] && processAlive(Number(m[3])))) continue;
     let mtimeMs;
     try {
       mtimeMs = statSync(join(runtimeDir, f)).mtimeMs;
@@ -1079,7 +1110,7 @@ export function recoverOrphanEpisodeFlushes(
   const handed = [];
   for (const { f } of candidates) {
     if (handed.length >= limit) break;
-    const to = join(runtimeDir, f.slice(0, -'.json'.length) + RECOVERED_FLUSH_SUFFIX);
+    const to = join(runtimeDir, FLUSH_NAME_RE.exec(f)[1] + RECOVERED_FLUSH_SUFFIX);
     try {
       renameSync(join(runtimeDir, f), to);
     } catch {
@@ -1092,7 +1123,8 @@ export function recoverOrphanEpisodeFlushes(
 }
 
 export async function handleLLMEpisode() {
-  const tmpFile = process.argv[3];
+  if (!process.argv[3]) return;
+  const tmpFile = claimFlushFile(process.argv[3]);
   if (!tmpFile) return;
 
   let episode;
@@ -1576,25 +1608,39 @@ export async function handleLLMSummary() {
   // carries no project. Widening it is a marker-format change with in-flight files during
   // an upgrade, and the two filters above already remove the unbounded cases — what is left
   // is a bounded overlap with genuinely concurrent work.
+  //
+  // Tracked by stem (D#383): the worker renames its file when it claims it, and a hand-off renames
+  // it again, so the flush is in flight until no file of that stem is left.
   let pending;
   try {
     const cutoff = Date.now() - episodeWorkerMaxMs();
-    pending = readdirSync(RUNTIME_DIR)
-      .filter((f) => f.startsWith('ep-flush-'))
-      .filter((f) => {
-        try {
-          return statSync(join(RUNTIME_DIR, f)).mtimeMs >= cutoff;
-        } catch {
-          return false;
-        }
-      });
+    pending = [
+      ...new Set(
+        readdirSync(RUNTIME_DIR)
+          .filter((f) => FLUSH_NAME_RE.test(f))
+          .filter((f) => {
+            try {
+              return statSync(join(RUNTIME_DIR, f)).mtimeMs >= cutoff;
+            } catch {
+              return false;
+            }
+          })
+          .map((f) => FLUSH_NAME_RE.exec(f)[1]),
+      ),
+    ];
   } catch {
     pending = [];
   }
 
   for (let i = 0; i < flushTimeout && pending.length > 0; i++) {
     await sleep(1000);
-    pending = pending.filter((f) => existsSync(join(RUNTIME_DIR, f)));
+    let names;
+    try {
+      names = readdirSync(RUNTIME_DIR);
+    } catch {
+      names = [];
+    }
+    pending = pending.filter((stem) => names.some((f) => f.startsWith(`${stem}.`)));
     debugLog(
       'DEBUG',
       'llm-summary',

@@ -56,6 +56,15 @@ const REMOVED_COMMANDS = new Set(['registry', 'import', 'enrich']);
 // died at the call site with "main is not a function". All three are the same fact
 // about the world (this install's files are not intact) and get the same answer.
 // Anything else is rethrown: this is a classifier, not a swallow.
+/** Whether `dir` is the root of a git checkout. node: builtins only — this runs when imports fail. */
+function gitCheckout(dir) {
+  try {
+    return process.getBuiltinModule('node:fs').existsSync(`${dir}/.git`);
+  } catch {
+    return false;
+  }
+}
+
 function explainBrokenInstall(what) {
   const w = (s) => process.stderr.write(`[claude-mem-lite] ${s}\n`);
   w(`This install is incomplete — ${what}`);
@@ -64,12 +73,21 @@ function explainBrokenInstall(what) {
   // the installer run from OUTSIDE it; `npm install -g` installs a separate global package and
   // left this tree as broken as before (E2E 2026-10-16). Read off import.meta.url: no imports.
   const here = decodeURIComponent(new URL('.', import.meta.url).pathname);
+  const pluginReinstall = '/plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss';
   if (/[\\/]\.claude-mem-lite[\\/]?$/.test(here)) {
     w('Repair: npx claude-mem-lite@latest install   (rebuilds ~/.claude-mem-lite; your memories are kept)');
+    w(`Or, in Claude Code: ${pluginReinstall}`);
+  } else if (/[\\/]plugins[\\/]cache[\\/]/.test(here)) {
+    // Claude Code's own copy of the plugin: npm -g installs a separate package and repairs
+    // nothing here (E2E 2026-10-16 round 2).
+    w(`Repair, in Claude Code: ${pluginReinstall}`);
+  } else if (gitCheckout(here)) {
+    // A clone: git knows which tracked file went missing; npm -g repaired nothing here either.
+    w(`Repair: git -C ${here} status   (then git restore the missing or damaged file)`);
   } else {
     w('Repair: npm install -g claude-mem-lite@latest --force');
+    w(`Or, in Claude Code: ${pluginReinstall}`);
   }
-  w('Or, in Claude Code: /plugin uninstall claude-mem-lite && /plugin install claude-mem-lite@sdsrss');
   process.exit(1);
 }
 

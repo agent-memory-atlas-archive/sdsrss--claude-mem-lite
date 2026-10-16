@@ -267,6 +267,27 @@ describe('the CLI entry explains a broken install instead of stack-tracing', () 
     expect(`${g.stdout}${g.stderr}`).toMatch(/npm install -g claude-mem-lite@latest --force/);
   });
 
+  // Round 2 (install B12b): the npm -g line came first for every other tree. It repairs neither
+  // a plugin-cache tree (Claude Code's /plugin reinstall does) nor a git clone (git does).
+  it('names /plugin for a plugin-cache tree and git for a clone, not npm -g', () => {
+    const cache = buildCopyInstall(
+      join(cliHome, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '9.9.9'),
+    );
+    rmSync(join(cache, 'lib', 'atomic-write.mjs'));
+    const c = runCli(cache, ['doctor']);
+    const cOut = `${c.stdout}${c.stderr}`;
+    expect(cOut).toMatch(/Repair.*\/plugin (uninstall|install)/);
+    expect(cOut).not.toMatch(/npm install -g/);
+
+    const clone = buildCopyInstall(join(cliHome, 'src', 'claude-mem-lite'));
+    mkdirSync(join(clone, '.git'), { recursive: true });
+    rmSync(join(clone, 'lib', 'atomic-write.mjs'));
+    const k = runCli(clone, ['doctor']);
+    const kOut = `${k.stdout}${k.stderr}`;
+    expect(kOut).toMatch(/Repair: git -C \S+ (status|restore)/);
+    expect(kOut).not.toMatch(/npm install -g/);
+  });
+
   it('explains a truncated install.mjs rather than dying on a missing export', () => {
     const root = buildCopyInstall(join(cliHome, 'cli-noexport'));
     writeFileSync(join(root, 'install.mjs'), '// truncated before anything was exported\n');

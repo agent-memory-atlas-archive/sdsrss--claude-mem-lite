@@ -106,6 +106,7 @@ function log(msg) {
 // uses), but only when it names the directory this process is in: a program that spawns `adopt`
 // with `cwd` set leaves its OWN PWD in the env, and adopt wrote into the caller's directory
 // instead of the one it ran in (E2E 2026-10-16).
+/** @public install.mjs reads it through a dynamic-import namespace (`adopt.detectCwd?.()`). */
 export function detectCwd() {
   if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
   const cwd = process.cwd();

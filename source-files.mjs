@@ -284,6 +284,8 @@ export const SOURCE_FILES = [
   // hook-optimize.mjs (concept normalization). A bare string with no imports; it lives in
   // lib/ so the two faces cannot hand-copy it apart from each other (R10-P3-21).
   'lib/memory-input-guard.mjs',
+  // Leaf: the CLI flag suggester and project-utils' project suggester share it.
+  'lib/edit-distance.mjs',
   'lib/fast-summary.mjs',
   'lib/transcript-scan.mjs',
   // Pre-maintenance VACUUM INTO snapshot (MED-2). Statically imported by mem-cli.mjs,

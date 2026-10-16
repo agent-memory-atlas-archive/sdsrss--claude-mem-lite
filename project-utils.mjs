@@ -2,6 +2,7 @@
 // Extracted from server.mjs and mem-cli.mjs to eliminate duplication
 
 import { basename, dirname } from 'path';
+import { editDistance } from './lib/edit-distance.mjs';
 
 // Leaf module: imports nothing from utils.mjs. utils.mjs re-exports this module's
 // symbols as a backward-compat barrel, so importing the barrel back from here
@@ -171,9 +172,14 @@ export function resolveProject(db, name, { mode = 'read' } = {}) {
   // R10 P2-3: a write stops here. Steps 2 and 3 below guess; step 4 synthesizes from the
   // process cwd, which for a write is worse still — an MCP call naming a project the
   // caller is not sitting in would land in the caller's own directory's project.
+  // The one cwd answer that is not a guess: the caller's own directory IS "<parent>--<name>".
+  // Without it, a short name saved there before the project had rows became a bare-name
+  // project that the full id shadowed once it existed (E2E 2026-10-16, data S9).
   if (mode === 'write') {
-    _cache.set(ck, name);
-    return name;
+    const own = inferProject();
+    const answer = own.endsWith(`--${name}`) ? own : name;
+    _cache.set(ck, answer);
+    return answer;
   }
 
   // 2) Prefix-in-suffix match: "code-graph" → "projects--code-graph-mcp"
@@ -215,6 +221,71 @@ export function resolveProject(db, name, { mode = 'read' } = {}) {
 
   _cache.set(ck, name);
   return name;
+}
+
+/** Whether any table that carries a project holds rows for this exact id. */
+function projectHasRows(db, project) {
+  return !!db
+    .prepare(
+      `SELECT 1 FROM observations WHERE project = @p
+       UNION ALL SELECT 1 FROM sdk_sessions WHERE project = @p
+       UNION ALL SELECT 1 FROM deferred_work WHERE project = @p
+       UNION ALL SELECT 1 FROM events WHERE project = @p
+       LIMIT 1`,
+    )
+    .get({ p: project });
+}
+
+/**
+ * Up to three existing project ids a caller who typed `name` may have meant: the whole id or its
+ * last "--" segment within a small edit distance, case-insensitive. Short names need a closer
+ * match (3 letters or fewer: none; under 8: one edit; else two), so "api" never means "app".
+ */
+export function similarProjects(db, name) {
+  const want = String(name).toLowerCase();
+  const max = want.length <= 3 ? 0 : want.length < 8 ? 1 : 2;
+  const ids = db
+    .prepare(
+      `SELECT project FROM observations UNION SELECT project FROM sdk_sessions
+       UNION SELECT project FROM deferred_work UNION SELECT project FROM events`,
+    )
+    .all()
+    .map((r) => r.project)
+    .filter((p) => typeof p === 'string' && p && p !== name);
+  const scored = [];
+  for (const id of ids) {
+    const lower = id.toLowerCase();
+    const tail = lower.includes('--') ? lower.slice(lower.lastIndexOf('--') + 2) : lower;
+    const d = Math.min(editDistance(want, lower, max), editDistance(want, tail, max));
+    if (d <= max) scored.push({ id, d });
+  }
+  return scored
+    .sort((a, b) => a.d - b.d || a.id.localeCompare(b.id))
+    .slice(0, 3)
+    .map((s) => s.id);
+}
+
+/**
+ * The write-side check both save faces make once resolveProject(…, { mode: 'write' }) has
+ * answered. A short name that matches no project but sits one or two edits from one is a typo,
+ * and the write would have created a stray project the caller never finds again: refused, with
+ * the near names. A new name nothing resembles, or a full "<parent>--<name>" id, is a deliberate
+ * new project: written, with a note saying so (E2E 2026-10-16, cli F14).
+ *
+ * @returns {{ok: true, note: string} | {ok: false, message: string}}
+ */
+export function checkWriteProject(db, project) {
+  if (!project || projectHasRows(db, project)) return { ok: true, note: '' };
+  const near = project.includes('--') ? [] : similarProjects(db, project);
+  if (near.length > 0) {
+    return {
+      ok: false,
+      message:
+        `No project "${project}" — did you mean ${near.map((p) => `"${p}"`).join(', ')}? Nothing was saved. ` +
+        `To start a new project under this name, pass its full id ("<parent>--${project}") or save from inside its directory.`,
+    };
+  }
+  return { ok: true, note: ` (new project "${project}")` };
 }
 
 /** Reset cache (for tests). */

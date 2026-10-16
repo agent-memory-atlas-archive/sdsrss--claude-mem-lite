@@ -122,6 +122,21 @@ describe('project-name resolution in the long-lived server', () => {
   });
 });
 
+// cli F14 on the MCP face: a short name one edit from an existing project created a stray one.
+describe('a near-miss project name on a write', () => {
+  it('is refused with the near name, and nothing is saved', async () => {
+    insertForeignRow('work--other-api', 'Other api rate limiter shares one bucket');
+    const r = await call('mem_save', { content: 'Typo project note about retries', project: 'otherr-api' });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/did you mean "work--other-api"/);
+    expect(
+      withDb((db) => db.prepare("SELECT COUNT(*) n FROM observations WHERE project = 'otherr-api'").get().n),
+    ).toBe(0);
+    const d = await call('mem_defer', { title: 'Typo project follow-up', project: 'otherr-api' });
+    expect(d.isError).toBe(true);
+  });
+});
+
 describe('mem_optimize resolves a short project name like its sibling tools', () => {
   // Every other project-taking handler resolves `opt` to `b--opt`; mem_optimize passed the
   // raw string, so preview counted 0 candidates and `run` silently processed nothing.

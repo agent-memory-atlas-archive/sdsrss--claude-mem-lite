@@ -6,7 +6,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { truncate, typeIcon, inferProject, fmtDate, debugLog, debugCatch } from './utils.mjs';
-import { resolveProject as _resolveProjectCached, _resetProjectCache } from './project-utils.mjs';
+import {
+  resolveProject as _resolveProjectCached,
+  _resetProjectCache,
+  checkWriteProject,
+} from './project-utils.mjs';
 import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
 // the DB is touched — a static import here adds no cold-start cost.
@@ -1353,6 +1357,9 @@ server.registerTool(
     args = applyArgAliases(args, { obs_type: 'type' });
     if (args.project) args = { ...args, project: resolveProjectForWrite(args.project) };
     const project = args.project || inferProject();
+    // A named project that does not exist: a near-miss is refused, a new name is noted (cli F14).
+    const projectCheck = args.project ? checkWriteProject(db, project) : { ok: true, note: '' };
+    if (!projectCheck.ok) return { content: [{ type: 'text', text: projectCheck.message }], isError: true };
 
     let closesIds, result;
     try {
@@ -1411,7 +1418,7 @@ server.registerTool(
     const enrichNote = saveEnrichNote(result);
     // D#201: on its own line rather than inside the success sentence.
     const skipNote = formatSupersedeSkipped(result.supersedeSkipped);
-    const savedText = `Saved as observation #${result.id} [${result.type}] in project "${project}".${lessonNote}${closedNote}${supersededNote}${enrichNote}${nudge}`;
+    const savedText = `Saved as observation #${result.id} [${result.type}] in project "${project}".${projectCheck.note}${lessonNote}${closedNote}${supersededNote}${enrichNote}${nudge}`;
     return { content: [{ type: 'text', text: skipNote ? `${savedText}\n${skipNote}` : savedText }] };
   }),
 );
@@ -1427,6 +1434,8 @@ server.registerTool(
   safeHandler(async (args) => {
     if (args.project) args = { ...args, project: resolveProjectForWrite(args.project) };
     const project = args.project || inferProject();
+    const projectCheck = args.project ? checkWriteProject(db, project) : { ok: true, note: '' };
+    if (!projectCheck.ok) return { content: [{ type: 'text', text: projectCheck.message }], isError: true };
     const r = insertDeferred(db, {
       project,
       title: args.title,
@@ -1441,7 +1450,7 @@ server.registerTool(
       content: [
         {
           type: 'text',
-          text: `Deferred as D#${r.id} (item ${ord ?? '?'}) in project "${project}" — surfaces in next SessionStart banner.`,
+          text: `Deferred as D#${r.id} (item ${ord ?? '?'}) in project "${project}"${projectCheck.note} — surfaces in next SessionStart banner.`,
         },
       ],
     };

@@ -8,6 +8,7 @@
 // relative-time formatting — every command imports from here so the CLI stays
 // consistent.
 
+import { editDistance } from '../lib/edit-distance.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters } from '../format-utils.mjs';
 
 // ─── Argument Parsing ────────────────────────────────────────────────────────
@@ -446,26 +447,6 @@ export const COMMAND_SCOPED_FLAGS = new Map([
   ['search-telemetry', 'stats'],
   ['undo', 'verify-apply'],
 ]);
-
-/** Levenshtein distance, early-exit past `max` (cheap enough for a handful of flags). */
-function editDistance(a, b, max = 2) {
-  const m = a.length,
-    n = b.length;
-  if (Math.abs(m - n) > max) return max + 1;
-  let prev = Array.from({ length: n + 1 }, (_, j) => j);
-  for (let i = 1; i <= m; i++) {
-    const cur = [i];
-    let rowMin = i;
-    for (let j = 1; j <= n; j++) {
-      const d = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] !== b[j - 1] ? 1 : 0));
-      cur[j] = d;
-      if (d < rowMin) rowMin = d;
-    }
-    if (rowMin > max) return max + 1; // whole row already past budget → give up
-    prev = cur;
-  }
-  return prev[n];
-}
 
 /**
  * Detect likely-typo flags: names NOT in KNOWN_CLI_FLAGS but within edit distance 2 of

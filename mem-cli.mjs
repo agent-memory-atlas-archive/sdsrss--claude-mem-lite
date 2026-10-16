@@ -15,7 +15,7 @@ import {
   COMPRESSED_PENDING_PURGE,
 } from './utils.mjs';
 import { isBlankText } from './lib/blank-text.mjs';
-import { resolveProject } from './project-utils.mjs';
+import { resolveProject, checkWriteProject } from './project-utils.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
 // falls back to the enclosing work-tree root, so `cd src/auth && … recent` reads what the
 // session's hooks wrote. WRITE commands (save / defer add / restore / import-jsonl) keep
@@ -1314,6 +1314,12 @@ function cmdSave(db, args) {
   // R10 P2-3: write mode — exact matching only, so `--project api` cannot land the row in
   // `mono--api-gateway` where the caller's own next `--project api` read will not find it.
   const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
+  // A named project that does not exist: a near-miss is refused, a new name is noted (cli F14).
+  const projectCheck = flags.project ? checkWriteProject(db, project) : { ok: true, note: '' };
+  if (!projectCheck.ok) {
+    fail(`[mem] ${projectCheck.message}`);
+    return;
+  }
   const saveFiles = flags.files
     ? flags.files
         .split(',')
@@ -1435,7 +1441,7 @@ function cmdSave(db, args) {
   // every save) — fill-only-empty, so an agent acting on the nudge still wins.
   const enrichNote = saveEnrichNote(result);
   out(
-    `[mem] Saved #${result.id} [${result.type}] "${truncate(result.title, 80)}" (project: ${result.project})${lessonNote}${closedNote}${supersededNote}${enrichNote}${buildLessonNudge({ type: result.type, id: result.id, lessonCaptured: result.lessonCaptured, surface: 'cli' })}`,
+    `[mem] Saved #${result.id} [${result.type}] "${truncate(result.title, 80)}" (project: ${result.project})${result.kind === 'saved' ? projectCheck.note : ''}${lessonNote}${closedNote}${supersededNote}${enrichNote}${buildLessonNudge({ type: result.type, id: result.id, lessonCaptured: result.lessonCaptured, surface: 'cli' })}`,
   );
   // D#201: on its OWN line, after the success line. Appending it to the success
   // string would put a warning inside a sentence that reads as "done".
@@ -1505,6 +1511,11 @@ function cmdDeferAdd(db, args) {
   // R10 P2-3: write mode — exact matching only, so `--project api` cannot land the row in
   // `mono--api-gateway` where the caller's own next `--project api` read will not find it.
   const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
+  const projectCheck = flags.project ? checkWriteProject(db, project) : { ok: true, note: '' };
+  if (!projectCheck.ok) {
+    fail(`[mem] ${projectCheck.message}`);
+    return;
+  }
   const detail = typeof flags.detail === 'string' ? flags.detail : null;
   const files = flags.files
     ? flags.files
@@ -1523,7 +1534,7 @@ function cmdDeferAdd(db, args) {
   // Compute the freshly-inserted row's ordinal for an immediately-actionable
   // response ("ok, deferred this as item N"), as mem_defer does.
   const ord = openOrdinalOf(db, project, r.id) ?? '?';
-  out(`[mem] Deferred as D#${r.id} (item ${ord}) in project "${project}".`);
+  out(`[mem] Deferred as D#${r.id} (item ${ord}) in project "${project}".${projectCheck.note}`);
 }
 
 function cmdDeferList(db, args) {

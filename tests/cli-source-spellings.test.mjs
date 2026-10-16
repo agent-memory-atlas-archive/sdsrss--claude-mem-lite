@@ -205,6 +205,23 @@ describe('round-3 CLI wording', () => {
   });
 });
 
+// E2E 2026-10-16 (cli F14): a mistyped --project on a write created a stray project silently.
+describe('a write naming a project that does not exist', () => {
+  it('a near-miss is refused and nothing is saved; a new name is saved and noted', () => {
+    const made = cli('save', 'Other api limiter note', '--project', 'work--other-api');
+    expect(made.status, made.stderr).toBe(0);
+    expect(made.stdout).toMatch(/new project "work--other-api"/);
+    const typo = cli('save', 'Typo project retry note', '--project', 'otherr-api');
+    expect(typo.status).toBe(1);
+    expect(typo.stderr).toMatch(/did you mean "work--other-api"/);
+    expect(cli('search', 'Typo project retry').stdout).not.toMatch(/Typo project retry note/);
+    const defer = cli('defer', 'add', 'Typo follow-up', '--project', 'otherr-api');
+    expect(defer.status).toBe(1);
+    const again = cli('save', 'Second limiter note', '--project', 'work--other-api');
+    expect(again.stdout).not.toMatch(/new project/);
+  });
+});
+
 // E2E 2026-10-16 (cli F5): NOT / -term / OR were dropped with no word.
 describe('search says which operators it ignored', () => {
   it('on stderr, so --json stdout stays parseable', () => {

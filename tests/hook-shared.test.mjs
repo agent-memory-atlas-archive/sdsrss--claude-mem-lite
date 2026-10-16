@@ -2,7 +2,7 @@
 // callLLM now mirrors haiku-client's provider priority: ANTHROPIC_API_KEY /
 // OPENROUTER_API_KEY route through callHaiku (async API/OpenRouter), and only
 // the no-key case falls back to the `claude -p` CLI.
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('child_process', () => ({
   execFileSync: vi.fn(),
@@ -51,8 +51,10 @@ vi.mock('../adopt-content.mjs', () => ({
   PLUGIN_SLUG: 'claude-mem-lite',
 }));
 
+import Database from 'better-sqlite3';
 import { execFileSync } from 'child_process';
-import { callLLM } from '../hook-shared.mjs';
+import { ensureDbWithWalRecovery } from '../schema.mjs';
+import { callLLM, openDb, setHookDbDeadline } from '../hook-shared.mjs';
 
 describe('hook-shared callLLM — provider routing', () => {
   beforeEach(() => {
@@ -123,5 +125,29 @@ describe('hook-shared callLLM — provider routing', () => {
     // at three sites and lost at the fourth. Re-inlining a spawn here fails both
     // assertions — the shared runner is the only sanctioned path.
     expect(execFileSync).not.toHaveBeenCalled();
+  });
+});
+
+// Round-2 pre-tag review 2026-10-16 (F10): the hook's lock budget was the deadline minus Date.now(),
+// so a step of the system clock between process start and the open moved it: forward to 0 (writes
+// lost under any lock), backward up to DB_BUSY_TIMEOUT_MS (the host's kill at 5 s).
+describe('hook-shared openDb — the hook deadline', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    setHookDbDeadline(null);
+  });
+  it.each([
+    ['forward', 60_000],
+    ['backward', -60_000],
+  ])('a wall-clock step %s does not move the wait', (_, step) => {
+    ensureDbWithWalRecovery.mockReturnValue(new Database(':memory:'));
+    setHookDbDeadline(performance.timeOrigin + performance.now() + 2000);
+    const wall = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(wall + step);
+    const db = openDb();
+    const wait = db.pragma('busy_timeout', { simple: true });
+    db.close();
+    expect(wait).toBeGreaterThan(1500);
+    expect(wait).toBeLessThanOrEqual(2000);
   });
 });

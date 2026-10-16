@@ -614,13 +614,20 @@ export function lastDbUnusable() {
 let hookDbDeadline = null;
 
 /**
- * Bound every busy wait of the connections this process opens through openDb() by one deadline:
- * each gets the time left until `epochMs` (never more than DB_BUSY_TIMEOUT_MS, 0 once it has
- * passed). E2E 2026-10-16 F9 and its pre-tag review: a 5 s wait in a hook the host kills at 5 s
- * never fails inside the hook, and one fixed shorter wait per connection both lost writes a
- * shorter lock only delayed and added up across Stop's several connections.
+ * Bound the busy wait of each connection this process opens through openDb() by one deadline:
+ * each connection's busy_timeout is set, as it is handed out, to the time left until `epochMs`
+ * (never more than DB_BUSY_TIMEOUT_MS, 0 once it has passed). E2E 2026-10-16 F9 and its pre-tag
+ * review: a 5 s wait in a hook the host kills at 5 s never fails inside the hook, and one fixed
+ * shorter wait per connection both lost writes a shorter lock only delayed and added up across
+ * Stop's several connections. Two waits stay outside it (round-2 review): busy_timeout applies per
+ * statement, so a statement that meets a lock after another one on the same connection has waited
+ * can wait the connection's value again; and ensureDb's own statements, a first open's migration
+ * among them, wait DB_BUSY_TIMEOUT_MS before openDb sets it.
  *
- * @param {number} epochMs
+ * The time left is read on this process's own timeline (performance.timeOrigin +
+ * performance.now()), which a step of the system clock does not move (round-2 review).
+ *
+ * @param {number|null} epochMs
  */
 export function setHookDbDeadline(epochMs) {
   hookDbDeadline = epochMs;
@@ -632,7 +639,8 @@ export function openDb() {
     // silently dead (null DB) on a corrupt WAL until the next MCP server start.
     const db = ensureDbWithWalRecovery();
     if (hookDbDeadline !== null) {
-      const left = Math.min(DB_BUSY_TIMEOUT_MS, Math.max(0, Math.floor(hookDbDeadline - Date.now())));
+      const now = performance.timeOrigin + performance.now();
+      const left = Math.min(DB_BUSY_TIMEOUT_MS, Math.max(0, Math.floor(hookDbDeadline - now)));
       db.pragma(`busy_timeout = ${left}`);
     }
     lastSkew = null;

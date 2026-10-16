@@ -285,9 +285,10 @@ const BG_EVENTS = new Set([
 ]);
 
 // The events hooks.json runs under a fixed timeout wait for another writer only until a deadline
-// counted from this process's start (performance.timeOrigin), shared by every connection they
-// open, so a lock held past it fails the write inside the hook rather than getting the hook
-// killed with its output (E2E 2026-10-16 F9), and a shorter lock is still waited out.
+// counted from this process's start (performance.timeOrigin): each connection they open waits for
+// the time left (setHookDbDeadline), so a lock held past it fails the write inside the hook rather
+// than getting the hook killed with its output (E2E 2026-10-16 F9), and a lock that ends before
+// it is still waited out.
 const FIVE_SECOND_HOOK_EVENTS = new Set([
   'user-prompt',
   'stop',

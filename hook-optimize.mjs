@@ -1311,17 +1311,24 @@ Return ONLY valid JSON:
     // (a tombstoned/retired lesson can't resurrect onto the keeper). The union is scrubbed then
     // capped at 500 chars like a single lesson, so an unusually long union may truncate trailing
     // members — still strictly better than the prior unconditional null (partial > total loss).
-    let lessonLearned =
-      typeof parsed.merged_lesson === 'string' && parsed.merged_lesson.trim().length > 0
-        ? scrubSecrets(parsed.merged_lesson).slice(0, 500)
-        : null;
-    if (!lessonLearned) {
-      const memberLessons = [
-        ...new Set(
-          cluster.map((o) => (o.lesson_learned || '').trim()).filter((l) => l && l.toLowerCase() !== 'none'),
-        ),
-      ];
-      if (memberLessons.length) lessonLearned = scrubSecrets(memberLessons.join(' — ')).slice(0, 500);
+    //
+    // Members' own lessons WIN over the model's (E2E 2026-10-16). The prompt above shows the
+    // model titles and narratives only, so its merged_lesson is written without the lessons it
+    // replaced: two importance-3 explicit saves lost "clockTolerance: 300" and "token_version"
+    // to one generic sentence in the unattended daily pass. The model's lesson fills a cluster
+    // whose members have none.
+    const memberLessons = [
+      ...new Set(
+        cluster.map((o) => (o.lesson_learned || '').trim()).filter((l) => l && l.toLowerCase() !== 'none'),
+      ),
+    ];
+    let lessonLearned = memberLessons.length ? scrubSecrets(memberLessons.join(' — ')).slice(0, 500) : null;
+    if (
+      !lessonLearned &&
+      typeof parsed.merged_lesson === 'string' &&
+      parsed.merged_lesson.trim().length > 0
+    ) {
+      lessonLearned = scrubSecrets(parsed.merged_lesson).slice(0, 500);
     }
 
     const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
@@ -1329,7 +1336,11 @@ Return ONLY valid JSON:
     const minhashSig = computeMinHash((title || '') + ' ' + (narrative || ''));
     // An importance a person set on the keeper stays (D10); the UPDATE decides that on the row as
     // it is then, since a person can set it while this call waits on the model (D#198).
-    const importance = Math.max(clampImportance(parsed.importance || 2), maxClusterImportance);
+    //
+    // The cluster max, never the model's number: max(model, cluster max) let stored text that
+    // talked the model into "importance": 3 turn two importance-1 rows into a critical Key
+    // Context row (E2E 2026-10-16). A merge combines rows; it has no new evidence of importance.
+    const importance = maxClusterImportance;
 
     // Scrub LLM-output cluster-merge text fields at the UPDATE boundary.
     // importance is numeric; minhash_sig is hash bytes.

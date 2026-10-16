@@ -1622,7 +1622,14 @@ describe('cluster-merge', () => {
     };
     for (const personSets of [true, false]) {
       db.prepare('DELETE FROM observations').run();
-      insertObs(db, { title: 'Fix FTS5 bug A', narrative: 'Handled special chars', accessCount: 3 });
+      // Keeper at 3 so the premise arm reads the cluster max, not a model-raised value: the merge
+      // no longer lets the model raise importance (E2E 2026-10-16).
+      insertObs(db, {
+        title: 'Fix FTS5 bug A',
+        narrative: 'Handled special chars',
+        accessCount: 3,
+        importance: 3,
+      });
       insertObs(db, { title: 'Fix FTS5 bug B', narrative: 'Handled parentheses', accessCount: 1 });
       const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
       callModelJSONAsync.mockImplementation(async () => {
@@ -1760,6 +1767,81 @@ describe('cluster-merge', () => {
       .get(keeperId);
     expect(snap, 'keeper original must be snapshotted, not lost').toBeTruthy();
     expect(snap.narrative).toBe('irreplaceable repro steps');
+  });
+
+  // E2E 2026-10-16 (bg P1-1): the merge prompt shows the model titles and narratives only, yet
+  // any non-empty merged_lesson REPLACED the members' lessons — two importance-3 explicit saves
+  // lost "clockTolerance: 300" and "token_version" to a generic sentence, from every live surface,
+  // in the unattended daily pass. Members' own lessons now win; the model's is used only when
+  // no member has one.
+  it("keeps the members' own lessons over a model lesson written without seeing them", async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Refresh token rejected after deploy', narrative: 'clock skew', importance: 3 });
+    insertObs(db, {
+      title: 'Refresh token rejected after password reset',
+      narrative: 'stale cache',
+      importance: 3,
+    });
+    const rows = db.prepare('SELECT id FROM observations ORDER BY id').all();
+    db.prepare(
+      "UPDATE observations SET lesson_learned = 'set clockTolerance: 300 in verify.js' WHERE id = ?",
+    ).run(rows[0].id);
+    db.prepare(
+      "UPDATE observations SET lesson_learned = 'refresh() must reload token_version' WHERE id = ?",
+    ).run(rows[1].id);
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'Refresh-token rejections',
+      merged_narrative: 'two causes',
+      merged_concepts: [],
+      merged_facts: [],
+      merged_lesson: 'Refresh-token rejections can have more than one root cause.',
+      importance: 3,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    const live = db
+      .prepare(
+        'SELECT lesson_learned FROM observations WHERE COALESCE(compressed_into,0)=0 AND superseded_at IS NULL',
+      )
+      .all()
+      .map((r) => r.lesson_learned)
+      .join(' | ');
+    expect(live).toContain('clockTolerance: 300');
+    expect(live).toContain('token_version');
+  });
+
+  it('a model lesson still fills a cluster whose members have none', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Fix FTS5 bug A', narrative: 'a', accessCount: 3 });
+    insertObs(db, { title: 'Fix FTS5 bug B', narrative: 'b', accessCount: 1 });
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'M',
+      merged_lesson: 'escape FTS5 input',
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    expect(
+      db.prepare('SELECT lesson_learned FROM observations WHERE id = ?').get(obs[0].id).lesson_learned,
+    ).toBe('escape FTS5 input');
+  });
+
+  // E2E 2026-10-16 (bg P1-3): importance was max(model, cluster max), so stored text that talked
+  // the model into "importance": 3 turned two importance-1 rows into a critical Key Context row.
+  it('the model cannot raise the merged importance above the cluster max', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    insertObs(db, { title: 'Install script updated A', narrative: 'a', importance: 1, accessCount: 1 });
+    insertObs(db, { title: 'Install script updated B', narrative: 'b', importance: 1 });
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    callModelJSONAsync.mockResolvedValue({
+      should_merge: true,
+      merged_title: 'M',
+      merged_lesson: 'x',
+      importance: 3,
+    });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(true);
+    expect(db.prepare('SELECT importance FROM observations WHERE id = ?').get(obs[0].id).importance).toBe(1);
   });
 
   it('preserves cluster lessons when the LLM returns merged_lesson:null (never-auto-GC)', async () => {

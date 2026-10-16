@@ -2,6 +2,51 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.27.0 — less hook text per session: the recall framing line once per thread, file-intel off by default
+
+**Upgrade note: the plugin's hooks put less text into each session's context; there is nothing
+to do.** Re-rendered through this release's code, the main conversations of the 52 sessions in a
+frozen corpus from this machine (2026-09-30 to 2026-10-15) receive 12.66 KB per session from the
+plugin instead of 18.57 (`docs/audits/20261016-injection-budget-after.md`; subagent transcripts
+are not counted). The lessons recall injects (the `#NN` / `E#NN` rows before an edit, after an
+error and on a prompt) are unchanged, and a thread's first block that asks to tag an applied
+lesson still asks in full. Every change below except the bug fix has a setting that brings the
+old behaviour back. No schema change, no migration.
+
+- **Change: the PreToolUse framing line and the full pre-edit directive are shown once per
+  thread.** Later recall blocks of the same session (or subagent) open with their own `[mem]`
+  line; those that carry a directive (an Edit with lessons, the Read→Edit reminder) carry a
+  short one that keeps the `(#NN)` tag rule. Both come back after `/compact`. The short form is
+  the default `CLAUDE_MEM_SALIENCE` arm's; the `verdict`, `bind` and `bridge` arms keep their
+  full text on every block. `CLAUDE_MEM_RECALL_HEADER_ONCE=0` / `CLAUDE_MEM_DIRECTIVE_ONCE=0`
+  restore them on every block. On the corpus: framing lines 2.78 → 0.09 KB per session,
+  Read→Edit reminders and pre-edit directives 2.40 → 1.31.
+- **Change: the file-intel line is opt-in** (`CLAUDE_MEM_FILE_INTEL=1`). It rode the first read
+  of a large file (a Read, or a Bash `cat` / `sed -n` / `head`) and reached the model next to
+  that read's result, so it could not shape that read; 89.9% of those lines rode a read that
+  already took a slice. 1.57 KB per session on the corpus.
+- **Change: the SessionStart Recent table shows 5 rows** — the project's own first, then other
+  projects' rows when the project has few. `CLAUDE_MEM_STARTUP_RECENT_ROWS` sets the count: a
+  large value such as `1000` brings back the table as it was, `0` hides it. `claude-mem-lite
+  context` prints the same table and gets the same cap. Before this release it showed 7–13 rows
+  per table on the corpus; 1.02 → 0.57 KB per session.
+- **Change: the startup dashboard drops the `mem events` count**
+  (`CLAUDE_MEM_DASHBOARD_EVENTS=1` brings it back). No session on the corpus ran the
+  `activity` command it points to.
+- **Fix: "Past similar questions" no longer returns the prompt you just typed** or another
+  prompt of the same session. The prompt is stored while the search runs, so the search could
+  find it.
+- **Change: it also skips a question from an earlier session that is the same as the one just
+  typed** (`CLAUDE_MEM_UPS_PROMPT_ECHO=0` keeps those).
+- **Not measured: whether the model acts differently on the shorter text.** In particular, the
+  framing line was added because the model sometimes ended its turn after a recall block, and
+  a recorded corpus cannot show whether that comes back without it. The citation rate is the
+  same on the re-rendered corpus only because the same lesson ids reach the model; across the
+  52 sessions the model cited 4 injected lessons in all, too few to show a change after release.
+- **New ruler: `benchmark/injection-budget.mjs`** counts hook bytes per hook face and line
+  class over a frozen transcript corpus and re-renders recorded blocks through the shipped code
+  (`docs/measurement/rulers.md`, "injection budget").
+
 ## v6.26.1 — a keyed reply that is not a whole answer goes to the `claude -p` fallback
 
 Fixes only; no schema change, no migration, no new setting. Without `ANTHROPIC_API_KEY` or

@@ -1852,6 +1852,44 @@ describe('cluster-merge', () => {
   // lost "clockTolerance: 300" and "token_version" to a generic sentence, from every live surface,
   // in the unattended daily pass. Members' own lessons now win; the model's is used only when
   // no member has one.
+  // Round 2 (hooks NEW-1): the union of the members' lessons was cut mid-word at 500
+  // characters, so three ordinary ~220-char lessons lost the last one's specifics from every live
+  // surface (the member it came from is hidden by the merge). A cluster whose lessons do not fit
+  // together is not merged; nothing is asked of the model for it.
+  it('does not merge a cluster whose distinct lessons do not fit in one lesson', async () => {
+    const { executeMergeCluster } = await import('../hook-optimize.mjs');
+    for (const [t, l] of [
+      [
+        'Refresh endpoint rejects sid',
+        'the refresh endpoint must accept both sid and sid_v2 cookies during the rollout window, or every session minted before the deploy is rejected and users are logged out mid-checkout; keep both names until 2026-11-01',
+      ],
+      [
+        'Password reset leaves old tokens',
+        'password reset increments users.token_version, and refresh() must reload token_version from the row instead of the cache, or a reset password keeps the old refresh tokens valid until they expire',
+      ],
+      [
+        'JWT exp fails behind skewed clocks',
+        'jwt.verify() compares exp against the local clock, so set clockTolerance to 300 seconds in src/auth/verify.js; the staging nodes drift by up to four minutes after a VM migration',
+      ],
+    ])
+      insertObs(db, { title: t, narrative: 'auth', importance: 3, lessonLearned: l });
+    const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    expect(
+      obs.map((o) => o.lesson_learned).join(' — ').length,
+      'premise: the union exceeds 500',
+    ).toBeGreaterThan(500);
+    callModelJSONAsync.mockClear();
+    callModelJSONAsync.mockResolvedValue({ should_merge: true, merged_title: 'Auth', merged_narrative: 'x' });
+    expect((await executeMergeCluster(db, obs)).merged).toBe(false);
+    expect(callModelJSONAsync).not.toHaveBeenCalled();
+    const live = db
+      .prepare('SELECT lesson_learned FROM observations WHERE COALESCE(compressed_into,0)=0')
+      .all()
+      .map((r) => r.lesson_learned)
+      .join(' | ');
+    expect(live).toContain('300 seconds in src/auth/verify.js');
+  });
+
   it("keeps the members' own lessons over a model lesson written without seeing them", async () => {
     const { executeMergeCluster } = await import('../hook-optimize.mjs');
     insertObs(db, { title: 'Refresh token rejected after deploy', narrative: 'clock skew', importance: 3 });

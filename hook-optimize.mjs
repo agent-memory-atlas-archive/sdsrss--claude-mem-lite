@@ -1232,6 +1232,17 @@ export function findMergeCandidates(db, maxClusters = 5, { project } = {}) {
 export async function executeMergeCluster(db, cluster) {
   if (cluster.length < 2) return { merged: false };
 
+  // The members' own lessons become the keeper's, joined (below). When they do not fit in one
+  // lesson together, the cut fell mid-word on the last member's specifics, and the member it
+  // came from is hidden by the merge (E2E 2026-10-16 round 2). Rows holding that much distinct
+  // lesson text are not duplicates; leave them, and ask the model nothing.
+  const memberLessons = [
+    ...new Set(
+      cluster.map((o) => (o.lesson_learned || '').trim()).filter((l) => l && l.toLowerCase() !== 'none'),
+    ),
+  ];
+  if (scrubSecrets(memberLessons.join(' — ')).length > 500) return { merged: false };
+
   const gotSlot = await acquireLLMSlot();
   if (!gotSlot) return { merged: false };
 
@@ -1306,21 +1317,16 @@ Return ONLY valid JSON:
     // which recoverBuriedLessons (compressed_into=0 only) skips. So use the LLM's synthesized
     // lesson when non-empty, else fall back to the union of the members' own non-empty lessons.
     // findMergeCandidates filters superseded_at IS NULL, so the union pulls only LIVE members
-    // (a tombstoned/retired lesson can't resurrect onto the keeper). The union is scrubbed then
-    // capped at 500 chars like a single lesson, so an unusually long union may truncate trailing
-    // members — still strictly better than the prior unconditional null (partial > total loss).
+    // (a tombstoned/retired lesson can't resurrect onto the keeper). The union is scrubbed, and
+    // fits in 500 chars like a single lesson: a cluster whose union would not is never merged
+    // (checked before the model call, at the top).
     //
     // Members' own lessons WIN over the model's (E2E 2026-10-16). The prompt above shows the
     // model titles and narratives only, so its merged_lesson is written without the lessons it
     // replaced: two importance-3 explicit saves lost "clockTolerance: 300" and "token_version"
     // to one generic sentence in the unattended daily pass. The model's lesson fills a cluster
     // whose members have none.
-    const memberLessons = [
-      ...new Set(
-        cluster.map((o) => (o.lesson_learned || '').trim()).filter((l) => l && l.toLowerCase() !== 'none'),
-      ),
-    ];
-    let lessonLearned = memberLessons.length ? scrubSecrets(memberLessons.join(' — ')).slice(0, 500) : null;
+    let lessonLearned = memberLessons.length ? scrubSecrets(memberLessons.join(' — ')) : null;
     if (
       !lessonLearned &&
       typeof parsed.merged_lesson === 'string' &&

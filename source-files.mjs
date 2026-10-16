@@ -60,6 +60,8 @@ export const SOURCE_FILES = [
   // stays loadable without better-sqlite3. Missing from the manifest → auto-update leaves
   // schema.mjs and the repair path with ERR_MODULE_NOT_FOUND on every fire.
   'lib/data-paths.mjs',
+  // npx detection shared by cli.mjs (no-command routing) and install.mjs (IS_NPX).
+  'lib/npx-run.mjs',
   'lib/doctor-modes.mjs',
   // lib/ — statically imported by hook-llm.mjs (activity) + hook-handoff.mjs (git-state, task-reader);
   // dynamically imported by hook.mjs (startup-dashboard) + mem-cli.mjs (doctor-benchmark, plan-reader).

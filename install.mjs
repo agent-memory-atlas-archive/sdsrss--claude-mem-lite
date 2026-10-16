@@ -55,8 +55,7 @@ const OLD_DATA_DIR = join(homedir(), '.claude-mem');
 const CLI_BIN_DIRS = [join(homedir(), '.local', 'bin'), '/usr/local/bin'];
 
 // Detect ephemeral context (npx) — files won't persist after exit
-const IS_NPX =
-  process.env.npm_command === 'exec' || PROJECT_DIR.includes('_npx') || PROJECT_DIR.includes('.npm/_');
+const IS_NPX = isNpxRun(PROJECT_DIR);
 
 // Both modes install to ~/.claude-mem-lite/ (copies or symlinks)
 const INSTALL_DIR = DATA_DIR;
@@ -65,6 +64,7 @@ const HOOK_PATH = join(INSTALL_DIR, 'hook.mjs');
 // P2-7: both constants and the predicate come from lib/plugin-key.mjs, which hook.mjs also
 // imports — this pair used to be typed out in each.
 import { MARKETPLACE_KEY, PLUGIN_KEY, PLUGIN_NAME, isPluginExplicitlyDisabled } from './lib/plugin-key.mjs';
+import { isNpxRun } from './lib/npx-run.mjs';
 import { doctorDbModeHint } from './lib/doctor-modes.mjs';
 // Static, matching doctor-modes above. Safe here where it would not be for a heavier
 // module: this one is a leaf over node:fs + node:child_process, so it adds no load graph

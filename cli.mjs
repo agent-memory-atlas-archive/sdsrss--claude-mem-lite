@@ -208,16 +208,21 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   const { run } = await import('./mem-cli.mjs');
   await run(process.argv.slice(2));
 } else if (!cmd) {
-  // No command: show CLI help if installed, install help if not
+  // No command: show CLI help if installed, install help if not — except under npx, where a
+  // bare `npx claude-mem-lite` is the documented install / reinstall. Printing help there
+  // whenever a database existed made the reinstall a no-op on exactly the machines that need
+  // it (memories kept, code home damaged or uninstalled; E2E 2026-10-16).
   const { existsSync } = await import('fs');
-  const { join } = await import('path');
+  const { dirname, join } = await import('path');
+  const { fileURLToPath } = await import('url');
+  const { isNpxRun } = await import('./lib/npx-run.mjs');
   // D#29: honor CLAUDE_MEM_DIR so the install-vs-CLI help routing is correct on
   // relocated installs (matches schema.mjs DB_DIR via the shared resolver, which
   // also fixes the HOME-unset relative-path fallback this branch used to have).
   const { resolveDataDir } = await import('./lib/resolve-data-dir.mjs');
   const dataDir = resolveDataDir(process.env.CLAUDE_MEM_DIR);
   const dbPath = join(dataDir, 'claude-mem-lite.db');
-  if (existsSync(dbPath)) {
+  if (existsSync(dbPath) && !isNpxRun(dirname(fileURLToPath(import.meta.url)))) {
     const { run } = await import('./mem-cli.mjs');
     await run(['help']);
   } else {

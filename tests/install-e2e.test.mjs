@@ -23,6 +23,8 @@ import {
 } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
+import Database from 'better-sqlite3';
+import { initSchema, CURRENT_SCHEMA_VERSION } from '../schema.mjs';
 import { randomUUID } from 'crypto';
 import { makeFixtureTracker } from './test-helpers.mjs';
 
@@ -513,6 +515,23 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     const out = runInstall('uninstall', home, [], { PATH: `${binDir}:${process.env.PATH}` });
     expect(out).toMatch(/CLAUDE\.local\.md/);
     expect(out).toMatch(/unadopt --all/);
+  });
+
+  // E2E 2026-10-16 (install P2-5): install read the row count and printed "✓ Database
+  // accessible" over a store written by a NEWER release, which nothing it installed can open
+  // (the rollback path: `git checkout vX && node install.mjs install`).
+  it('install warns over a database a newer release wrote', () => {
+    const dataDir = join(home, '.claude-mem-lite');
+    mkdirSync(dataDir, { recursive: true });
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'));
+    initSchema(db);
+    db.prepare('UPDATE schema_version SET version = ?').run(CURRENT_SCHEMA_VERSION + 1);
+    db.close();
+    const out = runInstall('install', home, ['--dev', '--skip-repos'], {
+      PATH: `${binDir}:${process.env.PATH}`,
+    });
+    expect(out).toMatch(/written by a newer claude-mem-lite/);
+    expect(out).not.toMatch(/✓ Database accessible/);
   });
 
   it('uninstall --purge removes data directory', () => {

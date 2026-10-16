@@ -103,7 +103,7 @@ import {
   probeRuntimeRootsSdk,
   hasAnyManagedCode,
 } from './lib/install-shape.mjs';
-import { probeSchemaCompat, schemaSkewRemedy } from './lib/schema-skew.mjs';
+import { probeSchemaCompat, probeSchemaCompatInFreshProcess, schemaSkewRemedy } from './lib/schema-skew.mjs';
 import { clearNativeBindingBreakage, readNativeBindingBreakage } from './lib/native-binding-hint.mjs';
 // A namespace, not named imports: a swap renames files one at a time, so for a moment this file can
 // sit over the previous release's lib/proc-lock.mjs, and a named import of an export that release
@@ -1294,7 +1294,19 @@ function verifyDatabase() {
       const db = new Database(DB_PATH, { readonly: true });
       const count = db.prepare('SELECT COUNT(*) as c FROM observations').get();
       db.close();
-      ok(`Database accessible: ${count.c} observations`);
+      // Readable is not usable: a DB written by a NEWER claude-mem-lite is refused by this
+      // version's schema.mjs, so after a rollback install printed "✓ Database accessible" over a
+      // store no hook or MCP server here could open (E2E 2026-10-16). Asked of the tree just
+      // installed, out of process like doctor's check.
+      const compat = probeSchemaCompatInFreshProcess(INSTALL_DIR, DB_PATH);
+      if (compat.status === 'skew') {
+        warn(
+          `Database: ${count.c} observations, written by a newer claude-mem-lite (schema v${compat.dbVersion}; this version reads up to v${compat.supported}) — the hooks and the MCP server cannot open it.`,
+        );
+        log('  Install a version that reads it: npx claude-mem-lite@latest install');
+      } else {
+        ok(`Database accessible: ${count.c} observations`);
+      }
     } catch (e) {
       warn('Database check failed: ' + e.message);
     }

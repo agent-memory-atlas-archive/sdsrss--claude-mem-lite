@@ -1906,7 +1906,15 @@ function cmdContext(db, args) {
     for (let i = 0; i < sectionStarts.length; i++) {
       const start = sectionStarts[i].headerEnd;
       const end = i + 1 < sectionStarts.length ? sectionStarts[i + 1].index : block.length;
-      const key = sectionStarts[i].name.replace(/\s+/g, '_').toLowerCase();
+      // A dated heading ("Recent (2026-10-16)") is keyed without its date, which goes beside
+      // the sections: a key that changes every day cannot be addressed (E2E 2026-10-16, cli F13).
+      let name = sectionStarts[i].name;
+      const dated = name.match(/^(.*\S)\s*\((\d{4}-\d{2}-\d{2})\)$/);
+      if (dated) {
+        name = dated[1];
+        result.date = dated[2];
+      }
+      const key = name.replace(/\s+/g, '_').toLowerCase();
       result.sections[key] = block.slice(start, end).trim();
     }
     out(JSON.stringify(result, null, 2));

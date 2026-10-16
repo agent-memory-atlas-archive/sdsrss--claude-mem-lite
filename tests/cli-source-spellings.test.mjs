@@ -205,6 +205,20 @@ describe('round-3 CLI wording', () => {
   });
 });
 
+// E2E 2026-10-16 (cli F13): the section key was derived from the heading text, so the Recent
+// table's key carried today's date ("recent_(2026-10-16)") and changed every day.
+describe('context --json section keys are stable', () => {
+  it('the Recent table is keyed recent, its date beside it', () => {
+    const r = cli('context', '--json');
+    expect(r.status, r.stderr).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(Object.keys(j.sections)).toContain('recent');
+    expect(Object.keys(j.sections).filter((k) => /\d{4}-\d{2}-\d{2}/.test(k))).toEqual([]);
+    expect(j.sections.recent).toContain('Redis pool exhaustion');
+    expect(j.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
 // E2E 2026-10-16 (cli F16): `--` parsed as an empty-named flag, so text starting with `--` could
 // not be saved positionally.
 describe('a bare -- ends the options', () => {

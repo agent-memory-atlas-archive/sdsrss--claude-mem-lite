@@ -35,6 +35,15 @@ import { recordMetric } from '../lib/metrics.mjs';
 import { presentIdents } from '../lib/lesson-idents.mjs';
 import { neutralizeContextDelimiters } from '../format-utils.mjs';
 import { recallFramingLine } from '../lib/recall-framing.mjs';
+// Leaf (fs + path): the header and the full ACK directive once per thread (injection budget C1/C3).
+import {
+  ACK_DIRECTIVE,
+  ACK_DIRECTIVE_SHORT,
+  markRecallShown,
+  planRecallBlock,
+  readRecallShown,
+  recallShownPath,
+} from '../lib/recall-shown.mjs';
 // D#154: the one stdout writer. This script has THREE emit sites (Read→Edit ack,
 // repeated-read guard, lesson block) and they stay one document because each branch
 // process.exit()s before reaching the next.
@@ -158,8 +167,9 @@ const SALIENCE_BRIDGE = process.env.CLAUDE_MEM_SALIENCE === 'bridge';
 // would make readings before and after this change incomparable (pre-ship review P2-2).
 const VERDICT_DIRECTIVE =
   "apply each lesson to this edit or rule it out — state '#NN applied' or '#NN n/a — <reason>' in your next user-facing message.";
-const ACK_DIRECTIVE =
-  'apply each lesson to this edit or rule it out. If one changes the edit, add its bare tag (#NN) once at the end of the sentence describing that change; a lesson that did not apply needs no mention, and memory ids get no other mention in your reply.';
+// ACK_DIRECTIVE (the default) lives in lib/recall-shown.mjs with its short form: a thread gets the
+// full text once and the short one after (injection budget C3). Only the default arm shortens —
+// the other arms' text must stay the one their readings were taken with (see below).
 // v-bind salience forcing-function (#8771 audit: ack ≠ act). Instead of a cheap
 // '#NN applied / n/a' verdict, demand the model bind the lesson to the concrete
 // line it's editing and quote the satisfying edit line. Selected by
@@ -550,6 +560,33 @@ try {
   const isSessionScoped = Boolean(sessionId);
   const cooldown = readCooldown(cooldownPath);
   const now = Date.now();
+  // C1/C3 (lib/recall-shown.mjs): the framing header and the full ACK directive once per thread.
+  // Same thread key as the cooldown; null without a session, which shows both every time.
+  const shownPath = recallShownPath(RUNTIME_DIR, dedupKey);
+  // Prepends the header when this thread has not had one, fills the directive slot, and records
+  // what was shown. `body` is everything but the header; `directiveAt(text)` builds the line
+  // that carries the directive, or is null when the block has none.
+  // `name` is the file the factual framing arm names; the lesson block passes its scrubbed `fname`.
+  const emitRecallBlock = (body, directiveAt = null, name = basename(filePath)) => {
+    const shown = readRecallShown(shownPath);
+    const plan = planRecallBlock(shown, { header: true, directive: Boolean(directiveAt) });
+    const lines = [...body];
+    if (directiveAt) {
+      lines.push(
+        directiveAt(
+          plan.directive === 'short' && ACTIVE_DIRECTIVE === ACK_DIRECTIVE
+            ? ACK_DIRECTIVE_SHORT
+            : ACTIVE_DIRECTIVE,
+        ),
+      );
+    }
+    if (plan.header) lines.unshift(recallFramingLine('PreToolUse', { sessionId, fname: name }));
+    queueHookContext('PreToolUse', lines.join('\n'));
+    flushHookStdout();
+    if (plan.next.header !== shown.header || plan.next.directive !== shown.directive) {
+      markRecallShown(shownPath, plan.next);
+    }
+  };
   if (isSessionScoped) {
     const entry = cooldown[filePath];
     if (entry) {
@@ -565,14 +602,11 @@ try {
       if (!isRead && wasReadMode && seenIds.length > 0 && !SALIENCE_LEGACY) {
         // Namespaced per table: a bare `#N` for an event id names a different memory.
         const idList = lessonIdTokens(seenIds, entry.obsIds).join(', ');
-        queueHookContext(
-          'PreToolUse',
-          [
-            recallFramingLine('PreToolUse', { sessionId, fname: basename(filePath) }),
-            `[mem] ⚠ Lessons ${idList} were shown when you Read ${basename(filePath)} — ${ACTIVE_DIRECTIVE}`,
-          ].join('\n'),
+        emitRecallBlock(
+          [],
+          (directive) =>
+            `[mem] ⚠ Lessons ${idList} were shown when you Read ${basename(filePath)} — ${directive}`,
         );
-        flushHookStdout();
         cooldown[filePath] = { ...entry, mode: 'edit' };
         writeCooldown(cooldownPath, cooldown, isSessionScoped);
       } else if (isRead && !REREAD_GUARD_OFF && typeof entry === 'object' && entry.reread) {
@@ -580,14 +614,7 @@ try {
         // nudge to reuse what's already in context. Read-only; never throws.
         const meta = readFileMeta(filePath);
         if (shouldWarnReread(entry.reread, meta ? meta.mtimeMs : null, isFullRead, REREAD_MIN_TOKENS)) {
-          queueHookContext(
-            'PreToolUse',
-            [
-              recallFramingLine('PreToolUse', { sessionId, fname: basename(filePath) }),
-              buildRereadWarning(basename(filePath), entry.reread.tokens),
-            ].join('\n'),
-          );
-          flushHookStdout();
+          emitRecallBlock([buildRereadWarning(basename(filePath), entry.reread.tokens)]);
           recordMetric(DATA_DIR, { event: 'reread_warn' }); // tier-1 firing counter (②)
         }
       }
@@ -869,15 +896,14 @@ try {
         via: viaBash ? 'bash' : 'tool',
       });
     }
-    const showFraming =
-      hasLessons || Boolean(fileIntelLine) || (!isRead && process.env.CLAUDE_MEM_PRETOOL_NUDGE === '1');
-    if (showFraming) {
-      // Framing line mirrors #7758 handoff-injection fix: without an explicit
-      // "this is context, the call continues" line, observed turn-end after Edit+reminder
-      // when the model misreads passive lesson context as a closing note. Two wordings
-      // run side by side per session — lib/recall-framing.mjs.
-      lines.push(recallFramingLine('PreToolUse', { sessionId, fname }));
-    }
+    // Framing line mirrors #7758 handoff-injection fix: without an explicit
+    // "this is context, the call continues" line, observed turn-end after Edit+reminder
+    // when the model misreads passive lesson context as a closing note. Wording:
+    // lib/recall-framing.mjs. emitRecallBlock prepends it to the FIRST block of a thread
+    // only (C1, lib/recall-shown.mjs): every later block still opens with its own `[mem]`
+    // line, and the thread has already been told what those are.
+    // The directive slot, filled by emitRecallBlock (full text once per thread, short after).
+    let directiveAt = null;
     // MED-1 (full audit 2026-07-16): defang the injection-block delimiters in
     // all DB/file-derived text before it enters additionalContext (which CC wraps
     // in <system-reminder>). Stored text is raw — a lesson/title/summary carrying
@@ -934,7 +960,7 @@ try {
           lines.push(
             `[mem] ⚠ #${bridged.id} → this edit must: ${neutralizeContextDelimiters(bridged.check)}. Confirm your new code satisfies it.`,
           );
-        else lines.push(`[mem] ⚠ Before this edit: ${ACTIVE_DIRECTIVE}`);
+        else directiveAt = (directive) => `[mem] ⚠ Before this edit: ${directive}`;
       }
     } else if (!isRead && process.env.CLAUDE_MEM_PRETOOL_NUDGE === '1') {
       // R-4: Edit/Write empty → short backfill reminder. OPT-IN (default off) as
@@ -948,16 +974,12 @@ try {
       //
       // Read never emitted this (passive). The cooldown write below still runs on
       // every branch, so Read→Edit dedup + cite-back lessonId tracking are intact.
-      // (Framing line already pushed above via showFraming.)
       lines.push(
         `[mem] No prior lessons for ${fname} — if you solve a non-obvious bug here, run: /lesson --file ${fname} "<root cause + fix>"`,
       );
     }
 
-    if (lines.length > 0) {
-      queueHookContext('PreToolUse', lines.join('\n'));
-      flushHookStdout();
-    }
+    if (lines.length > 0) emitRecallBlock(lines, directiveAt, fname);
     // Cooldown applies on ALL branches (including silent-Read) so subsequent
     // calls on the same file in the same session don't re-query — preserving
     // the per-filePath invariant that underpins Read→Edit dedup.

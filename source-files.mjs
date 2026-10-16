@@ -157,6 +157,7 @@ export const SOURCE_FILES = [
   'lib/hook-stdout.mjs',
   'lib/hook-text-cap.mjs',
   'lib/recall-framing.mjs',
+  'lib/recall-shown.mjs',
   // audit P0/P1: inter-process install lock + atomic config writes — imported by
   // install.mjs (settings.json + install lock) and hook-update.mjs (.claude.json
   // + auto-update lock). Must ship or a partial install/update skips them.

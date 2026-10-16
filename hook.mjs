@@ -175,6 +175,7 @@ import { gcOldMetricShards, recordMetric } from './lib/metrics.mjs';
 import { detectMemOverride } from './lib/mem-override.mjs';
 import { injectedIdsFileName, keyContextIdsFileName, readInjectedMarker } from './lib/injected-ids.mjs';
 import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-marker.mjs';
+import { RECALL_SHOWN_PREFIX, clearRecallShown } from './lib/recall-shown.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
 import { errorRecallSuppression } from './lib/error-recall-gate.mjs';
@@ -1871,7 +1872,8 @@ function gcStalePreRecallCooldowns() {
       const isInjectedMarker =
         name.startsWith('.claude-mem-injected-') ||
         name.startsWith('.claude-mem-keyctx-') || // D#123 Key Context marker — same per-session growth, same 24h GC
-        name.startsWith(BUGFIX_NUDGE_MARKER_PREFIX); // §9-B once-per-session nudge claim — same shape
+        name.startsWith(BUGFIX_NUDGE_MARKER_PREFIX) || // §9-B once-per-session nudge claim — same shape
+        name.startsWith(RECALL_SHOWN_PREFIX); // injection budget C1/C3 per-thread marker — same shape
       if (!isCooldown && !isInjectedMarker) continue;
       try {
         const p = join(RUNTIME_DIR, name);
@@ -3102,6 +3104,11 @@ async function handleSessionStart() {
   } catch {
     /* stdin unavailable — legacy behavior */
   }
+  // Injection budget C1/C3 (lib/recall-shown.mjs): the recall header and full directive are
+  // shown once per thread because the thread still holds the first copy. Compaction is when it
+  // stops holding it, so the main thread starts over. (A /clear rotates the session id, which
+  // starts over on its own; `resume` restores the transcript, copies included.)
+  if (startSource === 'compact' && ccSessionId) clearRecallShown(RUNTIME_DIR, ccSessionId);
 
   // Snapshot episode BEFORE flush for handoff extraction
   const episodeSnapshot = readEpisodeRaw();

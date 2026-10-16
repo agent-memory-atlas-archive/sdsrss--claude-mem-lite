@@ -16,6 +16,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { buildClaudeMdBlock, getDetailDoc } from '../adopt-content.mjs';
+import { ACK_DIRECTIVE, ACK_DIRECTIVE_SHORT } from '../lib/recall-shown.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = (rel) => readFileSync(join(REPO, rel), 'utf8');
@@ -34,11 +35,19 @@ describe('steering asks for a bare (#NN) tag and nothing else about memory', () 
     expect(doc).toMatch(/不要.*报告.*保存/);
   });
 
-  it('the default PreToolUse ack directive', () => {
-    const m = /const ACK_DIRECTIVE =\s*\n?\s*'([^']+)'/.exec(src('scripts/pre-tool-recall.js'));
-    expect(m, 'premise: ACK_DIRECTIVE is a single-quoted literal').not.toBeNull();
-    expect(m[1]).toMatch(/bare tag \(#NN\)/);
-    expect(m[1]).not.toMatch(/name its #NN once/);
+  it('the default PreToolUse ack directive, full and short', () => {
+    // The directive lives in lib/recall-shown.mjs since the injection-budget change (a thread
+    // gets the full text once, the short form after). Premise: the hook uses THAT constant,
+    // not a local copy this test would not see.
+    expect(src('scripts/pre-tool-recall.js')).toMatch(
+      /import \{[^}]*\bACK_DIRECTIVE\b[^}]*\} from '\.\.\/lib\/recall-shown\.mjs'/,
+    );
+    expect(src('scripts/pre-tool-recall.js')).not.toMatch(/const ACK_DIRECTIVE\b/);
+    expect(ACK_DIRECTIVE).toMatch(/bare tag \(#NN\)/);
+    expect(ACK_DIRECTIVE).not.toMatch(/name its #NN once/);
+    // The short form keeps the tag and adds no other memory chatter.
+    expect(ACK_DIRECTIVE_SHORT).toMatch(/\(#NN\) only where one changes it/);
+    expect(ACK_DIRECTIVE_SHORT).not.toMatch(/n\/a|applied|save|memory/i);
   });
 });
 

@@ -1541,8 +1541,72 @@ describe('pre-tool-recall', () => {
       expect(ctx).toContain(ACK_MARK);
       // Compact nudge — must NOT re-emit the lesson body (token cost stays one line).
       expect(ctx).not.toContain('recover orphaned children');
-      // #7758 framing guard: still announces itself as system-injected continuation.
-      expect(ctx).toMatch(/system-injected|notes recorded by claude-mem-lite/); // either arm, lib/recall-framing.mjs
+      // #7758 framing guard, per THREAD since injection budget C1 (lib/recall-shown.mjs): the
+      // Read above was this thread's first block and carried the header, so the nudge does not.
+      expect(ctx).not.toMatch(/system-injected|notes recorded by claude-mem-lite/);
+      // ...and the directive is the thread's first, so it is the full text.
+      expect(ctx).toContain(ACK_MARK);
+    });
+
+    // Injection budget C1/C3: the header and the full directive once per thread.
+    describe('once per thread (injection budget C1/C3)', () => {
+      const HEADER_RE = /system-injected|notes recorded by claude-mem-lite/; // either arm
+      const SHORT_MARK = 'tag rule as before';
+      // A second lesson-bearing file, so one thread can reach two directive blocks.
+      beforeEach(() => {
+        const db = new Database(join(tmpRoot, 'claude-mem-lite.db'));
+        insertObs(db, {
+          sessionId: 'mem-sal',
+          project: 'parent--saltest',
+          type: 'bugfix',
+          importance: 2,
+          title: 'second salience probe',
+          lessonLearned: 'flush the queue before closing the handle',
+          filesModified: `["${join(projectDir, 'other.mjs')}"]`,
+        });
+        db.close();
+      });
+      const edit = (file, session, extra = {}) =>
+        runScript(
+          { tool_name: 'Edit', tool_input: { file_path: join(projectDir, file) }, session_id: session },
+          envFor(extra),
+        ).then(({ stdout }) => JSON.parse(stdout).hookSpecificOutput.additionalContext);
+
+      it('first block: header + full directive; second block: neither, short directive, lessons intact', async () => {
+        const first = await edit('maintain.mjs', 'sess-once-1');
+        expect(first).toMatch(HEADER_RE);
+        expect(first).toContain(ACK_MARK);
+        const second = await edit('other.mjs', 'sess-once-1');
+        expect(second).not.toMatch(HEADER_RE);
+        expect(second).not.toContain(ACK_MARK);
+        expect(second).toContain(SHORT_MARK);
+        // The lesson rows themselves are untouched — that is what keeps the cite pairs.
+        expect(second).toContain('[mem] Lessons for other.mjs:');
+        expect(second).toContain('flush the queue before closing the handle');
+      });
+
+      it('another session starts over', async () => {
+        await edit('maintain.mjs', 'sess-once-2a');
+        const other = await edit('other.mjs', 'sess-once-2b');
+        expect(other).toMatch(HEADER_RE);
+        expect(other).toContain(ACK_MARK);
+      });
+
+      it('CLAUDE_MEM_RECALL_HEADER_ONCE=0 and CLAUDE_MEM_DIRECTIVE_ONCE=0 restore every-block text', async () => {
+        const off = { CLAUDE_MEM_RECALL_HEADER_ONCE: '0', CLAUDE_MEM_DIRECTIVE_ONCE: '0' };
+        await edit('maintain.mjs', 'sess-once-3', off);
+        const second = await edit('other.mjs', 'sess-once-3', off);
+        expect(second).toMatch(HEADER_RE);
+        expect(second).toContain(ACK_MARK);
+      });
+
+      it('a non-default salience arm keeps its full directive on every block', async () => {
+        const verdict = { CLAUDE_MEM_SALIENCE: 'verdict' };
+        await edit('maintain.mjs', 'sess-once-4', verdict);
+        const second = await edit('other.mjs', 'sess-once-4', verdict);
+        expect(second).toContain(VERDICT_OVERRIDE_MARK);
+        expect(second).not.toContain(SHORT_MARK);
+      });
     });
 
     // Pre-ship review P2-2: the `bridge` arm's fallback directive is the one its efficacy

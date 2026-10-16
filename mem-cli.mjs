@@ -239,7 +239,9 @@ async function cmdSearch(db, args, { llm } = {}) {
     fail(`[mem] Invalid --type "${type}". Valid: ${[...validObsTypes].join(', ')}`);
     return;
   }
-  const source = flags.source || null; // observations|sessions|prompts|events (null = all)
+  // observations|sessions|prompts|events (null = all). `get` spells them obs|session|prompt|event,
+  // and each command refused the other's spelling (E2E 2026-10-16); both are accepted here.
+  const source = flags.source ? (SEARCH_SOURCE_SPELLINGS[flags.source] ?? flags.source) : null;
   const project = flags.project ? resolveProject(db, flags.project) : null;
   const bounds = parseDateBounds(flags.from, flags.to, flags.since);
   if (!bounds.ok) {
@@ -924,7 +926,7 @@ function cmdGet(db, args) {
     .filter(Boolean);
 
   // Explicit --source overrides any prefix; otherwise each token's prefix routes individually.
-  const explicit = flags.source;
+  const explicit = flags.source ? (GET_SOURCE_SPELLINGS[flags.source] ?? flags.source) : flags.source;
   const validSources = new Set(['obs', 'session', 'prompt', 'event']);
   if (explicit && !validSources.has(explicit)) {
     fail(`[mem] Invalid --source "${explicit}". Use: obs, session, prompt, event`);
@@ -3716,6 +3718,14 @@ import { HOOK_TEXT_CAP } from './lib/hook-text-cap.mjs';
  * remembered to enumerate.
  */
 const ARGV_PARSED_COMMANDS = new Set(['adopt', 'unadopt', 'doctor', 'optimize']);
+// `search --source` and `get --source` name the same four record kinds in two spellings.
+const SEARCH_SOURCE_SPELLINGS = {
+  obs: 'observations',
+  session: 'sessions',
+  prompt: 'prompts',
+  event: 'events',
+};
+const GET_SOURCE_SPELLINGS = { observations: 'obs', sessions: 'session', prompts: 'prompt', events: 'event' };
 // Every flag adopt-cli.mjs reads (hasFlag) for the two commands that write into a repository.
 const WRITER_COMMAND_FLAGS = {
   adopt: ['--dry-run', '--all', '--status', '--disable', '--enable', '--force'],

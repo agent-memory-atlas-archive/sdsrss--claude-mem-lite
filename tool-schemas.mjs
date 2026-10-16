@@ -455,7 +455,9 @@ export const memMaintainSchema = {
     .preprocess(
       (v) =>
         Array.isArray(v)
-          ? v.map((g) => (Array.isArray(g) ? g.map((x) => (typeof x === 'string' ? parseInt(x, 10) : x)) : g))
+          ? v.map((g) =>
+              Array.isArray(g) ? g.map((x) => (typeof x === 'string' ? wholeIntOrRaw(x.trim()) : x)) : g,
+            )
           : v,
       z.array(z.array(z.number().int()).min(2)),
     )

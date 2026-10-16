@@ -466,6 +466,25 @@ describe('mem_maintain schema', () => {
       parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: [[1]] }).success,
     ).toBe(false);
   });
+
+  // E2E 2026-10-16 (MCP P2-7): string ids went through parseInt, so "10.9" merged #10 and
+  // "1e1" merged #1 — an unrelated row folded away. Whole-number strings still coerce.
+  it('coerces whole-number string ids and rejects any other string', () => {
+    const ok = parseSchema(memMaintainSchema, {
+      action: 'execute',
+      operations: ['dedup'],
+      merge_ids: [['9', ' 10 ']],
+    });
+    expect(ok.success).toBe(true);
+    expect(ok.data.merge_ids).toEqual([[9, 10]]);
+    for (const bad of ['10.9', '1e1', '7abc']) {
+      expect(
+        parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: [['9', bad]] })
+          .success,
+        bad,
+      ).toBe(false);
+    }
+  });
 });
 
 // ─── memBrowseSchema ─────────────────────────────────────────────────────────

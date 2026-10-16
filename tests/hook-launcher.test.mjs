@@ -282,6 +282,32 @@ describe('hook-launcher self-heal', () => {
     expect(existsSync(join(root, 'runtime', 'hook-launcher-broken'))).toBe(false);
   });
 
+  // Round 2 (install B1): the same, when the healed entry ends with process.exit(0) as hook.mjs
+  // does, and a hot-path fire had recorded the breakage before.
+  it('clears the markers when the healed entry exits, as hook.mjs does', () => {
+    const root = makeInstall('cml-launcher-heal-clears-exit');
+    writeFileSync(
+      join(root, 'install.mjs'),
+      `import { writeFileSync } from 'fs';\n` +
+        `import { join, dirname } from 'path';\n` +
+        `import { fileURLToPath } from 'url';\n` +
+        `const target = join(dirname(fileURLToPath(import.meta.url)), 'missing-local.mjs');\n` +
+        `writeFileSync(target, 'process.stdout.write("HEALED-OK\\\\n");\\nprocess.exit(0);\\n');\n` +
+        `process.exit(0);\n`,
+    );
+    writeFileSync(join(root, 'entry.mjs'), "import './missing-local.mjs';\n");
+    mkdirSync(join(root, 'runtime'), { recursive: true });
+    writeFileSync(
+      join(root, 'runtime', 'hook-launcher-broken'),
+      JSON.stringify({ reason: 'x', ts: Date.now() }),
+    );
+    const r = runLauncher(root, ['entry.mjs', 'session-start']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('HEALED-OK');
+    expect(existsSync(healMarker(root))).toBe(false);
+    expect(existsSync(join(root, 'runtime', 'hook-launcher-broken'))).toBe(false);
+  });
+
   // ── A20260905-R5-Q2: the hot path records and defers, it does not repair ──
 
   it('does NOT run install.mjs repair on the per-tool hot path — only session-start pays', () => {
@@ -382,6 +408,23 @@ describe('hook-launcher marker-driven self-heal (session-start)', () => {
     // cooldown armed (it, not the marker, is what bounds repair spawns).
     expect(waitFor(() => !existsSync(BROKEN(root)))).toBe(true);
     expect(existsSync(COOLDOWN(root))).toBe(true);
+  });
+
+  // E2E round 2 (install B1): hook.mjs ends with process.exit(0), and the launcher imports it
+  // in-process, so the post-entry heal never ran for the production session-start entry — the
+  // fixture above returns instead of exiting. A broken Read hook recorded its marker and no
+  // SessionStart ever repaired it, or cleared the marker once a manual repair had worked.
+  it('repairs when the entry ends with process.exit(0), as hook.mjs does', () => {
+    const root = makeInstall('cml-launcher-marker-heal-exit');
+    stubInstaller(root);
+    writeFileSync(join(root, 'entry.mjs'), 'process.stdout.write("ENTRY-OK\\n");\nprocess.exit(0);\n');
+    writeBroken(root);
+
+    const r = runLauncher(root, ['entry.mjs', 'session-start']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('ENTRY-OK');
+    expect(waitFor(() => existsSync(RAN(root)))).toBe(true);
+    expect(waitFor(() => !existsSync(BROKEN(root)))).toBe(true);
   });
 
   it('CONTROL: a healthy install spawns nothing at session-start', () => {
@@ -607,6 +650,25 @@ describe('hook-launcher native-binding self-heal (session-start)', () => {
         `mkdirSync(join(process.env.CLAUDE_MEM_DIR, 'runtime'), { recursive: true });\n` +
         `writeFileSync(join(process.env.CLAUDE_MEM_DIR, 'runtime', 'native-binding-broken'), JSON.stringify({ reason: 'abi', ts: Date.now() }));\n` +
         `process.stdout.write("ENTRY-OK\\n");\n`,
+    );
+
+    const r = runLauncher(root, ['entry.mjs', 'session-start']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('ENTRY-OK');
+    expect(waitFor(() => existsSync(RAN(root)))).toBe(true);
+  });
+
+  it('heals after an entry that ends with process.exit(0), as hook.mjs does', () => {
+    const root = makeInstall('cml-launcher-nb-postentry-exit');
+    stubInstaller(root);
+    writeFileSync(
+      join(root, 'entry.mjs'),
+      `import { writeFileSync, mkdirSync } from 'fs';\n` +
+        `import { join } from 'path';\n` +
+        `mkdirSync(join(process.env.CLAUDE_MEM_DIR, 'runtime'), { recursive: true });\n` +
+        `writeFileSync(join(process.env.CLAUDE_MEM_DIR, 'runtime', 'native-binding-broken'), JSON.stringify({ reason: 'abi', ts: Date.now() }));\n` +
+        `process.stdout.write("ENTRY-OK\\n");\n` +
+        `process.exit(0);\n`,
     );
 
     const r = runLauncher(root, ['entry.mjs', 'session-start']);

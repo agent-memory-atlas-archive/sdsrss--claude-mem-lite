@@ -2457,7 +2457,12 @@ async function doctor() {
   // Per runtime root, like the binding check: importing the SDK into THIS process answered for
   // the tree doctor runs from, not the one the MCP server starts from (E2E 2026-10-16).
   const sdkProbes = probeRuntimeRootsSdk(shape.runtimeRoots);
-  const brokenSdk = sdkProbes.filter((r) => !r.ok);
+  const brokenSdk = sdkProbes.filter((r) => !r.ok && !r.pending);
+  for (const p of sdkProbes.filter((r) => r.pending)) {
+    dwarn(
+      `@modelcontextprotocol/sdk: not installed yet in ${p.label} — its MCP server installs its dependencies on first start`,
+    );
+  }
   if (sdkProbes.length === 0) {
     // No runtime root at all: the better-sqlite3 line above already failed; ask this tree.
     try {
@@ -2468,9 +2473,11 @@ async function doctor() {
       issues++;
     }
   } else if (brokenSdk.length === 0) {
-    ok(
-      `@modelcontextprotocol/sdk: verified in ${sdkProbes.length} install${sdkProbes.length === 1 ? '' : 's'} (${sdkProbes.map((r) => r.label).join('; ')})`,
-    );
+    const verified = sdkProbes.filter((r) => r.ok);
+    if (verified.length > 0)
+      ok(
+        `@modelcontextprotocol/sdk: verified in ${verified.length} install${verified.length === 1 ? '' : 's'} (${verified.map((r) => r.label).join('; ')})`,
+      );
   } else {
     for (const b of brokenSdk) {
       fail(`@modelcontextprotocol/sdk unusable in ${b.label}: ${b.error} — its MCP server cannot start`);

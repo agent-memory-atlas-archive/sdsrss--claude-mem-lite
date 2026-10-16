@@ -643,6 +643,20 @@ describe('doctor: the MCP SDK is checked in each code home', () => {
     expect(sdk.length, r.stdout).toBe(1);
     expect(sdk[0]).toMatch(/managed install/);
     expect(r.stdout).toMatch(/repair: cd .*\.claude-mem-lite && npm install --omit=dev/);
+    // The probe's own referrer is no part of the user's install (E2E round 2, install B10).
+    expect(sdk[0]).not.toMatch(/\[eval1\]/);
+  });
+
+  // Round 2 (install B10): Claude Code materialises each new plugin cache version without
+  // node_modules, and scripts/launch.mjs installs them on the MCP server's first start. The SDK
+  // line called that "cannot start" and added a third ✗ for the one missing directory.
+  it('a plugin cache version not yet provisioned is not an SDK failure', () => {
+    makePluginVersion('9.9.9', { deps: 'none' });
+    enablePlugin();
+    const r = run('doctor', { CLAUDE_MEM_DIR: join(home, 'data') });
+    const sdkFails = failLines(r.stdout).filter((l) => l.includes('@modelcontextprotocol/sdk'));
+    expect(sdkFails, r.stdout).toEqual([]);
+    expect(r.stdout).toMatch(/@modelcontextprotocol\/sdk: not installed yet in .*first start/);
   });
 
   it('a managed install with the SDK is green', () => {

@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { makeFixtureTracker } from './test-helpers.mjs';
+import { HOOK_DB_BUSY_TIMEOUT_MS, UPS_DB_BUSY_TIMEOUT_MS } from '../lib/time-constants.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOST_TIMEOUT_MS = 5000; // hooks.json: user-prompt, stop, post-tool-failure, pre-compact
@@ -50,26 +51,63 @@ beforeAll(() => {
   };
   delete env.CLAUDE_MEM_HOOK_RUNNING;
   hook('session-start', { source: 'startup' }, 20000);
-  // A lesson the prompt below finds, so "context still reaches the model" has something to show.
-  const saved = spawnSync(
-    process.execPath,
-    [
-      join(REPO, 'cli.mjs'),
-      'save',
-      '--type',
-      'bugfix',
-      '--importance',
-      '2',
-      '--title',
-      'invoice totals reduce crashed on undefined lines',
-      '--lesson',
-      'Default invoice lines to an empty array before reduce so totals never crash',
-      'The invoice totals reduce threw a TypeError when lines was undefined.',
-    ],
-    { env, cwd: projectDir, encoding: 'utf8' },
-  );
-  expect(saved.status, saved.stderr).toBe(0);
+  // Lessons the prompt below finds, so "context still reaches the model" has something to show,
+  // and more than one of them (D#382): each row a face injects is one more best-effort write
+  // after the lock wait ran out, and with a single row the cut-off of the later waits could not
+  // be told from waiting on each. The unrelated rows keep the matching terms rare enough to pass
+  // the 2 s face's BM25 floor; with only the three invoice rows it injected none.
+  for (const [title, lesson] of [...INVOICE_LESSONS, ...UNRELATED_LESSONS]) {
+    const saved = spawnSync(
+      process.execPath,
+      [
+        join(REPO, 'cli.mjs'),
+        'save',
+        '--type',
+        'bugfix',
+        '--importance',
+        '2',
+        '--title',
+        title,
+        '--lesson',
+        lesson,
+        `${title}: ${lesson}.`,
+      ],
+      { env, cwd: projectDir, encoding: 'utf8' },
+    );
+    expect(saved.status, saved.stderr).toBe(0);
+  }
 });
+
+const INVOICE_LESSONS = [
+  [
+    'invoice totals reduce crashed on undefined lines',
+    'Default invoice lines to an empty array before reduce so totals never crash',
+  ],
+  [
+    'invoice totals reduce drifted on float lines',
+    'Sum invoice lines in integer cents before reduce so totals never drift',
+  ],
+  [
+    'invoice totals reduce skipped discount lines',
+    'Filter invoice lines by kind before reduce so totals never skip discounts',
+  ],
+];
+const UNRELATED_LESSONS = [
+  [
+    'docker compose network timed out on startup',
+    'Raise the healthcheck interval so compose waits for the database',
+  ],
+  [
+    'redis pool leaked connections under load',
+    'Release redis clients in a finally block after every command',
+  ],
+  ['css grid overflowed on narrow screens', 'Use minmax with zero so grid tracks can shrink below content'],
+  ['jwt refresh failed after expiry', 'Refresh the token before expiry with a sixty second margin'],
+  ['kafka consumer lagged behind producers', 'Raise max poll records and commit offsets asynchronously'],
+  ['postgres vacuum left table bloat', 'Schedule vacuum analyze nightly on the hot tables'],
+];
+/** How many of the invoice lessons a hook's output carries (the 2 s face cuts lessons, not titles). */
+const injectedCount = (stdout) => INVOICE_LESSONS.filter(([title]) => stdout.includes(title)).length;
 
 function hook(event, payload, timeout = HOST_TIMEOUT_MS) {
   const t0 = Date.now();
@@ -120,10 +158,11 @@ async function underLock(fn) {
 const PROMPT = 'invoice totals reduce crashed again on undefined lines';
 
 describe('a hook under a write lock held past its host timeout', () => {
-  it('without a lock, the prompt finds the lesson (premise)', () => {
+  it('without a lock, the prompt finds the lessons (premise)', () => {
     const r = hook('user-prompt', { session_id: 'cc-premise', prompt: PROMPT });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('Default invoice lines to an empty array');
+    expect(injectedCount(r.stdout), 'premise: more than one row is injected').toBeGreaterThan(1);
   });
 
   it('UserPromptSubmit exits inside its timeout and still injects the memory it found', async () => {
@@ -132,18 +171,26 @@ describe('a hook under a write lock held past its host timeout', () => {
     expect(r.status).toBe(0);
     expect(r.ms).toBeLessThan(HOST_TIMEOUT_MS);
     expect(r.stdout).toContain('Default invoice lines to an empty array');
+    // One lock wait (the prompt row), and none for the writes behind each injected row: a wait
+    // per row ran 1.5 s + 3 x 1.5 s here, past the host's 5 s.
+    expect(injectedCount(r.stdout)).toBeGreaterThan(1);
+    expect(r.ms).toBeLessThan(2 * HOOK_DB_BUSY_TIMEOUT_MS);
   });
 
   it('the 2 s prompt search exits inside its timeout and still injects', async () => {
-    // Premise first, without a lock: this session's prompt finds the lesson on this face too.
+    // Premise first, without a lock: this session's prompt finds the lessons on this face too.
     const free = hook('ups', { session_id: 'cc-ups-premise', prompt: PROMPT }, UPS_TIMEOUT_MS);
-    expect(free.stdout).toContain('Default invoice lines to an empty array');
-    // Its per-row injection_count bumps waited 5 s each under the lock.
+    expect(free.stdout).toContain('invoice totals reduce crashed on undefined lines');
+    expect(injectedCount(free.stdout), 'premise: more than one row is injected').toBeGreaterThan(1);
+    // Its per-row injection_count bumps waited 5 s each under the lock; now the first bump that
+    // runs out of its wait ends them, so the lock costs one wait however many rows were shown.
     const r = await underLock(() => hook('ups', { session_id: 'cc-ups', prompt: PROMPT }, UPS_TIMEOUT_MS));
     expect(r.signal, `killed at the host timeout after ${r.ms} ms`).toBeNull();
     expect(r.status).toBe(0);
     expect(r.ms).toBeLessThan(UPS_TIMEOUT_MS);
-    expect(r.stdout).toContain('Default invoice lines to an empty array');
+    expect(r.stdout).toContain('invoice totals reduce crashed on undefined lines');
+    expect(injectedCount(r.stdout)).toBeGreaterThan(1);
+    expect(r.ms).toBeLessThan(2 * UPS_DB_BUSY_TIMEOUT_MS);
   });
 
   it('Stop exits inside its timeout', async () => {

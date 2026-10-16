@@ -47,7 +47,8 @@ import { getDeferredByIds } from '../lib/deferred-work.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 import { isSchemaSkewError, schemaSkewFromError, shouldRecordSkew } from '../lib/schema-skew.mjs';
 
-import { DAY_MS } from '../lib/time-constants.mjs';
+import { DAY_MS, UPS_DB_BUSY_TIMEOUT_MS } from '../lib/time-constants.mjs';
+import { isDbBusyError } from '../lib/db-busy.mjs';
 import { envNumber } from '../lib/env-number.mjs';
 import { writePlainHookText, resetPlainHookText, idsShownWhole } from '../lib/hook-text-cap.mjs';
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -1151,9 +1152,12 @@ async function main() {
       // rows have "P<id>" string IDs; skip those — they live in user_prompts).
       // Per-row try/catch: observations_au trigger reinserts FTS on any UPDATE
       // (project_non_obvious.md); an FTS corruption on one row must not abort
-      // counter bumps for other rows.
+      // counter bumps for other rows. A lock held by another process is different: it holds
+      // for every row, and this hook's host timeout is 2 s, so the bumps wait
+      // UPS_DB_BUSY_TIMEOUT_MS, and the first one that runs out ends them (F9).
       if (bookedRows.length > 0) {
         try {
+          db.pragma(`busy_timeout = ${UPS_DB_BUSY_TIMEOUT_MS}`);
           const now = Date.now();
           const bumpStmt = db.prepare(
             'UPDATE observations SET injection_count = COALESCE(injection_count, 0) + 1, last_injected_at = ? WHERE id = ?',
@@ -1161,7 +1165,9 @@ async function main() {
           for (const r of bookedRows) {
             try {
               bumpStmt.run(now, r.id);
-            } catch {}
+            } catch (e) {
+              if (isDbBusyError(e)) break;
+            }
           }
         } catch {}
       }

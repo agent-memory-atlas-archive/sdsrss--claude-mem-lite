@@ -151,6 +151,8 @@ export const SOURCE_FILES = [
   'lib/install-shape.mjs',
   'lib/schema-skew.mjs',
   'lib/db-unusable.mjs',
+  // SQLITE_BUSY classifier — imported by hook-shared.mjs and scripts/user-prompt-search.js.
+  'lib/db-busy.mjs',
   'lib/record-once.mjs',
   // Single-envelope stdout for hook processes — imported by hook.mjs. Claude Code
   // parses hook stdout as ONE JSON document; missing from the manifest → an updated

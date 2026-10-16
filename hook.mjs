@@ -98,6 +98,7 @@ import {
   createSessionId,
   recordHandoffWriter,
   liveOtherHostHandoffIds,
+  setHookDbBusyTimeout,
   openDb,
   spawnBackground,
   sweepOrphanEpisodeFiles,
@@ -255,7 +256,8 @@ async function loadCacheGuard() {
 //     risk than the milliseconds are worth.
 import { SKIP_TOOLS, SKIP_PREFIXES } from './skip-tools.mjs';
 
-import { DAY_MS } from './lib/time-constants.mjs';
+import { DAY_MS, HOOK_DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
+import { isDbBusyError } from './lib/db-busy.mjs';
 import { workerDirGone } from './lib/worker-data-dir.mjs';
 import { claudeConfigDir } from './lib/data-paths.mjs';
 // Prevent recursive hooks from background claude -p calls
@@ -281,6 +283,18 @@ const BG_EVENTS = new Set([
   'enrich-save',
   'update-check',
 ]);
+
+// The events hooks.json runs under a 5 s timeout. Their DB waits get HOOK_DB_BUSY_TIMEOUT_MS
+// instead of the 5 s every other opener uses, so a lock held past 5 s fails the write inside the
+// hook rather than getting the hook killed with its output (E2E 2026-10-16 F9).
+const FIVE_SECOND_HOOK_EVENTS = new Set([
+  'user-prompt',
+  'stop',
+  'post-tool-use',
+  'post-tool-failure',
+  'pre-compact',
+]);
+if (FIVE_SECOND_HOOK_EVENTS.has(event)) setHookDbBusyTimeout(HOOK_DB_BUSY_TIMEOUT_MS);
 
 // Respect Claude Code plugin disable state even when legacy settings.json hooks remain.
 // install.mjs writes direct hooks into ~/.claude/settings.json, so disabling the plugin
@@ -3915,14 +3929,22 @@ async function handleUserPrompt() {
 
   try {
     const now = new Date();
-    const { promptNumber, ccSessionId } = recordUserPromptRow(db, {
-      sessionId,
-      project,
-      promptText,
-      hookData,
-      now,
-    });
-    injectHandoffIfEarly(db, { project, promptText, promptNumber, ccSessionId });
+    let recorded = null;
+    try {
+      recorded = recordUserPromptRow(db, { sessionId, project, promptText, hookData, now });
+    } catch (e) {
+      // Another process holds the write lock past HOOK_DB_BUSY_TIMEOUT_MS (F9). The prompt row is
+      // lost either way; what is left is the context that does not depend on it. Stop waiting
+      // for this lock, so each best-effort write below fails at once instead of waiting again.
+      if (!isDbBusyError(e)) throw e;
+      debugLog('WARN', 'user-prompt', 'database locked by another process; prompt not recorded');
+      db.pragma('busy_timeout = 0');
+    }
+    const ccSessionId =
+      typeof hookData.session_id === 'string' && hookData.session_id.length > 0 ? hookData.session_id : null;
+    // The handoff phase needs the row: it counts this session's prompts, and an injected handoff
+    // must be stamped consumed or the next prompt injects it again.
+    if (recorded) injectHandoffIfEarly(db, { project, promptText, ...recorded });
     await injectSemanticMemory(db, { project, promptText, ccSessionId });
   } finally {
     db.close();

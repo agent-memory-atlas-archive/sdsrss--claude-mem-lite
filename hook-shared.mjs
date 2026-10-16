@@ -608,11 +608,27 @@ export function lastDbUnusable() {
   return lastUnusable;
 }
 
+// The busy timeout every connection openDb() hands out in this process; null keeps
+// ensureDb's DB_BUSY_TIMEOUT_MS. Set once, by hook.mjs, for the hook events the host kills at a
+// fixed timeout (setHookDbBusyTimeout).
+let hookBusyTimeoutMs = null;
+
+/**
+ * Give every connection this process opens through openDb() a busy timeout of `ms` (E2E
+ * 2026-10-16 F9: a 5 s wait in a hook the host kills at 5 s never fails inside the hook).
+ *
+ * @param {number} ms
+ */
+export function setHookDbBusyTimeout(ms) {
+  hookBusyTimeoutMs = Math.max(0, Math.floor(ms));
+}
+
 export function openDb() {
   try {
     // WAL-corruption self-heal (was server.mjs-only): without it, hooks stayed
     // silently dead (null DB) on a corrupt WAL until the next MCP server start.
     const db = ensureDbWithWalRecovery();
+    if (hookBusyTimeoutMs !== null) db.pragma(`busy_timeout = ${hookBusyTimeoutMs}`);
     lastSkew = null;
     lastUnusable = false;
     return db;

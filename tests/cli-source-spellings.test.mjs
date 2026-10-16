@@ -127,6 +127,27 @@ describe('a value that starts with --', () => {
   });
 });
 
+// Round 3 (data SB-3): 41f00b7a fixed the zero-width title on save only; update, defer add and
+// activity save still stored one, and U+00AD (soft hyphen) was not in the stripped set.
+describe('an invisible title is refused or replaced on every writer', () => {
+  const ZW = '\u200b';
+  it('update --title <zero width> is refused', () => {
+    const r = cli('update', '1', '--title', ZW);
+    expect(r.status).toBe(1);
+  });
+  it('defer add <zero width> is refused', () => {
+    expect(cli('defer', 'add', ZW).status).toBe(1);
+  });
+  it('activity save --title <zero width> is refused', () => {
+    expect(cli('activity', 'save', '--title', ZW, '--body', 'zw body').status).toBe(1);
+  });
+  it('save --title <soft hyphen> takes the title from the content', () => {
+    const r = cli('save', 'Soft hyphen probe body about lighthouses', '--title', '\u00ad', '--force');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/Soft hyphen probe body/);
+  });
+});
+
 // E2E 2026-10-16 (cli F16): `--` parsed as an empty-named flag, so text starting with `--` could
 // not be saved positionally.
 describe('a bare -- ends the options', () => {

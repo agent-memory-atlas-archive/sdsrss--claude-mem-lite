@@ -14,6 +14,7 @@ import {
   scrubSecrets,
   COMPRESSED_PENDING_PURGE,
 } from './utils.mjs';
+import { isBlankText } from './lib/blank-text.mjs';
 import { resolveProject } from './project-utils.mjs';
 // READ commands resolve the project DB-aware: a subdirectory whose own name holds no rows
 // falls back to the enclosing work-tree root, so `cd src/auth && … recent` reads what the
@@ -2132,7 +2133,7 @@ function cmdUpdate(db, args) {
   if (flags.title !== undefined) {
     // Reject empty title — clears the observation's identifier and would render it
     // as `(untitled)` in every listing. Almost always an accidental shell-stripped arg.
-    if (typeof flags.title === 'string' && flags.title.trim() === '') {
+    if (typeof flags.title === 'string' && isBlankText(flags.title)) {
       fail(
         '[mem] --title cannot be empty. Pass a non-empty string or omit the flag to leave the title unchanged.',
       );

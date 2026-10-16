@@ -14,6 +14,7 @@ import { resolveCliProject as cliProject } from '../lib/cli-project.mjs';
 import { parseArgs, out, fail, rejectBareStringFlags } from './common.mjs';
 import { parseIntFlag, isNumericToken } from '../lib/cli-flags.mjs';
 import { snapshotDb } from '../lib/db-backup.mjs';
+import { isBlankText } from '../lib/blank-text.mjs';
 
 function formatActivityResults(rows) {
   if (!rows || rows.length === 0) return '(no events)';
@@ -58,7 +59,7 @@ export async function cmdActivity(db, args) {
       return;
     }
     const title = flags.title || positional.join(' ').trim();
-    if (!title) {
+    if (isBlankText(title)) {
       fail('[mem] activity save: --title or positional text required');
       return;
     }

@@ -62,6 +62,7 @@ export const SOURCE_FILES = [
   'lib/data-paths.mjs',
   // npx detection shared by cli.mjs (no-command routing) and install.mjs (IS_NPX).
   'lib/npx-run.mjs',
+  'lib/blank-text.mjs',
   'lib/doctor-modes.mjs',
   // lib/ — statically imported by hook-llm.mjs (activity) + hook-handoff.mjs (git-state, task-reader);
   // dynamically imported by hook.mjs (startup-dashboard) + mem-cli.mjs (doctor-benchmark, plan-reader).

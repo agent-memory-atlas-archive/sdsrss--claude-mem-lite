@@ -4,6 +4,7 @@
 import { z } from 'zod';
 import { CLI_INVOKE } from './cli-path.mjs';
 import { OBS_TYPES } from './lib/obs-types.mjs';
+import { isBlankText } from './lib/blank-text.mjs';
 
 export const OBS_TYPE_ENUM = z.enum([...OBS_TYPES]);
 
@@ -524,7 +525,7 @@ export const memUpdateSchema = {
   // in every listing — reject here like the CLI does, instead of persisting it.
   title: z
     .string()
-    .refine((s) => s.trim() !== '', 'title cannot be empty')
+    .refine((s) => !isBlankText(s), 'title cannot be empty')
     .optional()
     .describe('New title'),
   // Reject empty content fields (parity with `title` above + cmdUpdate): an explicit
@@ -616,7 +617,7 @@ export const memDeferSchema = {
     .string()
     .min(1)
     .max(200)
-    .refine((s) => s.trim() !== '', 'title cannot be empty')
+    .refine((s) => !isBlankText(s), 'title cannot be empty')
     .describe('One-line subject of the deferred item'),
   priority: boundedInt(z.number().int().min(1).max(3))
     .optional()

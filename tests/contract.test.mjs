@@ -14,6 +14,8 @@ import {
   memOptimizeSchema,
   memRecallSchema,
   memBrowseSchema,
+  memUpdateSchema,
+  memDeferSchema,
 } from '../tool-schemas.mjs';
 
 // Helper: parse object against schema (Zod object from flat dict)
@@ -792,6 +794,14 @@ describe('array fields accept the serialised shapes their siblings accept', () =
     expect(parseSchema(memDeleteSchema, { ids: '[2,"#3"]', confirm: true }).data.ids).toEqual([2, 3]);
     expect(parseSchema(memDeleteSchema, { ids: ['1.5'], confirm: true }).success).toBe(false);
     expect(parseSchema(memDeleteSchema, { ids: '', confirm: true }).success).toBe(false);
+  });
+  // Round 3 (data SB-3): `trim() !== ''` let a zero-width title through.
+  it('mem_update and mem_defer refuse an invisible title', () => {
+    for (const t of ['\u200b', '\u00ad', ' \ufeff ']) {
+      expect(parseSchema(memUpdateSchema, { id: 1, title: t }).success, JSON.stringify(t)).toBe(false);
+      expect(parseSchema(memDeferSchema, { title: t }).success, JSON.stringify(t)).toBe(false);
+    }
+    expect(parseSchema(memDeferSchema, { title: 'real' }).success).toBe(true);
   });
   // Round 2 (data S5): merge_ids was the one array argument left out.
   it('merge_ids: a JSON-array string', () => {

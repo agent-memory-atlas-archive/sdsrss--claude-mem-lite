@@ -74,6 +74,17 @@ describe('the idle GC passes skip explicit saves', () => {
     db.close();
   });
 
+  // Round 2 (data S8): decay is the one GC step explicit saves still take, and `maintain scan`
+  // did not forecast it ("Decayed 2" from an execute the preview never mentioned).
+  it('maintenanceStats: the decay forecast counts what the decay pass lowers', () => {
+    const { db, manual, hook } = seed();
+    db.prepare('UPDATE observations SET importance = 3 WHERE id IN (?, ?)').run(manual, hook);
+    const stats = maintenanceStats(db, ctx);
+    expect(stats.decayable).toBe(2);
+    expect(decayAndMarkIdle(db, ctx).decayed).toBe(stats.decayable);
+    db.close();
+  });
+
   it('maintenanceStats: the stale forecast counts what the hide pass hides', () => {
     const { db } = seed();
     const stats = maintenanceStats(db, ctx);

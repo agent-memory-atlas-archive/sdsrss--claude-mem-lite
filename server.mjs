@@ -1654,6 +1654,7 @@ server.registerTool(
         `  Near-duplicate pairs: ${duplicates.length}`,
         `  Stale (>30d, imp=1, no access, never injected): ${stats.stale}`,
         `  Broken (no title/narrative): ${stats.broken}`,
+        `  Decayable (imp>1, never accessed or injected, past the stale age): ${stats.decayable}`,
         `  Boostable (accessed>3, imp<3): ${stats.boostable}`,
         formatHiddenLine(stats.hidden),
         formatPendingPurgeLine(stats.pendingPurge),

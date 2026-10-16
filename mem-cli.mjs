@@ -2701,6 +2701,7 @@ function cmdMaintain(db, args) {
     out(`  Near-duplicate pairs: ${duplicates.length}`);
     out(`  Stale (>30d, imp=1, no access, never injected): ${stats.stale}`);
     out(`  Broken (no title/narrative): ${stats.broken}`);
+    out(`  Decayable (imp>1, never accessed or injected, past the stale age): ${stats.decayable}`);
     out(`  Boostable (accessed>3, imp<3): ${stats.boostable}`);
     out(
       `  Pinned-but-uncited (inj>=${PINNED_INJ_THRESHOLD}, cited=0, above floor): ${stats.pinned} — floored by the default maintain set since v3.76.0, no lesson → 1, lesson → 2 (opt out: CLAUDE_MEM_SKIP_DEMOTE_PINNED=1)`,

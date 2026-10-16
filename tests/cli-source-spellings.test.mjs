@@ -65,6 +65,22 @@ describe('timeline takes a lone id positional as the anchor', () => {
   });
 });
 
+// Round 2 (data R1): the lone-id anchor looked the id up in every project, so `timeline 1
+// --project app-b` centred on another project's #1 and showed app-b rows around it, where it
+// used to search app-b for "1". An id outside --project is not the anchor; it stays a query.
+describe('a lone id positional outside --project stays a query', () => {
+  it('timeline 1 --project app-b centres on an app-b row', () => {
+    expect(
+      cli('save', 'Beta retries 1 time on HTTP 503 from payments', '--project', 'app-b', '--force').status,
+    ).toBe(0);
+    const r = cli('timeline', '1', '--project', 'app-b', '--json');
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.anchor?.title).toMatch(/Beta retries/);
+    expect(out.anchor?.id).not.toBe(1);
+  });
+});
+
 // E2E 2026-10-16 (cli F16): `--` parsed as an empty-named flag, so text starting with `--` could
 // not be saved positionally.
 describe('a bare -- ends the options', () => {

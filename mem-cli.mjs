@@ -1117,7 +1117,9 @@ function cmdTimeline(db, args) {
   // A lone positional that names a record (`timeline 12`, `timeline #12`, `timeline E#3`) is the
   // anchor the user meant: it used to go to the query search, which answered "No anchor found
   // for \"12\"" with #12 right there (E2E 2026-10-16). Only when it resolves; otherwise it stays
-  // a query, so a search for a number still works.
+  // a query, so a search for a number still works. Under --project it must also resolve INSIDE
+  // that project: the id lookup spans every project, so `timeline 3 --project app-b` centred on
+  // another project's #3 where it used to search app-b for "3" (E2E round 2, data R1).
   if (
     (!anchorId || isNaN(anchorId)) &&
     flags.query === undefined &&
@@ -1125,7 +1127,12 @@ function cmdTimeline(db, args) {
     parseIdToken(positional[0])
   ) {
     const resolved = resolveAnchorToken(db, positional[0], { project });
-    if (resolved.ok) {
+    const inScope =
+      resolved.ok &&
+      (!project ||
+        db.prepare('SELECT project FROM observations WHERE id = ?').get(resolved.anchorId)?.project ===
+          project);
+    if (inScope) {
       anchorId = resolved.anchorId;
       anchorNote = resolved.anchorNote;
     }

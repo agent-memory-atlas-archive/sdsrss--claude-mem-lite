@@ -1466,7 +1466,8 @@ describe('CLI delete command', () => {
 
   it('handles invalid ID strings', async () => {
     const output = await captureStdout(() => run(['delete', 'abc']));
-    expect(output).toContain('No valid IDs');
+    // Names the token since E2E 2026-10-16 round 2 (was "No valid IDs provided").
+    expect(output).toContain('not an observation id: abc');
   });
 
   it('cleans related_ids references on delete', async () => {

@@ -13,6 +13,7 @@ import { resolveProject } from '../project-utils.mjs';
 import { resolveCliProject as cliProject } from '../lib/cli-project.mjs';
 import { parseArgs, out, fail, rejectBareStringFlags } from './common.mjs';
 import { parseIntFlag, isNumericToken } from '../lib/cli-flags.mjs';
+import { snapshotDb } from '../lib/db-backup.mjs';
 
 function formatActivityResults(rows) {
   if (!rows || rows.length === 0) return '(no events)';
@@ -205,6 +206,9 @@ export async function cmdActivity(db, args) {
       return;
     }
 
+    // A pre-image first, as deleteObservations takes for observations (E2E 2026-10-16 round 2:
+    // this hard delete had none). Best-effort; outside the transaction (VACUUM INTO).
+    snapshotDb(db, { tag: 'pre-delete' });
     // The opt-in search telemetry keeps a title per returned result; an explicit delete drops the
     // deleted events' titles, as lib/delete-core.mjs does for observations (D#245 N6).
     const result = db.transaction(() => {

@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
@@ -137,5 +137,30 @@ describe('activity subcommands and delete wording', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).not.toMatch(/every row/);
     expect(r.stderr).toMatch(/ids/);
+  });
+});
+
+// Round 2 (data S6): the two delete faces disagreed on a typo and on the backup.
+describe('delete and activity delete agree', () => {
+  it('delete 1,2x --confirm deletes nothing (activity delete already refused the batch)', () => {
+    const r = cli('delete', '1,2x', '--confirm');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/2x/);
+    expect(r.stderr).toMatch(/nothing was deleted/);
+    expect(liveCount()).toBe(3);
+  });
+  it('delete E#1 points at activity delete', () => {
+    const r = cli('delete', 'E#1', '--confirm');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/activity delete/);
+  });
+  it('activity delete --confirm leaves a pre-delete snapshot, as delete does', () => {
+    expect(cli('activity', 'save', '--type', 'bug', 'Doomed event', '--body', 'x').status).toBe(0);
+    const h = db();
+    const id = h.prepare("SELECT id FROM events WHERE title = 'Doomed event'").get().id;
+    h.close();
+    expect(cli('activity', 'delete', String(id), '--confirm').status).toBe(0);
+    const baks = readdirSync(join(root, 'data')).filter((f) => /\.pre-delete-.*\.bak$/.test(f));
+    expect(baks.length).toBeGreaterThan(0);
   });
 });

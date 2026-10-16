@@ -2022,16 +2022,20 @@ function cmdDelete(db, args) {
   if (nonObs.length > 0) {
     fail(
       `[mem] delete only works on observations. Rejected: ${nonObs.join(', ')}. ` +
-        `Prompts, sessions, and events are not deletable here — inspect with \`claude-mem-lite get P#N --source prompt\` / \`--source session\` / \`--source event\`.`,
+        `Delete an event with \`claude-mem-lite activity delete E#N --confirm\`. Prompts and sessions are not ` +
+        `deletable — inspect with \`claude-mem-lite get P#N --source prompt\` / \`--source session\`.`,
     );
     return;
   }
-  const ids = tokens
-    .map((t) => {
-      const p = parseIdToken(t);
-      return p && p.source === null ? p.id : NaN;
-    })
-    .filter((n) => !isNaN(n));
+  // Every token must be an observation id, or nothing is deleted: `delete 1,2x --confirm`
+  // deleted #1 and dropped `2x` without a word, where `activity delete` refuses the batch
+  // (E2E 2026-10-16 round 2).
+  const bad = tokens.filter((t) => parseIdToken(t)?.source !== null);
+  if (bad.length > 0) {
+    fail(`[mem] delete: not an observation id: ${bad.join(', ')} (use N or #N) — nothing was deleted`);
+    return;
+  }
+  const ids = tokens.map((t) => parseIdToken(t).id);
   if (ids.length === 0) {
     fail('[mem] No valid IDs provided');
     return;

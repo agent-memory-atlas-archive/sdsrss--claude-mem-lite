@@ -7,7 +7,7 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { isMemHook, stripMemHooks } from '../lib/hook-prune.mjs';
+import { isMemHook, stripMemHooks, pruneDanglingMemHooks } from '../lib/hook-prune.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -55,6 +55,53 @@ describe('isMemHook leaves user hooks that merely mention the product', () => {
     expect(isMemHook(mk('node "/home/me/src/claude-mem-lite-main/hook.mjs" stop'))).toBe(true); // zip checkout
     expect(isMemHook(mk('node "C:\\Users\\me\\.claude-mem-lite\\hook.mjs" stop'))).toBe(true);
     expect(isMemHook(mk('bash "/home/me/.claude-mem-lite/scripts/pre-tool-recall-bash.sh"'))).toBe(true);
+  });
+});
+
+// E2E round 2026-10-16 (install P1-2): three of the clauses were bare substrings —
+// `hook-launcher.mjs`, `scripts/post-tool-use.sh` and the two other prefilter names — so a
+// user's own formatter at ~/.claude/scripts/post-tool-use.sh or a Bash guard run through
+// their own hook-launcher.mjs was deleted by install, uninstall and cleanup-hooks, and by the
+// auto-update's dangling-hook prune, on a machine that had never installed the product.
+describe('isMemHook leaves user hooks that share a script NAME with ours', () => {
+  it('does not match a generic post-tool-use.sh or hook-launcher.mjs of the user', () => {
+    expect(isMemHook(mk('bash ~/.claude/scripts/post-tool-use.sh'))).toBe(false);
+    expect(isMemHook(mk('bash "/home/me/dotfiles/scripts/pre-tool-recall-bash.sh"'))).toBe(false);
+    expect(isMemHook(mk('bash /home/me/bin/scripts/pre-agent-inject.sh --strict'))).toBe(false);
+    expect(isMemHook(mk('node ~/.claude/hooks/hook-launcher.mjs guard-bash'))).toBe(false);
+    expect(isMemHook(mk('node "/opt/x/scripts/hook-launcher.mjs" lint --fix'))).toBe(false);
+  });
+  it('the dangling-hook prune keeps them too', () => {
+    const settings = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'Bash',
+            hooks: [{ type: 'command', command: 'node ~/.claude/hooks/hook-launcher.mjs guard-bash' }],
+          },
+        ],
+      },
+    };
+    const { settings: after, removed } = pruneDanglingMemHooks(settings, '/nonexistent-install');
+    expect(removed).toEqual([]);
+    expect(after.hooks.PreToolUse[0].hooks).toHaveLength(1);
+  });
+  it('still matches an install outside a claude-mem-lite directory', () => {
+    // Launcher commands carry our entry shape whatever the directory is called.
+    expect(isMemHook(mk('node "/data/mem/scripts/hook-launcher.mjs" hook.mjs session-start'))).toBe(true);
+    expect(isMemHook(mk('node "/data/mem/scripts/hook-launcher.mjs" scripts/pre-tool-recall.js'))).toBe(true);
+    // A prefilter is ours when our launcher sits beside it — every install ships both.
+    const root = mkdtempSync(join(tmpdir(), 'cml-reloc-'));
+    try {
+      mkdirSync(join(root, 'scripts'));
+      writeFileSync(join(root, 'scripts', 'hook-launcher.mjs'), '// stub');
+      writeFileSync(join(root, 'scripts', 'post-tool-use.sh'), '# stub');
+      expect(isMemHook(mk(`bash "${join(root, 'scripts', 'post-tool-use.sh')}"`))).toBe(true);
+      expect(isMemHook(mk(`bash "${join(root, 'scripts', 'pre-agent-inject.sh')}"`))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    expect(isMemHook(mk('bash "${CLAUDE_PLUGIN_ROOT}/scripts/post-tool-use.sh"'))).toBe(true);
   });
 });
 

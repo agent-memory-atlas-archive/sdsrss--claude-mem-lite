@@ -73,4 +73,31 @@ describe('PostToolUse past 256 KB still reaches the episode buffer', () => {
     expect(r.status).toBe(0);
     expect(JSON.stringify(buffer?.entries ?? [])).toContain('/tmp/org/proj/src/rates.js');
   }, 30000);
+
+  // Round 2 (hooks NEW-2): the salvaged entry read as a fact about the change — `big.txt: "" →
+  // ""`, `Created big.txt (0 chars)`, and a Bash entry with its command dropped although the
+  // command sits in the prefix. These lines go into the episode prompt.
+  it('a salvaged entry says it was not read, and keeps a Bash command', () => {
+    const write = postToolUse({
+      session_id: 'big-write',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/org/proj/big.txt', content: 'y'.repeat(9 * 1024 * 1024) },
+      tool_response: { filePath: '/tmp/org/proj/big.txt' },
+    });
+    const wDesc = (write.buffer?.entries ?? []).map((e) => e.desc).join(' | ');
+    expect(wDesc).toContain('big.txt');
+    expect(wDesc).not.toMatch(/0 chars/);
+    expect(wDesc).toMatch(/not read/);
+    const bash = postToolUse({
+      session_id: 'big-bash',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'cat /var/log/huge.log' },
+      tool_response: { stdout: 'z'.repeat(9 * 1024 * 1024), stderr: '' },
+    });
+    const bDesc = (bash.buffer?.entries ?? []).map((e) => e.desc).join(' | ');
+    expect(bDesc).toContain('cat /var/log/huge.log');
+    expect(bDesc).toMatch(/not read/);
+  }, 60000);
 });

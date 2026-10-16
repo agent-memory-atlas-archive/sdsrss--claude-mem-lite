@@ -38,6 +38,7 @@ import {
   isRelatedToEpisode,
   entryEditedFiles,
   makeEntryDesc,
+  truncate,
   scrubSecrets,
   stripPrivate,
   EDIT_TOOLS,
@@ -731,6 +732,9 @@ async function handlePostToolUse() {
   }
 
   let hookData;
+  // Set when the payload was cut short and only part of it was salvaged: the entry then says
+  // so, instead of describing a change from fields it never read.
+  let salvaged = false;
   try {
     hookData = JSON.parse(raw.text);
   } catch {
@@ -749,9 +753,20 @@ async function handlePostToolUse() {
       };
     } else {
       const m = raw.text.match(/"tool_name"\s*:\s*"([^"]+)"/);
-      if (m) hookData = { tool_name: m[1], tool_input: {}, tool_response: '(truncated)' };
+      // A Bash command sits ahead of its output in the payload, so the prefix holds it.
+      // Bounded like salvageTruncatedHookEvent's path capture.
+      const c = raw.text.match(/"command"\s*:\s*"((?:[^"\\]|\\.){0,4096})"/);
+      let command;
+      try {
+        command = c ? JSON.parse(`"${c[1]}"`) : undefined;
+      } catch {
+        command = undefined;
+      }
+      if (m)
+        hookData = { tool_name: m[1], tool_input: command ? { command } : {}, tool_response: '(truncated)' };
     }
     if (!hookData) return;
+    salvaged = true;
   }
 
   const { tool_name, tool_input, tool_response } = hookData;
@@ -815,7 +830,13 @@ async function handlePostToolUse() {
   // need the full command and output, which the entry does not keep (D#69).
   const entry = {
     tool: tool_name,
-    desc: scrubSecrets(makeEntryDesc(tool_name, toolInput, resp, bashSig)),
+    // A salvaged entry read as a fact about the change (`Created big.txt (0 chars)`, `x: "" →
+    // ""`) in the episode prompt; it now says what is known (E2E 2026-10-16 round 2).
+    desc: scrubSecrets(
+      salvaged
+        ? `${tool_name} ${toolInput.command ? truncate(toolInput.command, 50) : basename(toolInput.file_path || '')} (payload over 8 MB, not read)`
+        : makeEntryDesc(tool_name, toolInput, resp, bashSig),
+    ),
     ...workerEntryFields(tool_name, toolInput, resp, {
       isError: bashSig?.isError || false,
       writesFiles: tool_name === 'Bash' && bashWrites.length > 0,

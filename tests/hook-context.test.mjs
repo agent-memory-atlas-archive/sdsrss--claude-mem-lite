@@ -1272,3 +1272,54 @@ describe('D#75: created_at_epoch ties break newest-id-first', () => {
     expect(out).not.toContain('Request: older tied request');
   });
 });
+
+// ─── Injection budget C4: the Recent table carries the newest 5 rows ─────────────────────
+//
+// On the frozen 52-session corpus (docs/audits/20261016-injection-budget-baseline.md) the
+// table cost 1.02 KB/session and its ids were cited 2 times in 498 (session, id) pairs. The
+// cap applies after the display sort, so it keeps the newest picks; the knapsack and its
+// budget are untouched. CLAUDE_MEM_STARTUP_RECENT_ROWS sets the cap, 0 hides the table.
+describe('buildSessionContextLines: Recent table row cap (injection budget C4)', () => {
+  let db;
+  const MINUTE = 60000; // minutes apart: the adaptive windows admit all eight
+  // Four types, two rows each: the knapsack keeps at most 3 rows of one type.
+  const TYPES = ['change', 'bugfix', 'decision', 'discovery'];
+  const saved = process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS;
+  beforeEach(() => {
+    db = createTestDb();
+    insertSession(db, { id: 'sess-cap', project: 'test' });
+    for (let i = 0; i < 8; i++) {
+      insertObs(db, {
+        sessionId: 'sess-cap',
+        project: 'test',
+        title: `row${i} title`,
+        epochOffset: -i * MINUTE,
+        type: TYPES[i % 4],
+      });
+    }
+  });
+  afterEach(() => {
+    db.close();
+    if (saved === undefined) delete process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS;
+    else process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS = saved;
+  });
+  const tableRows = (out) => out.split('\n').filter((l) => l.startsWith('| #'));
+
+  it('premise: the budget picks all 8', () => {
+    expect(selectWithTokenBudget(db, 'test', 2000).observations).toHaveLength(8);
+  });
+
+  it('renders the 5 newest by default', () => {
+    delete process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS;
+    const rows = tableRows(buildSessionContextLines(db, 'test'));
+    expect(rows).toHaveLength(5);
+    expect(rows.map((l) => l.match(/row(\d)/)[1])).toEqual(['0', '1', '2', '3', '4']);
+  });
+
+  it('CLAUDE_MEM_STARTUP_RECENT_ROWS raises the cap, and 0 hides the table', () => {
+    process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS = '12';
+    expect(tableRows(buildSessionContextLines(db, 'test'))).toHaveLength(8);
+    process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS = '0';
+    expect(buildSessionContextLines(db, 'test')).not.toMatch(/### Recent/);
+  });
+});

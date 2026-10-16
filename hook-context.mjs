@@ -46,6 +46,24 @@ import { inferProjectDir } from './project-utils.mjs';
 import { TYPE_QUALITY, TYPE_QUALITY_DEFAULT } from './scoring-sql.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
+import { envNumber } from './lib/env-number.mjs';
+
+/**
+ * How many rows the SessionStart `### Recent` table shows (injection budget C4). Read per call
+ * so the CLI `context` command and tests see the current env. 0 hides the table.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {number}
+ */
+export function recentTableRowCap(env = process.env) {
+  return envNumber(env.CLAUDE_MEM_STARTUP_RECENT_ROWS, {
+    name: 'CLAUDE_MEM_STARTUP_RECENT_ROWS',
+    defaultValue: 5,
+    min: 0,
+    integer: true,
+  });
+}
+
 /**
  * Compute adaptive recall time windows based on project activity velocity.
  * High activity -> shorter windows (recent data more relevant).
@@ -914,10 +932,15 @@ export function buildSessionContextLines(
   // already chosen, so the token budget and the row set are untouched (pinned by a case in
   // tests/hook-context.test.mjs). Tiebroken on id for the same reason D#9 gives — an
   // untiebroken tie flips direction, and two saves in one millisecond are common.
+  //
+  // Injection budget C4: the display is then cut to the newest `recentTableRowCap()` rows (5).
+  // The knapsack still picks as before; on the frozen 52-session corpus the table cost 1.02
+  // KB/session and its ids were cited 2 times in 498 (session, id) pairs
+  // (docs/audits/20261016-injection-budget-baseline.md).
   const obsLines = [];
-  const obsToShow = [...withFallbackTopUp(observations, fallbackObs)].sort(
-    (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id,
-  );
+  const obsToShow = [...withFallbackTopUp(observations, fallbackObs)]
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)
+    .slice(0, recentTableRowCap());
   if (obsToShow.length > 0) {
     const today = now.toISOString().slice(0, 10);
     obsLines.push(`### Recent (${today})`);

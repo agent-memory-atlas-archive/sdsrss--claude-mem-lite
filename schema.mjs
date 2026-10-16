@@ -1533,14 +1533,20 @@ export function rebuildFTS(db) {
 
 /**
  * Check FTS5 index integrity. Returns true if all indexes are healthy.
+ *
+ * `busy` = the check could not run because another connection holds the database (a hook in
+ * another session writing). That is not damage: every exception used to read "CORRUPT", so
+ * doctor rebuilt healthy indexes of a store that was merely in use (E2E 2026-10-16). Classified
+ * on err.code; the first busy table ends the check, since the rest would wait on the same lock.
  * @param {Database} db Opened database instance
- * @returns {{healthy: boolean, details: string[]}}
+ * @returns {{healthy: boolean, details: string[], busy: boolean}}
  */
 export function checkFTSIntegrity(db) {
   const FTS_TABLES = ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts'];
   const idRe = /^[a-z][a-z0-9_]*$/;
   const details = [];
   let healthy = true;
+  let busy = false;
   for (const fts of FTS_TABLES) {
     try {
       if (!idRe.test(fts)) {
@@ -1561,11 +1567,16 @@ export function checkFTSIntegrity(db) {
       db.exec(`INSERT INTO ${fts}(${fts}, rank) VALUES('integrity-check', 1)`);
       details.push(`${fts}: ok`);
     } catch (e) {
-      details.push(`${fts}: CORRUPT (${e.message})`);
       healthy = false;
+      if (/^SQLITE_(BUSY|LOCKED)/.test(e?.code ?? '')) {
+        details.push(`${fts}: not checked — the database is in use by another process (${e.message})`);
+        busy = true;
+        break;
+      }
+      details.push(`${fts}: CORRUPT (${e.message})`);
     }
   }
-  return { healthy, details };
+  return { healthy, details, busy };
 }
 
 export function ensureFTS(db, ftsName, tableName, columns) {

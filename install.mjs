@@ -2667,9 +2667,15 @@ async function doctor() {
             const rwDb = new Database(DB_PATH);
             rwDb.pragma('busy_timeout = 3000');
             try {
-              const { healthy, details } = checkFTSIntegrity(rwDb);
+              const { healthy, details, busy } = checkFTSIntegrity(rwDb);
               if (healthy) {
                 ok('FTS5 integrity: all indexes healthy');
+              } else if (busy) {
+                // In use is not damage: no rebuild, which would be a long write under the
+                // live hooks' feet (or fail on the same lock).
+                dwarn(
+                  'FTS5 integrity: not checked — the database is in use by another process (a hook or session writing). Run doctor again in a moment.',
+                );
               } else {
                 dwarn('FTS5 integrity issues detected:');
                 for (const d of details) log(`    ${d}`);

@@ -63,4 +63,32 @@ describe('a /clear handoff is delivered once', () => {
     const first = await hook('user-prompt', { session_id: 'c-new', prompt: 'continue' });
     expect(first).not.toContain('<session-handoff');
   }, 60000);
+
+  // Round 2 (hooks STILL-BROKEN-1): every Stop writes the session's `exit` handoff with the same
+  // state, and the first prompt after /clear picked THAT row (an exit row of another CC session),
+  // so the state still arrived twice. The case above never fired Stop before the /clear.
+  it('a Stop before the /clear does not bring the state back through the exit handoff', async () => {
+    await hook('session-start', { session_id: 'd-old', source: 'startup' });
+    await hook('user-prompt', {
+      session_id: 'd-old',
+      prompt: 'Fix the TANGO_ROUNDING bug in applyDiscount so totals are whole cents',
+    });
+    await hook('stop', { session_id: 'd-old' });
+    const start = await hook('session-start', { session_id: 'd-new', source: 'clear' });
+    expect(start, 'premise: the clear start renders the handoff').toContain('TANGO_ROUNDING');
+    const first = await hook('user-prompt', { session_id: 'd-new', prompt: 'continue' });
+    expect(first).not.toContain('TANGO_ROUNDING');
+  }, 60000);
+
+  it('control: after an /exit and a fresh start, "continue" still gets the exit handoff', async () => {
+    await hook('session-start', { session_id: 'e-old', source: 'startup' });
+    await hook('user-prompt', {
+      session_id: 'e-old',
+      prompt: 'Fix the TANGO_ROUNDING bug in applyDiscount so totals are whole cents',
+    });
+    await hook('stop', { session_id: 'e-old' });
+    await hook('session-start', { session_id: 'e-new', source: 'startup' });
+    const first = await hook('user-prompt', { session_id: 'e-new', prompt: 'continue' });
+    expect(first).toContain('TANGO_ROUNDING');
+  }, 60000);
 });

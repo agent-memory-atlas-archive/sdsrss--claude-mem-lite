@@ -711,6 +711,24 @@ export function detectContinuationIntent(db, promptText, project, currentCcSessi
   // `ok do it` after a `继续` injected (and consumed) a second, unrelated session's handoff,
   // and a session that had started a new task got yesterday's on a short follow-up.
   if (currentCcSessionId) {
+    // A session /clear started, whose SessionStart already delivered its own clear handoff
+    // (### Working State, consumed there), has been resumed. The cleared session's per-turn exit
+    // row holds the same state, and as an exit row of ANOTHER CC session it was picked for the
+    // first prompt, so the state arrived twice (E2E 2026-10-16 round 2). /compact keeps the CC
+    // session id, so a session with prompts before its clear row is not one of these.
+    const ownClear = db
+      .prepare(
+        `SELECT created_at_epoch FROM session_handoffs
+         WHERE project = ? AND type = 'clear' AND session_id = ? AND consumed_at IS NOT NULL`,
+      )
+      .get(project, currentCcSessionId);
+    if (
+      ownClear &&
+      !db
+        .prepare('SELECT 1 FROM user_prompts WHERE cc_session_id = ? AND created_at_epoch < ? LIMIT 1')
+        .get(currentCcSessionId, ownClear.created_at_epoch)
+    )
+      return false;
     const firstPromptAt = db
       .prepare('SELECT MIN(created_at_epoch) AS m FROM user_prompts WHERE cc_session_id = ?')
       .get(currentCcSessionId)?.m;

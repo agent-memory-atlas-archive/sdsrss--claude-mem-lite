@@ -111,6 +111,7 @@ import {
   resetFlagTracking,
   inertFilterFlags,
   inertFilterFlagNotice,
+  FILTER_FLAGS,
   OBS_TIME_FIELDS,
   formatObsFieldValue,
   obsFieldLabel,
@@ -3749,6 +3750,17 @@ const SEARCH_SOURCE_SPELLINGS = {
   event: 'events',
 };
 const GET_SOURCE_SPELLINGS = { observations: 'obs', sessions: 'session', prompts: 'prompt', events: 'event' };
+// The mutating runs of the maintenance commands and the filter flags each actually reads.
+const isTrue = (v) => v === true || v === 'true';
+const MUTATING_FILTER_READS = {
+  compress: { writes: ({ flags }) => isTrue(flags.execute), reads: ['project', 'age-days'] },
+  maintain: { writes: ({ positional }) => positional[0] === 'execute', reads: ['project'] },
+  optimize: {
+    writes: ({ flags }) => isTrue(flags.run) || isTrue(flags['run-all']),
+    reads: ['project', 'scope'],
+  },
+  delete: { writes: ({ flags }) => isTrue(flags.confirm), reads: [] },
+};
 // Every flag adopt-cli.mjs reads (hasFlag) for the two commands that write into a repository.
 const WRITER_COMMAND_FLAGS = {
   adopt: ['--dry-run', '--all', '--status', '--disable', '--enable', '--force'],
@@ -3820,6 +3832,31 @@ async function runDispatch(argv) {
           `${cmd} takes: ${writerFlags.join(' ')}`,
       );
       return;
+    }
+  }
+
+  // A mutating run refuses a filter flag it does not read BEFORE it writes. The after-the-fact
+  // notice ("the results above are UNFILTERED") came too late for these: `compress --execute
+  // --type change` had compressed every type, `maintain execute --type change` had decayed and
+  // hidden every type, and optimize (argv-parsed) said nothing (E2E 2026-10-16). A preview
+  // writes nothing and keeps the notice.
+  const mutating = MUTATING_FILTER_READS[cmd];
+  if (mutating) {
+    const parsed = parseArgs(cmdArgs);
+    if (mutating.writes(parsed)) {
+      const unread = Object.keys(parsed.flags).filter(
+        (f) => FILTER_FLAGS.has(f) && !mutating.reads.includes(f),
+      );
+      if (unread.length > 0) {
+        const names = unread.map((f) => `--${f}`).join(', ');
+        fail(
+          `[mem] ${cmd} does not filter on ${names} — nothing was changed, since the run would have acted on every row. ` +
+            (mutating.reads.length > 0
+              ? `It narrows by: ${mutating.reads.map((f) => `--${f}`).join(' ')}.`
+              : 'It takes no filter flags.'),
+        );
+        return;
+      }
     }
   }
 

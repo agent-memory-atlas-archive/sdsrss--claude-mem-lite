@@ -773,6 +773,26 @@ describe('array fields accept the serialised shapes their siblings accept', () =
       expect(parseSchema(memSaveSchema, { content: 'x', supersedes: blank }).success).toBe(false);
     }
   });
+  // Round 3 (data SB-1): a JSON-array string that parses to [] went the JSON branch and came
+  // back [], which for tasks means every task; main refused it.
+  it('a JSON string of an empty array is refused too', () => {
+    for (const empty of ['[]', ' [ ] ']) {
+      expect(parseSchema(memOptimizeSchema, { action: 'run', tasks: empty }).success).toBe(false);
+      expect(
+        parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: empty })
+          .success,
+      ).toBe(false);
+    }
+  });
+  // Round 3 (data NEW-4): mem_delete took digits only, the one id-list argument without #N or a
+  // JSON-array string.
+  it('mem_delete ids: #N and a JSON-array string', () => {
+    expect(parseSchema(memDeleteSchema, { ids: ['#2'], confirm: true }).data.ids).toEqual([2]);
+    expect(parseSchema(memDeleteSchema, { ids: '#2', confirm: true }).data.ids).toEqual([2]);
+    expect(parseSchema(memDeleteSchema, { ids: '[2,"#3"]', confirm: true }).data.ids).toEqual([2, 3]);
+    expect(parseSchema(memDeleteSchema, { ids: ['1.5'], confirm: true }).success).toBe(false);
+    expect(parseSchema(memDeleteSchema, { ids: '', confirm: true }).success).toBe(false);
+  });
   // Round 2 (data S5): merge_ids was the one array argument left out.
   it('merge_ids: a JSON-array string', () => {
     const r = parseSchema(memMaintainSchema, {

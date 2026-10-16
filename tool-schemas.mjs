@@ -57,12 +57,13 @@ const coerceBool = z.preprocess(
 // maxItems entirely — which on mem_delete, a DESTRUCTIVE tool, published "any number of
 // ids" against an enforced 1..50.
 const wholeIntOrRaw = (s) => (/^\d+$/.test(s) ? parseInt(s, 10) : s);
+// `#N` too, and the JSON-array string every other id list takes: mem_delete was the one that
+// refused both, so an id copied from a listing cost a -32602 round trip (E2E 2026-10-16 round 3).
+const obsIdOrRaw = (s) => (/^#?\d+$/.test(s) ? parseInt(s.replace(/^#/, ''), 10) : s);
 const boundedIntArray = (bounded) =>
-  z.preprocess((v) => {
-    if (Array.isArray(v)) return v.map((x) => (typeof x === 'string' ? wholeIntOrRaw(x.trim()) : x));
-    if (typeof v === 'number') return [v];
-    if (typeof v === 'string') return v.split(',').map((s) => wholeIntOrRaw(s.trim()));
-    return v;
+  z.preprocess((raw) => {
+    const v = asArrayOrRaw(raw);
+    return Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? obsIdOrRaw(x.trim()) : x)) : v;
   }, bounded);
 
 // Coerce string arrays: accept array, comma-separated string, JSON-array string, or bare string.
@@ -102,7 +103,9 @@ const asArrayOrRaw = (v) => {
     if (s.startsWith('[') && s.endsWith(']')) {
       try {
         const parsed = JSON.parse(s);
-        if (Array.isArray(parsed)) return parsed;
+        // An empty one stays a string, like a blank string below: `tasks: "[]"` ran every
+        // optimize task (E2E 2026-10-16 round 3).
+        if (Array.isArray(parsed)) return parsed.length > 0 ? parsed : v;
       } catch {
         /* fall through to comma-split */
       }

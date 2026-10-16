@@ -19,6 +19,13 @@ function formatActivityResults(rows) {
   return rows.map((r) => `#${r.id} [${r.event_type}] ${r.title}`).join('\n');
 }
 
+/** An event id as typed: N, #N or E#N (the form search and get print), else null. */
+function eventIdOf(token) {
+  const m = /^(?:[Ee]#?|#)?(\d+)$/.exec(String(token).trim());
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 export async function cmdActivity(db, args) {
   const sub = args[0];
   if (!sub) {
@@ -126,9 +133,11 @@ export async function cmdActivity(db, args) {
   }
 
   if (sub === 'show') {
-    const id = positional.length > 0 ? parseInt(positional[0], 10) : NaN;
-    if (!Number.isFinite(id)) {
-      fail('[mem] activity show: numeric id required');
+    const id = positional.length > 0 ? eventIdOf(positional[0]) : null;
+    if (id === null) {
+      fail(
+        `[mem] activity show: an event id is required (N, #N or E#N)${positional[0] ? `, got "${positional[0]}"` : ''}`,
+      );
       return;
     }
     const row = getEvent(db, id);
@@ -153,12 +162,20 @@ export async function cmdActivity(db, args) {
       fail('[mem] Usage: claude-mem-lite activity delete <id1,id2,...> [--confirm]');
       return;
     }
-    const ids = idStr
+    const tokens = idStr
       .split(',')
       .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => parseInt(s, 10))
-      .filter((n) => Number.isInteger(n) && n > 0);
+      .filter(Boolean);
+    // Every token must be an id, or nothing is deleted: `2x` used to parseInt to 2 and delete
+    // a row the caller never named (E2E 2026-10-16).
+    const bad = tokens.filter((t) => eventIdOf(t) === null);
+    if (bad.length > 0) {
+      fail(
+        `[mem] activity delete: not an event id: ${bad.join(', ')} (use N, #N or E#N) — nothing was deleted`,
+      );
+      return;
+    }
+    const ids = [...new Set(tokens.map(eventIdOf))];
     if (ids.length === 0) {
       fail('[mem] activity delete: no valid IDs provided (must be positive integers)');
       return;

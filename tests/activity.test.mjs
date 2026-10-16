@@ -276,6 +276,31 @@ describe('cmdActivity CLI: --type validation', () => {
     }
   });
 
+  // E2E 2026-10-16 (cli F7): ids went through bare parseInt, so `activity delete 2x --confirm`
+  // deleted #2 and `activity show 3abc` showed #3, while the E#N form search and get print was
+  // refused. Ids are now N, #N or E#N exactly; anything else is named and nothing happens.
+  test('activity show/delete take E#N and refuse a malformed id', () => {
+    setupDir();
+    try {
+      const { id } = JSON.parse(
+        runCli(['activity', 'save', '--type', 'bug', 'bug number one']).stdout.trim(),
+      );
+      const show = runCli(['activity', 'show', `E#${id}`]);
+      expect(show.exitCode).toBe(0);
+      expect(show.stdout).toContain('bug number one');
+      expect(runCli(['activity', 'show', `${id}abc`]).exitCode).not.toBe(0);
+      const typo = runCli(['activity', 'delete', `${id}x`, '--confirm']);
+      expect(typo.exitCode).not.toBe(0);
+      expect(typo.stderr).toContain(`${id}x`);
+      expect(runCli(['activity', 'show', String(id)]).exitCode).toBe(0); // still there
+      const del = runCli(['activity', 'delete', `E#${id}`, '--confirm']);
+      expect(del.exitCode).toBe(0);
+      expect(del.stdout).toContain('Deleted 1 event');
+    } finally {
+      teardownDir();
+    }
+  });
+
   test('activity delete --confirm executes and removes the row', () => {
     setupDir();
     try {
@@ -389,7 +414,8 @@ describe('cmdActivity CLI: --type validation', () => {
     try {
       const r = runCli(['activity', 'delete', 'abc,-5,0']);
       expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain('no valid IDs');
+      // Every bad token is named now, not just "no valid IDs" (E2E 2026-10-16).
+      expect(r.stderr).toContain('not an event id: abc, -5, 0');
     } finally {
       teardownDir();
     }

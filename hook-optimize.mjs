@@ -19,7 +19,7 @@ import {
   estimateJaccardFromMinHash,
   jaccardSimilarity,
   clampImportance,
-  cjkBigrams,
+  cjkIndexTerms,
   notLowSignalTitleClause,
   scrubSecrets,
   getCurrentBranch,
@@ -348,7 +348,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           continue;
         }
         const searchAliases = aliasArr.slice(0, 6).join(' ');
-        const aliasBigrams = cjkBigrams(searchAliases);
+        const aliasBigrams = cjkIndexTerms(searchAliases);
         const appendedText = [cand.text || '', searchAliases, aliasBigrams].filter(Boolean).join(' ');
         const safe = scrubRecord('observations', { text: appendedText, search_aliases: searchAliases });
         // scope rides this call for free (D#135 P3). COALESCE, not a plain set:
@@ -427,7 +427,7 @@ facts: 1-4 specific, checkable statements the narrative actually asserts. Omit r
           cand.text || '',
           conceptsOnly,
           factsOnly,
-          cjkBigrams(`${conceptsOnly} ${factsOnly}`),
+          cjkIndexTerms(`${conceptsOnly} ${factsOnly}`),
         ]
           .filter(Boolean)
           .join(' ');
@@ -618,7 +618,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // 0 keeps the stored value in the MAX below (an explicit save's own, see `type` above).
       const modelImportance = manualSave ? 0 : clampImportance(parsed.importance);
 
-      const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
+      const bigramText = cjkIndexTerms((title || '') + ' ' + (narrative || ''));
       const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');
       const minhashSig = computeMinHash((title || '') + ' ' + (narrative || ''));
 
@@ -1338,7 +1338,7 @@ Return ONLY valid JSON:
       lessonLearned = scrubSecrets(parsed.merged_lesson).slice(0, 500);
     }
 
-    const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
+    const bigramText = cjkIndexTerms((title || '') + ' ' + (narrative || ''));
     const textField = [conceptsText, factsText, bigramText].filter(Boolean).join(' ');
     const minhashSig = computeMinHash((title || '') + ' ' + (narrative || ''));
     // An importance a person set on the keeper stays (D10); the UPDATE decides that on the row as
@@ -1650,7 +1650,7 @@ export async function executeSmartCompressCluster(db, observations, project) {
       ? parsed.search_aliases.slice(0, 6).join(' ')
       : null;
 
-    const bigramText = cjkBigrams((title || '') + ' ' + (narrative || ''));
+    const bigramText = cjkIndexTerms((title || '') + ' ' + (narrative || ''));
     const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');
 
     const epochs = observations.map((o) => o.created_at_epoch).sort((a, b) => a - b);

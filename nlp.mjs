@@ -68,18 +68,61 @@ export function cjkBigrams(text) {
   return [...new Set(tokens)].join(' ');
 }
 
+const HAN_CHAR = /[\u4e00-\u9fff\u3400-\u4dbf]/; // the range cjkBigrams segments
+// The widest unicode61 token: letters, numbers, private use, plus events_fts's '_-' tokenchars.
+const UNICODE61_TOKEN = /[\p{L}\p{N}\p{Co}_-]+/gu;
+// An ASCII identifier or number inside a token; '_' and '-' only between two alphanumerics.
+const ASCII_RUN = /[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?/g;
+
 /**
- * The extra terms events_fts indexes for an event (its `search_terms` column): the CJK
- * segmentation of title + body, i.e. what observations append to their indexed `text`.
- * Without it an event matched a CJK query only when the query equalled a whole CJK run,
- * because unicode61 stores a run as one token while the query side reduces CJK to words and
- * bigrams. '' for an event with no CJK, so English events index nothing extra.
+ * The ASCII runs glued to CJK in `text` that no other token of `text` already carries:
+ * `修复了redis连接池泄漏` yields `redis`. unicode61 indexes that whole mixed run as ONE token and
+ * cjkBigrams only segments its CJK, so without these the row is unreachable by `redis`.
+ * Runs shorter than two characters are skipped (a lone `5` or `A` matches noise), and a run
+ * that also stands alone elsewhere in `text` is skipped because the index already holds it,
+ * which also makes appending the result idempotent.
+ * @param {string} text
+ * @returns {string} space-separated runs, '' when there are none
+ */
+export function gluedAsciiRuns(text) {
+  if (!text || !HAN_CHAR.test(text)) return '';
+  const tokens = String(text).match(UNICODE61_TOKEN) || [];
+  const standalone = new Set(tokens.filter((t) => !HAN_CHAR.test(t)).map((t) => t.toLowerCase()));
+  const runs = new Map();
+  for (const tok of tokens) {
+    if (!HAN_CHAR.test(tok)) continue;
+    for (const run of tok.match(ASCII_RUN) || []) {
+      const key = run.toLowerCase();
+      if (run.length >= 2 && !standalone.has(key) && !runs.has(key)) runs.set(key, run);
+    }
+  }
+  return [...runs.values()].join(' ');
+}
+
+/**
+ * The terms a writer appends next to a row's indexed text so the index holds what the query
+ * side produces: the CJK segmentation (cjkBigrams) plus the ASCII runs glued to CJK
+ * (gluedAsciiRuns). Every writer that appended cjkBigrams appends this instead; '' for text
+ * with no CJK, so English rows are unchanged.
+ * @param {string} text
+ * @returns {string}
+ */
+export function cjkIndexTerms(text) {
+  return [cjkBigrams(text), gluedAsciiRuns(text)].filter(Boolean).join(' ');
+}
+
+/**
+ * The extra terms events_fts indexes for an event (its `search_terms` column): the index terms
+ * of title + body, i.e. what observations append to their indexed `text`. Without it an event
+ * matched a CJK query only when the query equalled a whole CJK run, because unicode61 stores a
+ * run as one token while the query side reduces CJK to words and bigrams. '' for an event with
+ * no CJK, so English events index nothing extra.
  * @param {string|null} title
  * @param {string|null} body
  * @returns {string}
  */
 export function eventSearchTerms(title, body) {
-  return cjkBigrams(`${title || ''} ${body || ''}`);
+  return cjkIndexTerms(`${title || ''} ${body || ''}`);
 }
 
 // ─── CJK Keyword Extraction ─────────────────────────────────────────────────

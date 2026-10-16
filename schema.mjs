@@ -7,7 +7,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
-import { eventSearchTerms } from './nlp.mjs';
+import { eventSearchTerms, gluedAsciiRuns } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
@@ -1245,6 +1245,39 @@ const DEFERRED_CLEANUPS = [
           }
         }
       }
+    },
+  },
+  {
+    // d366: the writers now append the ASCII runs glued to CJK (nlp.mjs gluedAsciiRuns —
+    // `修复了redis连接池泄漏` yields `redis`) next to the CJK bigrams, because unicode61 indexes
+    // the whole mixed run as one token and the row was unreachable by its Latin part. This
+    // fills the rows written before that. Observations get only the runs no column of the row
+    // already carries as a standalone token, appended in SQL so a concurrent rewrite of `text`
+    // is never overwritten with a stale copy; a re-run finds each appended run standing alone
+    // and adds nothing. Events get search_terms recomputed where it differs, which also fills
+    // rows a pre-d366 build wrote with NULL. Not liveness-filtered: an index term on a hidden
+    // row is inert, and a row restored later is then already right.
+    name: 'backfill-glued-ascii-runs',
+    run: (db) => {
+      const obsRows = db
+        .prepare(
+          `SELECT id, ${OBS_FTS_COLUMNS.map((c) => `COALESCE(${c}, '')`).join(` || ' ' || `)} AS doc
+             FROM observations`,
+        )
+        .all();
+      const appendObs = db.prepare(`UPDATE observations SET text = COALESCE(text, '') || ? WHERE id = ?`);
+      const eventRows = db.prepare(`SELECT id, title, body, search_terms FROM events`).all();
+      const setTerms = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ?`);
+      db.transaction(() => {
+        for (const r of obsRows) {
+          const runs = gluedAsciiRuns(r.doc);
+          if (runs) appendObs.run(` ${runs}`, r.id);
+        }
+        for (const e of eventRows) {
+          const terms = eventSearchTerms(e.title, e.body);
+          if (terms !== (e.search_terms ?? '')) setTerms.run(terms, e.id);
+        }
+      })();
     },
   },
 ];

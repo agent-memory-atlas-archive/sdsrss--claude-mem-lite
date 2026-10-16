@@ -13,7 +13,7 @@ import {
   scrubSecrets,
   computeMinHash,
   estimateJaccardFromMinHash,
-  cjkBigrams,
+  cjkIndexTerms,
   isEditEntry,
   splitEpisodeFiles,
   LOW_SIGNAL_TITLE,
@@ -243,7 +243,7 @@ function buildFtsTextField(obs) {
   const conceptsText = Array.isArray(obs.concepts) ? obs.concepts.join(' ') : '';
   const factsText = Array.isArray(obs.facts) ? obs.facts.join(' ') : '';
   const aliasesText = obs.searchAliases || '';
-  const bigramText = cjkBigrams((obs.title || '') + ' ' + (obs.narrative || ''));
+  const bigramText = cjkIndexTerms((obs.title || '') + ' ' + (obs.narrative || ''));
 
   // Degraded fallback: when LLM enrichment is missing, extract lightweight keywords
   // from title + narrative so degraded observations remain FTS-searchable

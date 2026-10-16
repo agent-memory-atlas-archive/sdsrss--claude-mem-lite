@@ -19,7 +19,10 @@ import { REPO, walkShipped, relShipped, sourceWithoutComments } from './shipped-
 const JS_OLD_SHAPE = /homedir\(\)\s*,\s*['"]\.claude(?:\.json)?['"]|join\(\s*home\s*,\s*['"]\.claude['"]/;
 // The resolver itself, and memdir.mjs's deliberate legacy fallback (an opt-out written under
 // ~/.claude before CLAUDE_CONFIG_DIR was honoured still holds; tests/local-steering pins it).
-const JS_ALLOWED = new Set(['lib/data-paths.mjs', 'memdir.mjs']);
+// scripts/hook-launcher.mjs may not import lib/ (its pure-node charter: it must start on a broken
+// install), so its disabled-plugin check spells the same rule inline; tests/launcher-plugin-
+// disabled.test.mjs pins it against CLAUDE_CONFIG_DIR.
+const JS_ALLOWED = new Set(['lib/data-paths.mjs', 'memdir.mjs', 'scripts/hook-launcher.mjs']);
 
 // `.claude` alone too (D#269: a default spelled as a bare dir slipped past `/` and `.json`), but
 // not the data dirs that only share the prefix (`.claude-mem-lite`, `.claude-mem`).

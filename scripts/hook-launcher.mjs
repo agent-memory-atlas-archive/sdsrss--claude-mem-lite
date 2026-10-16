@@ -187,6 +187,25 @@ function swapInProgress() {
 
 if (swapInProgress()) process.exit(0);
 
+// The plugin switched off in Claude Code. The host does not fire a disabled plugin's own hooks,
+// but the direct settings.json hook set install.mjs writes keeps firing, and hook.mjs was the
+// only entry that checked: the recall scripts behind this launcher kept injecting memory on
+// every prompt and before every Read and Edit for a plugin the user had switched off (E2E
+// 2026-10-16). Same file, key and fail-open as lib/plugin-key.mjs isPluginExplicitlyDisabled
+// and hook.mjs pluginDisabledHere — inline per the pure-node charter above.
+function pluginDisabled() {
+  try {
+    const d = process.env.CLAUDE_CONFIG_DIR;
+    const configHome = d && isAbsolute(d) ? d : join(homedir(), '.claude');
+    const settings = JSON.parse(readFileSync(join(configHome, 'settings.json'), 'utf8'));
+    return settings?.enabledPlugins?.['claude-mem-lite@sdsrss'] === false;
+  } catch {
+    return false; // missing or unparseable settings.json: not disabled (fail open)
+  }
+}
+
+if (pluginDisabled()) process.exit(0);
+
 async function runEntry({ bustCache = false } = {}) {
   // Mirror direct invocation: process.argv[1] is the entry, [2..] are its args.
   process.argv = [process.argv[0], entryAbs, ...rest];

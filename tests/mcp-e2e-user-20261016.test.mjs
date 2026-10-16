@@ -137,6 +137,25 @@ describe('a near-miss project name on a write', () => {
   });
 });
 
+// MCP P2-17: after a miss, the fallback listings showed other projects' rows as "the most recent"
+// (a type fallback drew decisions from four projects). They now list the current project.
+describe('the fallback listings after a miss stay in the current project', () => {
+  it('timeline with no anchor, and search with an obs_type fallback', async () => {
+    insertForeignRow('a--app', 'Own project row about cache warmup order');
+    insertForeignRow('z--elsewhere', 'Foreign project row about kafka offsets');
+    const tl = await call('mem_timeline', { query: 'qqqnomatchzz', before: 2, after: 2 });
+    expect(tl.text).toMatch(/No anchor found/);
+    expect(tl.text).toMatch(/in project "a--app"/);
+    expect(tl.text).not.toMatch(/z--elsewhere/);
+    withDb((db) =>
+      db.prepare("UPDATE observations SET type = 'decision' WHERE title LIKE '%project row about%'").run(),
+    );
+    const s = await call('mem_search', { query: 'zzqqnomatch', obs_type: 'decision', deep: false });
+    expect(s.text).toMatch(/most recent .* in project "a--app" instead/);
+    expect(s.text).not.toMatch(/z--elsewhere/);
+  });
+});
+
 describe('mem_optimize resolves a short project name like its sibling tools', () => {
   // Every other project-taking handler resolves `opt` to `b--opt`; mem_optimize passed the
   // raw string, so preview counted 0 candidates and `run` silently processed nothing.

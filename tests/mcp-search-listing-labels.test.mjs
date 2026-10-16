@@ -53,7 +53,9 @@ describe('mem_search never presents a listing as matches', () => {
     db.close();
     expect(res.results.map((r) => r.id).sort()).toEqual([1, 2]); // the fallback still lists
     expect(text(res)).not.toMatch(/Found \d+ result\(s\) for "segfault"/);
-    expect(text(res)).toMatch(/No match for "segfault" — the 2 most recent bugfix observation\(s\) instead/);
+    expect(text(res)).toMatch(
+      /No match for "segfault" — the 2 most recent bugfix observation\(s\) in project "p" instead/,
+    );
   });
 
   it('a real match under obs_type keeps the "Found … for" header', async () => {

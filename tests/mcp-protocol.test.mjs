@@ -428,7 +428,7 @@ describe('mem_timeline says when its query anchored nothing', () => {
     const text = textOf(res);
     expect(text).toMatch(/Timeline \(most recent \d+\)/); // premise: the fallback still ran
     expect(text).toMatch(
-      /No anchor found for "zzqqxxnomatch" — showing the most recent observations instead/,
+      /No anchor found for "zzqqxxnomatch" — showing the most recent observations in project "[^"]+" instead/,
     );
   });
 });

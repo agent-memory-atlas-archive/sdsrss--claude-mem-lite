@@ -1311,7 +1311,7 @@ The original called an LLM on every tool use with raw JSON inputs. claude-mem-li
 
 ### Does this work cross-project? Cross-machine?
 
-Project-scoped by default — each project has its own memory namespace. Single-machine only (SQLite, not networked). Use `mem_export` (JSON / JSONL) to back up or migrate between machines.
+Each memory belongs to the project it was saved in (an id like `parent--dir`). Search covers every project and ranks the current project's rows first; name a project (`project` on the MCP tools, `--project` on the CLI) to search only that one. `mem_recent` and the listings shown after a search or timeline miss use the current project. Single-machine only (SQLite, not networked). Use `mem_export` (JSON / JSONL) to back up or migrate between machines.
 
 ### What about privacy? Does it call external APIs?
 

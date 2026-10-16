@@ -8,6 +8,8 @@
 //     `NOT IN ('', 'none')` predicate used at ~8 sites → junk rows got a 1.3× boost.
 import { describe, it, expect } from 'vitest';
 import { handleSearchForTest } from '../server.mjs';
+// The fallback lists the current project unless one is named (MCP P2-17), so each call names the
+// fixture's project; what these cases pin (low-signal and branch filters) is unchanged.
 import { createTestDb, insertSession, insertObs } from './test-helpers.mjs';
 
 describe('R4 fix 10 — type-list fallback filters low-signal titles', () => {
@@ -29,7 +31,7 @@ describe('R4 fix 10 — type-list fallback filters low-signal titles', () => {
     const db = seed();
     const res = await handleSearchForTest(
       db,
-      { query: 'zzznomatchqqqxyz', obs_type: 'change', deep: false },
+      { query: 'zzznomatchqqqxyz', obs_type: 'change', project: 'p', deep: false },
       {},
     );
     const ids = (res.results || []).map((r) => r.id);
@@ -42,7 +44,7 @@ describe('R4 fix 10 — type-list fallback filters low-signal titles', () => {
     const db = seed();
     const res = await handleSearchForTest(
       db,
-      { query: 'zzznomatchqqqxyz', obs_type: 'change', deep: false, include_noise: true },
+      { query: 'zzznomatchqqqxyz', obs_type: 'change', project: 'p', deep: false, include_noise: true },
       {},
     );
     const ids = (res.results || []).map((r) => r.id);
@@ -83,7 +85,7 @@ describe('R11 — the type-list fallback honours the branch filter', () => {
     const db = seedBranches();
     const res = await handleSearchForTest(
       db,
-      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', branch: 'feature/x', deep: false },
+      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', branch: 'feature/x', project: 'p', deep: false },
       {},
     );
     const ids = (res.results || []).map((r) => r.id);
@@ -96,7 +98,7 @@ describe('R11 — the type-list fallback honours the branch filter', () => {
     const db = seedBranches();
     const res = await handleSearchForTest(
       db,
-      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', deep: false },
+      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', project: 'p', deep: false },
       {},
     );
     const ids = (res.results || []).map((r) => r.id);

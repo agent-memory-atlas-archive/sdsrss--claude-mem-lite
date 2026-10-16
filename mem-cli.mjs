@@ -1182,10 +1182,14 @@ function cmdTimeline(db, args) {
 
   // No anchor: show most recent observations (shared fallback with MCP mem_timeline)
   if (!anchorId || isNaN(anchorId)) {
+    // The current project unless one was named, like mem_timeline (MCP P2-17, E2E 2026-10-16).
+    const listProject = project || cliProject(db);
     if (queryStr) {
-      process.stderr.write(`[mem] No anchor found for "${queryStr}", showing recent timeline\n`);
+      process.stderr.write(
+        `[mem] No anchor found for "${queryStr}", showing the recent timeline of project "${listProject}"\n`,
+      );
     }
-    const rows = fetchRecentTimeline(db, { project, limit: before + after + 1 });
+    const rows = fetchRecentTimeline(db, { project: listProject, limit: before + after + 1 });
 
     if (jsonOutput) {
       out(
@@ -1202,11 +1206,11 @@ function cmdTimeline(db, args) {
     }
 
     if (rows.length === 0) {
-      out('[mem] No observations found.');
+      out(`[mem] No observations found in project "${listProject}".`);
       return;
     }
 
-    out(`[mem] Timeline (most recent ${rows.length}):`);
+    out(`[mem] Timeline (most recent ${rows.length}, project ${listProject}):`);
     for (const r of rows.reverse()) {
       const time = relativeTime(r.created_at_epoch);
       const title = truncate(r.title || r.subtitle || '(untitled)', 80);

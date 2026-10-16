@@ -86,7 +86,8 @@ describe('R11-A-P2-3 — retrieval-core ORDER BY is total under exact ties', () 
     const ids = seedObs(5);
     const res = await handleSearchForTest(
       db,
-      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', deep: false, limit: 3 },
+      // Names the fixture's project: the fallback lists the current project otherwise (MCP P2-17).
+      { query: 'zzznomatchqqqxyz', obs_type: 'bugfix', project: 'p', deep: false, limit: 3 },
       {},
     );
     expect((res.results || []).map((r) => r.id)).toEqual([ids[4], ids[3], ids[2]]);

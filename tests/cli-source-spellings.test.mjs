@@ -293,6 +293,16 @@ describe('a content writer refuses a flag it does not take, before writing', () 
   });
 });
 
+// MCP P2-17 on the CLI face: timeline's no-anchor fallback listed every project's rows.
+describe('timeline with no anchor lists the current project', () => {
+  it('and says which project it listed', () => {
+    expect(cli('save', 'Foreign timeline row about kafka', '--project', 'zz--elsewhere').status).toBe(0);
+    const r = cli('timeline', 'qqqnomatchzz');
+    expect(r.stderr).toMatch(/No anchor found .* project "w--p"/);
+    expect(r.stdout).not.toMatch(/Foreign timeline row/);
+  });
+});
+
 // E2E 2026-10-16 (cli F13): the section key was derived from the heading text, so the Recent
 // table's key carried today's date ("recent_(2026-10-16)") and changed every day.
 describe('context --json section keys are stable', () => {

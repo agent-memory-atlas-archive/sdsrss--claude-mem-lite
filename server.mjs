@@ -521,7 +521,7 @@ function formatSearchOutput(
   const what = args.obs_type ? `${args.obs_type} observation(s)` : 'row(s) matching the filters';
   const header =
     listing === 'type'
-      ? `No match for "${queryLabel(args.query)}" — the ${countLabel} most recent ${what} instead`
+      ? `No match for "${queryLabel(args.query)}" — the ${countLabel} most recent ${what} in project "${args.project || inferProject()}" instead`
       : listing === 'dropped'
         ? `Query "${queryLabel(args.query)}" was filtered (FTS5 keywords/special chars only) — the ${countLabel} most recent ${what} instead`
         : `Found ${countLabel} result(s)${qLabel}${fallbackHint}`;
@@ -1002,18 +1002,20 @@ server.registerTool(
       }
     }
 
-    // No anchor: return most recent
+    // No anchor: return most recent — of the current project unless one was named. Other
+    // projects' rows read as "the most recent" here (MCP P2-17, E2E 2026-10-16).
     if (!anchorId) {
-      const rows = fetchRecentTimeline(db, { project: args.project ?? null, limit: before + after + 1 });
+      const listProject = args.project ?? inferProject();
+      const rows = fetchRecentTimeline(db, { project: listProject, limit: before + after + 1 });
 
       if (rows.length === 0) {
-        return { content: [{ type: 'text', text: 'No observations found.' }] };
+        return { content: [{ type: 'text', text: `No observations found in project "${listProject}".` }] };
       }
 
       // A query that anchored nothing says so, as the CLI does: without it the recency window
       // read as the neighbourhood of what the caller asked about.
       const miss = args.query
-        ? `No anchor found for "${queryLabel(args.query)}" — showing the most recent observations instead.\n`
+        ? `No anchor found for "${queryLabel(args.query)}" — showing the most recent observations in project "${listProject}" instead.\n`
         : '';
       const lines = [`${miss}Timeline (most recent ${rows.length}):\n`];
       for (const r of rows.reverse()) {

@@ -110,6 +110,20 @@ describe('parseProposals — schema validation happens before anything reads the
   });
 });
 
+// E2E 2026-10-16 round 4 (data NEW-B): /verify was a seventh title writer, and an invisible
+// title passed its trim() check; a `replace` then wrote the change and reported a mismatch.
+describe('parseProposals refuses an invisible title', () => {
+  it('a title of format characters only is an error, before any write', () => {
+    for (const t of ['\u200b', '\u202e', '\u3164']) {
+      const { entries, errors } = parseProposals([
+        { id: 1, action: 'edit', verdict: 'STALE', set: { title: t }, evidence: 'x' },
+      ]);
+      expect(entries, JSON.stringify(t)).toEqual([]);
+      expect(errors.join('\n')).toMatch(/title must be a non-empty string/);
+    }
+  });
+});
+
 describe('planVerifyApply — every target is checked against the DB before a write', () => {
   let db;
   beforeEach(() => {

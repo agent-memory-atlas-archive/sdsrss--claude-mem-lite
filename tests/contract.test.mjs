@@ -797,7 +797,9 @@ describe('array fields accept the serialised shapes their siblings accept', () =
   });
   // Round 3 (data SB-3): `trim() !== ''` let a zero-width title through.
   it('mem_update and mem_defer refuse an invisible title', () => {
-    for (const t of ['\u200b', '\u00ad', ' \ufeff ']) {
+    // Round 4 (data S-1): the first list was hand-drawn; bidi controls, the Hangul filler,
+    // variation selectors and tag characters still passed.
+    for (const t of ['\u200b', '\u00ad', ' \ufeff ', '\u202e', '\u2066', '\u3164', '\ufe0f', '\u{E0041}']) {
       expect(parseSchema(memUpdateSchema, { id: 1, title: t }).success, JSON.stringify(t)).toBe(false);
       expect(parseSchema(memDeferSchema, { title: t }).success, JSON.stringify(t)).toBe(false);
     }

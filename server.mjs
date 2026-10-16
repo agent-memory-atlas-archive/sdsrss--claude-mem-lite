@@ -149,7 +149,7 @@ import {
   countStaleOpen,
   formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
-import { shouldQueueSaveEnrich, queueSaveEnrich } from './lib/save-enrich.mjs';
+import { saveEnrichNote } from './lib/save-enrich.mjs';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -1395,8 +1395,7 @@ server.registerTool(
     });
     // G1+G2: detached backfill worker (lesson for obligated types + aliases for
     // every save) — fill-only-empty, so an agent acting on the nudge still wins.
-    const enrichNote =
-      shouldQueueSaveEnrich(result) && queueSaveEnrich(result.id) ? ' (background enrichment queued)' : '';
+    const enrichNote = saveEnrichNote(result);
     // D#201: on its own line rather than inside the success sentence.
     const skipNote = formatSupersedeSkipped(result.supersedeSkipped);
     const savedText = `Saved as observation #${result.id} [${result.type}] in project "${project}".${lessonNote}${closedNote}${supersededNote}${enrichNote}${nudge}`;

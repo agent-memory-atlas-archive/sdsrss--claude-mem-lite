@@ -8,10 +8,18 @@
 // Historical failure class this guards: empty-overwrite / preserve-on-empty
 // (R4/R1 audits) — enrichment must NEVER replace content the caller (or a
 // concurrent optimize pass) already wrote.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createTestDb } from './test-helpers.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
-import { shouldQueueSaveEnrich, executeSaveEnrich, ENRICH_OBLIGATED_TYPES } from '../lib/save-enrich.mjs';
+import {
+  shouldQueueSaveEnrich,
+  saveEnrichNote,
+  executeSaveEnrich,
+  ENRICH_OBLIGATED_TYPES,
+} from '../lib/save-enrich.mjs';
 
 const PROJECT = 'enrich--test';
 
@@ -45,6 +53,45 @@ describe('shouldQueueSaveEnrich (trigger predicate)', () => {
   it('never queues dedup hits or missing results', () => {
     expect(shouldQueueSaveEnrich({ kind: 'dedup', id: 1 }, {})).toBe(false);
     expect(shouldQueueSaveEnrich(null, {})).toBe(false);
+  });
+});
+
+// E2E 2026-10-16 round 3 (NEW-5): under a project-level plugin disable the worker exits at once
+// (hook.mjs pluginDisabledHere reads the cwd project it inherits), yet both save faces printed
+// "(background enrichment queued)".
+describe('saveEnrichNote (what a save face says about enrichment)', () => {
+  const saved = { kind: 'saved', id: 7, type: 'bugfix', lessonCaptured: false };
+  let root;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'save-enrich-note-'));
+    mkdirSync(join(root, 'cfg'), { recursive: true });
+    mkdirSync(join(root, 'proj', '.claude'), { recursive: true });
+    vi.stubEnv('CLAUDE_CONFIG_DIR', join(root, 'cfg'));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const env = () => ({ CLAUDE_PROJECT_DIR: join(root, 'proj') });
+
+  it('a project-level disable queues nothing and says so', () => {
+    writeFileSync(
+      join(root, 'proj', '.claude', 'settings.local.json'),
+      JSON.stringify({ enabledPlugins: { 'claude-mem-lite@sdsrss': false } }),
+    );
+    const queued = [];
+    const note = saveEnrichNote(saved, env(), (id) => queued.push(id));
+    expect(queued).toEqual([]);
+    expect(note).not.toMatch(/queued/);
+    expect(note).toMatch(/disabled for this project/);
+  });
+  it('control: enabled, it queues and says queued', () => {
+    const queued = [];
+    expect(saveEnrichNote(saved, env(), (id) => queued.push(id) > 0)).toMatch(/background enrichment queued/);
+    expect(queued).toEqual([7]);
+  });
+  it('a gated save says nothing', () => {
+    expect(saveEnrichNote(saved, { ...env(), VITEST: 'true' }, () => true)).toBe('');
   });
 });
 

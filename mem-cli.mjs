@@ -183,7 +183,7 @@ import {
   countStaleOpen,
   formatDeferStaleHint,
 } from './lib/deferred-work.mjs';
-import { shouldQueueSaveEnrich, queueSaveEnrich } from './lib/save-enrich.mjs';
+import { saveEnrichNote } from './lib/save-enrich.mjs';
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
@@ -1429,8 +1429,7 @@ function cmdSave(db, args) {
   const supersededNote = formatSupersededNote(result);
   // G1+G2: detached backfill worker (lesson for obligated types + aliases for
   // every save) — fill-only-empty, so an agent acting on the nudge still wins.
-  const enrichNote =
-    shouldQueueSaveEnrich(result) && queueSaveEnrich(result.id) ? ' (background enrichment queued)' : '';
+  const enrichNote = saveEnrichNote(result);
   out(
     `[mem] Saved #${result.id} [${result.type}] "${truncate(result.title, 80)}" (project: ${result.project})${lessonNote}${closedNote}${supersededNote}${enrichNote}${buildLessonNudge({ type: result.type, id: result.id, lessonCaptured: result.lessonCaptured, surface: 'cli' })}`,
   );

@@ -114,6 +114,8 @@ describe('the other person-run writers wait too', () => {
       CLAUDE_CODE_PATH: join(dir, 'no-claude'),
     };
     delete env.CLAUDE_MEM_HOOK_RUNNING;
+    delete env.ANTHROPIC_API_KEY;
+    delete env.OPENROUTER_API_KEY;
     // A CLI save first: on a store only the helpers wrote, the same update waited (measured);
     // after one save through the CLI it failed in ~80 ms, as in real use.
     expect(

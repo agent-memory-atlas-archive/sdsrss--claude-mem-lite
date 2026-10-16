@@ -501,7 +501,12 @@ async function cmdSearch(db, args, { llm } = {}) {
         }),
       );
     } else {
-      out(`[mem] No results for "${queryLabel(query)}"`);
+      out(
+        ftsQuery
+          ? `[mem] No results for "${queryLabel(query)}"`
+          : // Deep search on operators or punctuation: the query itself was never searched.
+            `[mem] No results for "${queryLabel(query)}" — it has no searchable terms, and its deep rewrites found nothing`,
+      );
       emitRecallHint(db, query);
       // The zero-result path is where the trailer earns its keep — the D#92
       // failure chain was exactly "searched, found nothing, item was deferred".
@@ -3801,7 +3806,7 @@ const MUTATING_FILTER_READS = {
   // Subcommands are keyed `<command> <sub>`: keyed on `activity` alone, `activity promote
   // --execute --type lesson` promoted every event type and `activity delete N --confirm --project
   // P` deleted another project's event (E2E 2026-10-16 round 2).
-  'activity promote': { writes: ({ flags }) => isTrue(flags.execute), reads: ['project'] },
+  'activity promote': { writes: ({ flags }) => isTrue(flags.execute), reads: ['project', 'min-importance'] },
   'activity delete': { writes: ({ flags }) => isTrue(flags.confirm), reads: [], byId: true },
 };
 // Every flag adopt-cli.mjs reads (hasFlag) for the two commands that write into a repository.
@@ -3924,6 +3929,15 @@ async function runDispatch(argv) {
   // when a flag looks like a misspelling of a real one; stdout + exit code stay untouched,
   // so JSON/text consumers are unaffected. Mirrors the unknown-COMMAND suggester in cli.mjs.
   for (const { flag, suggestion, owner } of suggestUnknownFlags(parseArgs(cmdArgs).flags, cmd)) {
+    // No flag name holds a space: this is a value or text that starts with `-`, and "Unknown
+    // flag … ignored" before the refusal that follows contradicted it (E2E 2026-10-16 round 3).
+    if (/\s/.test(flag)) {
+      process.stderr.write(
+        `[mem] "--${flag}" was read as a flag. A value that starts with - is written --name="…"; ` +
+          `text that starts with - goes after a bare --: ${cmd} -- "…"\n`,
+      );
+      continue;
+    }
     process.stderr.write(
       owner
         ? `[mem] --${flag} is read only by ${owner}; ${cmd} does not read it.\n`

@@ -22,8 +22,12 @@ beforeAll(() => {
     CLAUDE_MEM_DIR: join(root, 'data'),
     CLAUDE_PROJECT_DIR: join(root, 'w', 'p'),
     MEM_NO_AUTO_ADOPT: '1',
+    // No LLM provider: save's enrichment and deep search must not reach a real one.
+    CLAUDE_CODE_PATH: join(root, 'no-claude'),
   };
   delete env.CLAUDE_MEM_HOOK_RUNNING;
+  delete env.ANTHROPIC_API_KEY;
+  delete env.OPENROUTER_API_KEY;
   expect(
     cli('save', 'Redis pool exhaustion fixed by per-worker pool sizing', '--type', 'bugfix').status,
   ).toBe(0);
@@ -145,6 +149,29 @@ describe('an invisible title is refused or replaced on every writer', () => {
     const r = cli('save', 'Soft hyphen probe body about lighthouses', '--title', '\u00ad', '--force');
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/Soft hyphen probe body/);
+  });
+});
+
+// Round 3 (data nits): three CLI messages that said the wrong thing.
+describe('round-3 CLI wording', () => {
+  it('a value starting with -- gets the hint, not "Unknown flag … ignored"', () => {
+    const r = cli('update', '1', '--lesson', '--no-verify skips hooks');
+    expect(r.stderr).not.toMatch(/Unknown flag/);
+    expect(r.stderr).toMatch(/--lesson="/);
+  });
+  it('text starting with -- points at the bare -- form', () => {
+    const r = cli('save', '--no-verify skips the pre-commit hooks');
+    expect(r.stderr).not.toMatch(/Unknown flag/);
+    expect(r.stderr).toMatch(/save -- "/);
+  });
+  it('the activity promote refusal names --min-importance', () => {
+    const r = cli('activity', 'promote', '--execute', '--importance', '2');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--min-importance/);
+  });
+  it('deep search on an operator-only query says it has no searchable terms', () => {
+    const r = cli('search', '***', '--deep');
+    expect(r.stdout + r.stderr).toMatch(/no searchable terms/);
   });
 });
 

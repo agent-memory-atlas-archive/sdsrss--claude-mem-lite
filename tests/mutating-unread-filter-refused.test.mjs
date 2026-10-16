@@ -28,6 +28,9 @@ beforeEach(() => {
     CLAUDE_CODE_PATH: join(root, 'no-claude'),
   };
   delete env.CLAUDE_MEM_HOOK_RUNNING;
+  // No LLM provider: save's enrichment must not reach a real one.
+  delete env.ANTHROPIC_API_KEY;
+  delete env.OPENROUTER_API_KEY;
   for (const t of [
     'Tidied the stale feature flag list',
     'Archived the legacy migration notes',

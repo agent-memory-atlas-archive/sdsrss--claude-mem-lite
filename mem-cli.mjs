@@ -985,6 +985,10 @@ function cmdGet(db, args) {
       fail('[mem] No valid fields specified');
       return;
     }
+    // A mixed request: the other records print in full, and that went unsaid (round 3).
+    if (bySrc.session.length + bySrc.prompt.length + bySrc.event.length > 0) {
+      process.stderr.write('[mem] --fields selects observation fields; E#/S#/P# records print in full\n');
+    }
   }
 
   const sections = [];

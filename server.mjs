@@ -1074,6 +1074,15 @@ server.registerTool(
       if (invalidFields.length > 0) {
         fieldsNote = `Note: unknown field(s) dropped: ${invalidFields.join(', ')}. Valid: ${OBS_FIELDS.join(', ')}`;
       }
+      // A mixed request: the other records are shown in full, and that went unsaid (round 3).
+      if (bySrc.session.length + bySrc.prompt.length + bySrc.event.length > 0) {
+        fieldsNote = [
+          fieldsNote,
+          'Note: fields selects observation fields; E#/S#/P# records are shown in full.',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }
       obsFieldFilter = validFields;
     } else if (args.fields?.length) {
       // Said rather than dropped without a word (E2E 2026-10-16 round 2).

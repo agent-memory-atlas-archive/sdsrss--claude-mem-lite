@@ -115,6 +115,12 @@ describe('get --fields on events', () => {
     expect(r.stdout).toContain('Cron overlap');
     expect(r.stderr).toMatch(/--fields .*observation/);
   });
+  // Round 3 (data nit): a mixed request printed the event in full without a word.
+  it('get 1,E#1 --fields title notes that the event prints in full', () => {
+    const r = cli('get', '1,E#1', '--fields', 'title');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/--fields .*observation/);
+  });
 });
 
 // Round 2 (data S7): a flag VALUE that starts with `--` parses as a flag of its own, and the

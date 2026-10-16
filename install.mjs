@@ -16,6 +16,7 @@ import {
   readdirSync,
   statSync,
   lstatSync,
+  readlinkSync,
   constants as fsConstants,
 } from 'fs';
 import { join, resolve, dirname, basename, sep, relative, isAbsolute } from 'path';
@@ -675,6 +676,36 @@ async function installDependencies(IS_DEV) {
   }
 }
 
+/**
+ * Whether the `claude-mem-lite` entry at `p` is OUR link: a symlink to this install's cli.mjs,
+ * or a dangling one (what an earlier install left behind). Anything else belongs to someone
+ * else — npm's global bin link above all: install used to repoint it and uninstall to delete
+ * it, leaving `npm i -g claude-mem-lite` installed with no command (E2E 2026-10-16).
+ * @param {string} p
+ * @returns {boolean}
+ */
+function isOwnCliLink(p) {
+  let target;
+  try {
+    if (!lstatSync(p).isSymbolicLink()) return false;
+    target = resolve(dirname(p), readlinkSync(p));
+  } catch {
+    return false;
+  }
+  if (!existsSync(target)) return true;
+  return sameDir(target, join(INSTALL_DIR, 'cli.mjs'));
+}
+
+/** A `claude-mem-lite` entry at `p` that is not ours (see isOwnCliLink), or null. */
+function foreignCliEntry(p) {
+  try {
+    lstatSync(p);
+  } catch {
+    return null;
+  }
+  return isOwnCliLink(p) ? null : p;
+}
+
 function createCliSymlink() {
   // 2b. Create global CLI symlink (claude-mem-lite command)
   const cliSource = join(INSTALL_DIR, 'cli.mjs');
@@ -685,6 +716,11 @@ function createCliSymlink() {
     // Try ~/.local/bin first (user-writable, commonly on PATH)
     const localBin = join(homedir(), '.local', 'bin');
     const cliLink = join(localBin, 'claude-mem-lite');
+    const foreign = foreignCliEntry(cliLink);
+    if (foreign) {
+      ok(`CLI: ${foreign} is another claude-mem-lite command (e.g. npm -g) — left in place`);
+      return;
+    }
     try {
       if (!existsSync(localBin)) mkdirSync(localBin, { recursive: true });
       clearLinkPath(cliLink);
@@ -694,6 +730,7 @@ function createCliSymlink() {
       // Fallback: try /usr/local/bin (may need sudo)
       try {
         const globalLink = '/usr/local/bin/claude-mem-lite';
+        if (foreignCliEntry(globalLink)) throw new Error('not ours');
         clearLinkPath(globalLink);
         symlinkSync(cliSource, globalLink);
         ok(`CLI: ${globalLink} → ${cliSource}`);
@@ -1508,7 +1545,8 @@ async function uninstall() {
     const cliLink = join(binDir, 'claude-mem-lite');
     // No try/catch: clearLinkPath swallows a permissions failure and returns false, so the
     // wrapper this used to have was unreachable once the existsSync gate moved inside it.
-    if (clearLinkPath(cliLink)) ok(`CLI symlink removed: ${cliLink}`);
+    if (foreignCliEntry(cliLink)) log(`  CLI: ${cliLink} is not this install's link — left in place`);
+    else if (clearLinkPath(cliLink)) ok(`CLI symlink removed: ${cliLink}`);
   }
 
   // 2. Remove hooks from settings.json (match both npx and git-clone install paths)

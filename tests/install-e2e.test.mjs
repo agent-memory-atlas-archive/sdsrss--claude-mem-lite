@@ -10,8 +10,18 @@
 
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync } from 'fs';
-import { join, resolve } from 'path';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  rmSync,
+  symlinkSync,
+  readlinkSync,
+  lstatSync,
+} from 'fs';
+import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { makeFixtureTracker } from './test-helpers.mjs';
@@ -457,6 +467,31 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
 
     // Data directory preserved
     expect(existsSync(dataDir)).toBe(true);
+  });
+
+  // E2E 2026-10-16 (install P2-8): with npm's prefix at ~/.local, `npm i -g claude-mem-lite`
+  // owns ~/.local/bin/claude-mem-lite. install repointed that link at the managed install and
+  // uninstall deleted it, so the global command was gone while its package stayed installed.
+  it('install and uninstall leave a claude-mem-lite command they do not own', () => {
+    const pkgCli = join(home, '.local', 'lib', 'node_modules', 'claude-mem-lite', 'cli.mjs');
+    mkdirSync(dirname(pkgCli), { recursive: true });
+    writeFileSync(pkgCli, '#!/usr/bin/env node\n');
+    const link = join(home, '.local', 'bin', 'claude-mem-lite');
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync('../lib/node_modules/claude-mem-lite/cli.mjs', link);
+
+    runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
+    expect(readlinkSync(link)).toBe('../lib/node_modules/claude-mem-lite/cli.mjs');
+    runInstall('uninstall', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+    expect(readlinkSync(link)).toBe('../lib/node_modules/claude-mem-lite/cli.mjs');
+  });
+
+  it('uninstall removes the CLI link install created', () => {
+    runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
+    const link = join(home, '.local', 'bin', 'claude-mem-lite');
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    runInstall('uninstall', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+    expect(existsSync(link)).toBe(false);
   });
 
   it('uninstall --purge removes data directory', () => {

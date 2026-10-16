@@ -86,3 +86,6 @@ release-signing-key.pem
 .tmp-rerank-pool-twin.mjs
 .tmp-keyctx-pool-twin.mjs
 .tmp-keyctx-why-*.mjs
+
+# scripts/launch.mjs: left when a first-start npm install fails (plugin root may be a checkout)
+.npm-install-failed

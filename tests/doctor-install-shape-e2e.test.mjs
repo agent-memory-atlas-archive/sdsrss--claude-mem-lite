@@ -664,6 +664,36 @@ describe('doctor: the MCP SDK is checked in each code home', () => {
     expect(r.stdout).toMatch(/better-sqlite3: not installed yet in .*first start/);
   });
 
+  // Round 4 (install REGRESSION-1): launch.mjs left no trace when its first-start npm install
+  // FAILED, so that cache read as "not installed yet" and doctor passed with the MCP server
+  // unable to start. launch.mjs now leaves a marker, and doctor reports the failure again.
+  it('a plugin cache whose first-start npm install failed is a failure with the npm remedy', () => {
+    const root = makePluginVersion('9.9.9', { deps: 'none' });
+    enablePlugin();
+    const failBin = join(home, 'failbin');
+    mkdirSync(failBin, { recursive: true });
+    writeFileSync(join(failBin, 'npm'), '#!/bin/sh\necho "npm error code ENOTFOUND" >&2\nexit 1\n');
+    chmodSync(join(failBin, 'npm'), 0o755);
+    const launch = join(REPO, 'scripts', 'launch.mjs');
+    const env = {
+      ...process.env,
+      HOME: home,
+      PATH: `${failBin}:${process.env.PATH}`,
+      CLAUDE_PLUGIN_ROOT: root,
+    };
+    delete env.CLAUDE_MEM_DIR;
+    const l = spawnSync(process.execPath, [launch], { env, encoding: 'utf8', input: '', timeout: 60000 });
+    expect(l.status, l.stderr).toBe(1);
+    expect(existsSync(join(root, '.npm-install-failed')), 'launch.mjs left its marker').toBe(true);
+    const r = run('doctor', { CLAUDE_MEM_DIR: join(home, 'data') });
+    expect(
+      failLines(r.stdout).some((l2) => /better-sqlite3/.test(l2)),
+      r.stdout,
+    ).toBe(true);
+    expect(r.stdout).toMatch(/npm install --omit=dev/);
+    expect(r.stdout).not.toMatch(/not installed yet/);
+  });
+
   it('a managed install with the SDK is green', () => {
     makeManagedInstall();
     const r = run('doctor', { CLAUDE_MEM_DIR: join(home, 'data') });

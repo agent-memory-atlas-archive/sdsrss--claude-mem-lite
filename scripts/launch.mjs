@@ -2,7 +2,7 @@
 // launch.mjs — Auto-installs dependencies then starts MCP server
 // Uses only Node built-ins so it works before npm install
 import { execSync } from 'node:child_process';
-import { existsSync, lstatSync } from 'node:fs';
+import { existsSync, lstatSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
@@ -12,6 +12,11 @@ const ROOT = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..');
 // Quote a path as ONE shell word for a printed command. A copy of cli-path.mjs's, not an
 // import (node: builtins only here); tests/cli-path-invocation.test.mjs keeps them equal.
 const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+// Left when the first-start npm install fails, removed when one succeeds. Without it a cache
+// whose install already failed looked like one never started, and doctor passed it ("installs
+// its dependencies on first start") while the MCP server could not start (E2E 2026-10-16
+// round 4). lib/install-shape.mjs isUnprovisionedPluginRoot reads it; best-effort both ways.
+const INSTALL_FAILED_MARKER = join(ROOT, '.npm-install-failed');
 
 if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
   // Platform gate BEFORE npm, not after it. package.json's `os` field is an npm install
@@ -52,6 +57,7 @@ if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
       timeout: 120_000,
     });
     process.stderr.write('[claude-mem-lite] Dependencies installed\n');
+    rmSync(INSTALL_FAILED_MARKER, { force: true });
   } catch (e) {
     // Plugin-cache / multi-user / disk-full installs can fail here, and this is not a
     // rare path: Claude Code materializes each new plugin-cache version WITHOUT
@@ -88,6 +94,11 @@ if (!existsSync(join(ROOT, 'node_modules', 'better-sqlite3'))) {
       (e?.signal ? `npm killed by ${e.signal}` : '') ||
       'unknown error';
     process.stderr.write(`[claude-mem-lite] npm install failed in ${ROOT} — ${detail}\n`);
+    try {
+      writeFileSync(INSTALL_FAILED_MARKER, JSON.stringify({ ts: Date.now(), detail }) + '\n');
+    } catch {
+      /* a read-only root cannot hold it; doctor then reads the root as not yet provisioned */
+    }
     // "Likely cause: …" until issue #28: it asserted three causes, and the one that was
     // actually firing (EBADPLATFORM, gated above) was not among them. stderr is inherited,
     // so npm's own `npm error code <CODE>` line is already on this stream a few lines up —

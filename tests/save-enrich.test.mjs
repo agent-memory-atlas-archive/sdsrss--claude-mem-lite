@@ -202,3 +202,39 @@ describe('executeSaveEnrich (fill-only-empty worker)', () => {
     db.close();
   });
 });
+
+// E2E 2026-10-16 (bg P2-2): the save-enrich worker never took an LLM slot, so a burst of saves
+// ran one `claude -p` per save at once (13 concurrent measured), against the README's "limits
+// background workers to 2 concurrent LLM calls". It now takes a slot like every other worker;
+// without one it skips (the daily backfill passes pick the row up) and releases what it took.
+describe('executeSaveEnrich takes an LLM slot', () => {
+  it('skips without calling the model when no slot is free', async () => {
+    const db = createTestDb();
+    const { id } = save(db);
+    let called = false;
+    const r = await executeSaveEnrich(db, id, {
+      callJson: async () => {
+        called = true;
+        return {};
+      },
+      acquire: async () => false,
+      release: () => {},
+    });
+    expect(called).toBe(false);
+    expect(r).toEqual({ enriched: false, reason: 'no-slot' });
+  });
+
+  it('releases the slot it took, also when the model call throws', async () => {
+    const db = createTestDb();
+    const { id } = save(db);
+    let released = 0;
+    await executeSaveEnrich(db, id, {
+      callJson: async () => {
+        throw new Error('overloaded');
+      },
+      acquire: async () => true,
+      release: () => released++,
+    });
+    expect(released).toBe(1);
+  });
+});

@@ -494,8 +494,15 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       const humanSet =
         (db.prepare('SELECT importance_set_at FROM observations WHERE id = ?').get(cand.id)
           ?.importance_set_at ?? null) !== null;
+      // An explicit save is a person's text too: narrow neither hides it on a model's 0 nor
+      // replaces its title and narrative (keepStoredText below). Its save-time enrich failing is
+      // what put it in this pool, and the rewrite had no snapshot (E2E 2026-10-16).
+      const manualSave = !!db
+        .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
+        .get(cand.id)
+        ?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX);
       const scoredZero = parsed.importance === 0 || parsed.importance === '0';
-      if (scoredZero && scope !== 'wide' && !isKeeper && !humanSet) {
+      if (scoredZero && scope !== 'wide' && !isKeeper && !humanSet && !manualSave) {
         // D#12, and this one is not a stale-write guard — it is a POINTER guard.
         // `compressed_into` is the child -> keeper link, and COMPRESSED_AUTO is -1. If a
         // concurrent cluster-merge or smart-compress adopts this row during the 45 s Haiku
@@ -584,7 +591,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // fallback — truncating the row's own stored narrative to buy nothing was the same
       // bug in miniature.
       const isWide = scope === 'wide';
-      const keepStoredText = isWide;
+      const keepStoredText = isWide || manualSave;
       const title = keepStoredText ? cand.title : truncate(scrubSecrets(parsed.title || ''), 120);
       const narrative = keepStoredText
         ? cand.narrative
@@ -628,27 +635,10 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
       // (tests/verify-reenrich-race.test.mjs). It also stops two overlapping runs rewriting a
       // row twice.
       //
-      // Narrow replaces title and narrative with model text, so an explicit save it rewrites (one
-      // whose save-time enrich failed) moves to the re-enrich writer's id, as a cluster-merge
-      // keeper does (D#146, D#138). Wide keeps the stored title and narrative (it fills the lesson
-      // and the side fields), so the row stays an explicit save; a narrow 0 reply never gets here.
-      // The writer's session row is best-effort.
-      let rewriteSessionId = null;
-      if (!keepStoredText) {
-        const cur = db.prepare('SELECT memory_session_id FROM observations WHERE id = ?').get(cand.id);
-        if (cur?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
-          const enrichSessionId = writerSessionId('enrich-', cand.project);
-          try {
-            db.prepare(
-              `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-               VALUES (?, ?, ?, ?, ?, 'active')`,
-            ).run(enrichSessionId, enrichSessionId, cand.project, new Date().toISOString(), Date.now());
-            rewriteSessionId = enrichSessionId;
-          } catch (e) {
-            debugCatch(e, 'reenrich writer session');
-          }
-        }
-      }
+      // An explicit save keeps its own title and narrative here (keepStoredText), so it stays the
+      // person's save; only machine-written rows get model text, and they are already attributed to
+      // a machine writer. (Before E2E 2026-10-16 narrow rewrote explicit saves and moved them to the
+      // re-enrich writer's id, D#146.)
       const res = db
         .prepare(
           `
@@ -657,7 +647,7 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           importance = CASE WHEN importance_set_at IS NOT NULL THEN importance
                             ELSE MAX(?, COALESCE(NULLIF(importance, 0), 1)) END,
           lesson_learned=?, search_aliases=?, minhash_sig=?, optimized_at=?,
-          scope=COALESCE(?, scope), memory_session_id = COALESCE(?, memory_session_id)
+          scope=COALESCE(?, scope)
         WHERE id = ? AND ${liveObsFilterSql('')} AND optimized_at IS NULL
       `,
         )
@@ -677,7 +667,6 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
           // scope, or emits an off-enum value, must never blank an existing label —
           // and THIS update stamps optimized_at, so the loss would be permanent.
           normalizeScope(parsed.scope),
-          rewriteSessionId,
           cand.id,
         );
       if (res.changes === 0) {

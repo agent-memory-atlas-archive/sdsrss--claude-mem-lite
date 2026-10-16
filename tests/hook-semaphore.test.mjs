@@ -2,7 +2,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, mkdirSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  readdirSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+} from 'fs';
+import { spawnSync } from 'child_process';
+import { tmpdir } from 'os';
+import { pathToFileURL } from 'url';
 import {
   acquireLLMSlot,
   releaseLLMSlot,
@@ -120,6 +132,40 @@ describe('hook-semaphore.mjs', () => {
   // ─── acquireLLMSlot / releaseLLMSlot ────────────────────────────────────
 
   describe('acquireLLMSlot', () => {
+    // E2E 2026-10-16 smoke: a worker whose data dir was removed while it waited stayed alive 61 s.
+    // Creating the slot file failed with ENOENT (no runtime dir), which the loop read as its own
+    // stale slot: unlink, sleep 50-150 ms, retry, until the 60 s deadline.
+    it('a background worker whose runtime dir is gone gives up at once', () => {
+      const root = mkdtempSync(join(tmpdir(), 'sem-dir-gone-'));
+      try {
+        const sem = pathToFileURL(
+          join(dirname(fileURLToPath(import.meta.url)), '..', 'hook-semaphore.mjs'),
+        ).href;
+        const r = spawnSync(
+          process.execPath,
+          [
+            '--input-type=module',
+            '-e',
+            `const { acquireLLMSlot } = await import(${JSON.stringify(sem)});
+             const t = Date.now(); const got = await acquireLLMSlot();
+             console.log(JSON.stringify({ got, ms: Date.now() - t }));`,
+          ],
+          {
+            env: { ...process.env, CLAUDE_MEM_DIR: join(root, 'gone'), CLAUDE_MEM_BG_WORKER: '1' },
+            encoding: 'utf8',
+            timeout: 10000,
+          },
+        );
+        expect(r.signal, 'still spinning when the 10 s budget ran out').toBeNull();
+        const out = JSON.parse(r.stdout.trim().split('\n').pop());
+        expect(out.got).toBe(false);
+        expect(out.ms).toBeLessThan(2000);
+        expect(existsSync(join(root, 'gone')), 'the worker re-created the removed dir').toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it('acquires slot and creates semaphore file', async () => {
       const got = await acquireLLMSlot();
       expect(got).toBe(true);

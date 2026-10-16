@@ -13,6 +13,7 @@ import {
 } from 'fs';
 import { RUNTIME_DIR } from './hook-shared.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
+import { workerDirGone } from './lib/worker-data-dir.mjs';
 
 export const LLM_SEM_MAX = 2;
 
@@ -106,7 +107,12 @@ export async function acquireLLMSlot() {
       } finally {
         if (fd !== undefined) closeSync(fd);
       }
-    } catch {
+    } catch (err) {
+      // ENOENT is the runtime dir itself missing, not a leftover slot. A worker whose data dir
+      // was removed while it waited read it as one and spun here until the deadline, alive 61 s
+      // after the removal (E2E 2026-10-16 smoke). Nothing can be acquired in a removed dir, and a
+      // worker must not re-create it (lib/worker-data-dir.mjs).
+      if (err?.code === 'ENOENT' && workerDirGone(RUNTIME_DIR)) return false;
       // Our own pid-named slot file already exists: a leftover from a prior acquire
       // that never released (crash between acquire and releaseLLMSlot, or PID reuse).
       // `localHeldAt` was checked above, so this process either holds nothing right

@@ -143,3 +143,15 @@ describe('mem_defer_drop names what it dropped', () => {
     expect(r.text).toMatch(/Dropped D#\d+ "Backup job skips WAL file"/);
   });
 });
+
+describe('deep search that could not rewrite does not claim it did', () => {
+  // With the LLM unavailable (this harness points CLAUDE_CODE_PATH nowhere) deep search falls
+  // back to the original query. The zero-result text still said "deep search rewrote the query
+  // into variants … (the rewrite ran) … the memory likely has no related observations".
+  it('says the rewrite was unavailable and only the original query ran', async () => {
+    const r = await call('mem_search', { query: 'zzqqnomatch', deep: true });
+    expect(r.text).not.toMatch(/the rewrite ran/);
+    expect(r.text).not.toMatch(/rewrote the query into variants/);
+    expect(r.text).toMatch(/could not rewrite/);
+  }, 60000);
+});

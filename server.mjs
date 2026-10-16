@@ -440,10 +440,19 @@ function formatSearchOutput(
   orFallbackFired = false,
   isDeepSearch = false,
   listing = null,
+  deepVariantCount = null,
 ) {
   if (paginatedResults.length === 0) {
     const hint = [];
-    if (isDeepSearch) {
+    if (isDeepSearch && deepVariantCount !== null && deepVariantCount <= 1) {
+      // The rewrite failed (LLM unavailable, timed out, or no usable variants), so deep search
+      // was the plain search. Saying "the rewrite ran … the memory likely has no related
+      // observations" told the model a search that did not happen had come back empty.
+      hint.push(
+        'No results — deep search could not rewrite the query (the LLM call failed or returned no usable variants), so only the original query was searched.',
+      );
+      hint.push('Treat this as a plain search miss: try other words, or deep search again later.');
+    } else if (isDeepSearch) {
       // Deep search runs even when the literal query sanitizes to empty, so the
       // "query was filtered" hint below would be misleading — the LLM rewrite ran
       // N variants and simply found nothing (F9).
@@ -724,7 +733,16 @@ async function runSearchPipeline(
     };
   }
   const listing = r.typeFallbackFired ? 'type' : queryDropped ? 'dropped' : null;
-  const output = formatSearchOutput(r.page, args, ftsQuery, r.total, r.orFallbackFired, r.isDeep, listing);
+  const output = formatSearchOutput(
+    r.page,
+    args,
+    ftsQuery,
+    r.total,
+    r.orFallbackFired,
+    r.isDeep,
+    listing,
+    r.variants ? r.variants.length : null,
+  );
   // Surface the rewrite to the calling agent (F13) + the rerank signal (D#43).
   if (r.isDeep && r.variants && output.content?.[0]?.type === 'text') {
     output.content[0].text +=

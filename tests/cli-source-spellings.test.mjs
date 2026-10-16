@@ -93,6 +93,20 @@ describe('get --fields on events', () => {
   });
 });
 
+// Round 2 (data S7): a flag VALUE that starts with `--` parses as a flag of its own, and the
+// refusal gave no way out; only the `=` form works.
+describe('a value that starts with --', () => {
+  it('the bare-flag refusal names the --flag="…" form', () => {
+    const r = cli('update', '1', '--lesson', '--no-verify skips hooks');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--lesson="/);
+  });
+  it('the = form works', () => {
+    const r = cli('update', '1', '--lesson=--no-verify skips hooks');
+    expect(r.status, r.stderr).toBe(0);
+  });
+});
+
 // E2E 2026-10-16 (cli F16): `--` parsed as an empty-named flag, so text starting with `--` could
 // not be saved positionally.
 describe('a bare -- ends the options', () => {

@@ -276,7 +276,11 @@ export function fail(text) {
 export function rejectBareStringFlags(flags, keys) {
   for (const key of keys) {
     if (flags[key] === true) {
-      fail(`[mem] --${key} requires a value (received a bare flag with no value).`);
+      // A value that itself starts with `-` parses as a flag of its own and lands here; the
+      // `=` form is the way to pass one, and nothing said so (E2E 2026-10-16 round 2).
+      fail(
+        `[mem] --${key} requires a value (received a bare flag with no value). A value that starts with - is written --${key}="…".`,
+      );
       return true;
     }
   }

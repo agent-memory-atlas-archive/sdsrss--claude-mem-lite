@@ -1257,16 +1257,21 @@ export async function executeMergeCluster(db, cluster) {
       )
       .join('\n');
 
-    const prompt = `These observations from a code memory database may be about the same topic. Should they be merged into a single observation?
-
-Observations:
-${obsDescriptions}
+    // Instructions and the guard in `system`, the stored rows in `user` (D367, E2E 2026-10-16
+    // P1-3): a member's narrative can quote a README or tool output that addresses "AI
+    // assistants", and as one string it sat inside the instructions. Same split as
+    // identifySynonymGroups and hook-llm's episode / summary prompts; the CLI leg renders it
+    // with a per-call boundary marker (haiku-client.mjs flattenForCLI).
+    const system = `These observations from a code memory database may be about the same topic. Should they be merged into a single observation?
 
 Return ONLY valid JSON:
 - If they should NOT be merged: {"should_merge":false}
-- If they SHOULD be merged: {"should_merge":true,"merged_title":"≤120 char comprehensive title","merged_narrative":"comprehensive ≤800 char summary preserving all key details","merged_concepts":["kw1","kw2"],"merged_facts":["specific fact 1"],"merged_lesson":"synthesized non-obvious lesson or null","importance":2}`;
+- If they SHOULD be merged: {"should_merge":true,"merged_title":"≤120 char comprehensive title","merged_narrative":"comprehensive ≤800 char summary preserving all key details","merged_concepts":["kw1","kw2"],"merged_facts":["specific fact 1"],"merged_lesson":"synthesized non-obvious lesson or null","importance":2}
+${MEMORY_INPUT_GUARD}`;
+    const user = `Observations:
+${obsDescriptions}`;
 
-    const parsed = await callModelJSONAsync(prompt, 'sonnet', {
+    const parsed = await callModelJSONAsync({ system, user }, 'sonnet', {
       timeout: BG_LLM_TIMEOUT_MS,
       maxTokens: 1000,
     });

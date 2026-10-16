@@ -40,6 +40,27 @@ describe('save-time dedup on CJK text', () => {
     });
     expect(other.kind).toBe('saved');
   });
+  // Pre-tag review 2026-10-16: each CJK run adds all its bigrams while the Latin identifier glued
+  // into the sentence is one token, so in a short sentence the identifier — the part that tells
+  // the two facts apart — barely moved the score: 修复了redis连接池泄漏 then 修复了mysql连接池泄漏
+  // read 0.75 and the second was dropped ("Skipped: similar", exit 0), where v6.27.0 stored both.
+  it.each([
+    ['修复了redis连接池泄漏', '修复了mysql连接池泄漏'],
+    ['升级到node22之后构建失败', '升级到node20之后构建失败'],
+    [
+      '升级到node22之后构建失败，原因是原生模块没有重新编译',
+      '升级到node20之后构建失败，原因是原生模块没有重新编译',
+    ],
+  ])('a CJK save naming another identifier or number is saved: %s / %s', (a, b) => {
+    expect(save({ content: a }).kind).toBe('saved');
+    expect(save({ content: b }).kind).toBe('saved');
+  });
+  it('the same identifiers with one CJK character changed are still a duplicate', () => {
+    const withId = BODY.replace('中间件', 'redis中间件');
+    const first = save({ content: withId });
+    expect(first.kind).toBe('saved');
+    expect(save({ content: `${withId}。` }).kind).toBe('duplicate');
+  });
   it('English text scores as before', () => {
     const a = 'Redis pool exhaustion: raised maxclients to 2000';
     const b = 'Redis pool exhaustion: raised maxclients to 4000';

@@ -468,8 +468,16 @@ export function sessionEvents(entries) {
       continue;
     }
     if (e?.type !== 'attachment') continue;
-    const att = e.attachment;
-    if (!att || att.type !== 'hook_success') continue;
+    let att = e.attachment;
+    // A blocking Stop / PostToolUse hook's feedback is model-visible too; it is recorded as its
+    // own attachment type with the text and command nested (pre-ship claims review P3-4).
+    if (att?.type === 'hook_blocking_error' && att.blockingError && typeof att.blockingError === 'object') {
+      att = {
+        ...att,
+        command: att.blockingError.command,
+        stdout: String(att.blockingError.blockingError ?? ''),
+      };
+    } else if (!att || att.type !== 'hook_success') continue;
     const event = att.hookEvent || '?';
     const face = memFaceOf(event, att.command);
     const vis = visibleText(att);
@@ -548,16 +556,37 @@ export function accountBytes(sessionsEvents) {
 
 const FILE_INFO_RE = /^\[mem\] 📄 (.+?) ~([\d.]+k?) tok/;
 const PARTIAL_BASH_RE = /\b(?:sed\s+-n|head|tail|grep|rg|awk|wc|jq|cut)\b/;
+const FULL_READ_RE = /\b(?:cat|nl|less|more|bat)\b/;
+
+/**
+ * Whether a Bash command reads `fname` only in part. Judged per PIPELINE that names the file, not
+ * over the whole command: `cat a.mjs; sed -n 1,9p b.mjs` reads a.mjs whole, and a whole-command
+ * test called it partial (pre-ship claims review P2-4). Each pipeline naming the file is partial
+ * (a slicing verb anywhere in it: `sed -n f`, `cat f | head`), full (`cat`/`nl`/`less`/`more`/`bat`
+ * and no slicing verb), or neither (`git check-ignore f`, `find -name f`, which read no content).
+ * Any full pipeline makes the command a full read; otherwise any partial one makes it partial;
+ * when none reads the file (or none names it) the whole command decides, as before.
+ */
+export function bashReadsPartially(command, fname) {
+  const cmd = String(command || '');
+  const pipelines = fname ? cmd.split(/;|&&|\|\||\n/).filter((seg) => seg.includes(fname)) : [];
+  const kinds = pipelines.map((seg) =>
+    PARTIAL_BASH_RE.test(seg) ? 'partial' : FULL_READ_RE.test(seg) ? 'full' : 'none',
+  );
+  if (kinds.includes('full')) return false;
+  if (kinds.includes('partial')) return true;
+  return PARTIAL_BASH_RE.test(cmd);
+}
 
 /** How the call a file-info line rode on read the file. */
-export function triggerKind(tool) {
+export function triggerKind(tool, fname = '') {
   if (!tool) return 'unknown';
   if (tool.name === 'Read') {
     const i = tool.input || {};
     return i.offset != null || i.limit != null ? 'read_partial' : 'read_full';
   }
   if (tool.name === 'Bash')
-    return PARTIAL_BASH_RE.test(String(tool.input?.command || '')) ? 'bash_partial' : 'bash_full';
+    return bashReadsPartially(tool.input?.command, fname) ? 'bash_partial' : 'bash_full';
   return `other:${tool.name}`;
 }
 
@@ -573,7 +602,7 @@ function isSliceOf(tool, fname) {
   if (!targetsFile(tool, fname)) return false;
   if (tool.name === 'Read') return tool.input?.offset != null || tool.input?.limit != null;
   if (tool.name === 'Grep') return true;
-  if (tool.name === 'Bash') return PARTIAL_BASH_RE.test(String(tool.input?.command || ''));
+  if (tool.name === 'Bash') return bashReadsPartially(tool.input?.command, fname);
   return false;
 }
 
@@ -596,7 +625,7 @@ export function fileInfoValue(sessionsEvents) {
         if (!m) continue;
         const [, fname, tok] = m;
         r.lines++;
-        const trig = triggerKind(toolUses.get(ev.toolUseID));
+        const trig = triggerKind(toolUses.get(ev.toolUseID), fname);
         r.trigger[trig] = (r.trigger[trig] || 0) + 1;
         const big = /k$/.test(tok) && parseFloat(tok) >= 10;
         if (big) r.bigFiles++;
@@ -630,6 +659,9 @@ export function fileInfoValue(sessionsEvents) {
   return r;
 }
 
+const ACTIVITY_CALL_RE = /(?:claude-mem-lite|cli\.mjs)["']?\s+activity\b/;
+/** A Bash command that RUNS `activity` (the CLI verb), not one that names lib/activity.mjs. */
+export const isActivityCall = (command) => ACTIVITY_CALL_RE.test(String(command || ''));
 const RECENT_ROW_RE = new RegExp(`^\\| #(${OBS_ID_DIGITS}) \\|`);
 const KEYCTX_ID_RE = new RegExp(`#(${OBS_ID_DIGITS})\\b`);
 const DEFERRED_ROW_RE = /\(D#(\d+)\)\s*$/;
@@ -741,8 +773,10 @@ export function sessionStartAndUpsValue(sessions, sessionsEvents) {
         (e) =>
           e.kind === 'tool' &&
           e.name === 'Bash' &&
-          /\bactivity\b/.test(String(e.input?.command || '')) &&
-          /claude-mem-lite|cli\.mjs/.test(String(e.input?.command || '')),
+          // An actual CLI call (`claude-mem-lite activity …`, `… cli.mjs activity …`), not a
+          // command that merely names lib/activity.mjs next to the word cli.mjs (claims review
+          // P2-1: the loose test read 4/52 where the real count is 0/52).
+          isActivityCall(e.input?.command),
       );
       if (ran) out.activityHint.ran++;
     }

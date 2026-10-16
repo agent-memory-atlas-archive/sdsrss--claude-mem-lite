@@ -41,7 +41,7 @@
 | 　相似问题 | 0.20 | 0.16 |
 | 其余各面 | 不变 | 不变 |
 
-全部 hook 合计 25.02 → 19.11 KB/会话。用 `--write-projected` 写出的重放语料直接量，也是 12.66 KB/会话。
+全部 hook 合计 25.24 → 19.33 KB/会话（含另一个插件 0.22 KB/会话的 Stop 阻断反馈）。用 `--write-projected` 写出的重放语料直接量，也是 12.66 KB/会话。
 
 **引用率**：在冻结语料和重放语料上背靠背跑 `citation-live-replay.mjs`，各面的 (会话, id) 对和引用次数完全一样：
 
@@ -75,11 +75,13 @@ SessionStart 的 Last Session / Deferred 1.45（KB/会话）。按"两者冲突�
 ## 发版时用的 CHANGELOG 草稿（英文，发版提交里再定稿）
 
 - **Change: the PreToolUse framing line and the full pre-edit directive are shown once per thread.** Later recall
-  blocks of the same session (or subagent) open with their own `[mem]` line and carry a short directive that keeps
-  the `(#NN)` tag rule; both come back after `/compact`. `CLAUDE_MEM_RECALL_HEADER_ONCE=0` /
+  blocks of the same session (or subagent) open with their own `[mem]` line; those that carry a directive (an Edit
+  with lessons, the Read→Edit reminder) carry a short one that keeps the `(#NN)` tag rule. Both come back after
+  `/compact`. `CLAUDE_MEM_RECALL_HEADER_ONCE=0` /
   `CLAUDE_MEM_DIRECTIVE_ONCE=0` restore them on every block.
-- **Change: the file-intel line is opt-in** (`CLAUDE_MEM_FILE_INTEL=1`). It reaches the model next to the read's
-  result, so it could not shape that read.
+- **Change: the file-intel line is opt-in** (`CLAUDE_MEM_FILE_INTEL=1`). It rode the first read of a large file
+  (a Read, or a Bash `cat` / `sed -n` / `head`) and reached the model next to that read's result, so it could not
+  shape that read.
 - **Change: the SessionStart Recent table shows the newest 5 rows** (`CLAUDE_MEM_STARTUP_RECENT_ROWS`, 0 hides it).
 - **Change: the startup dashboard drops the `mem events` count.**
 - **Fix: "Past similar questions" no longer returns the prompt you just typed** or another prompt of the same session.

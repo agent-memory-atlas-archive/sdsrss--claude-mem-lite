@@ -200,9 +200,9 @@ const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file
 // It was meant to let the agent "decide to read fully, slice, or grep", but PreToolUse
 // additionalContext is delivered next to the tool RESULT (Claude Code hooks reference, "Add
 // context for Claude"), so it can never change the call it rides on. On the frozen 52-session
-// corpus 92.3% of its 1,102 lines rode a call that was already a partial read (`sed -n`, grep,
+// corpus 89.9% of its 1,102 lines rode a call that was already a partial read (`sed -n`, grep,
 // Read with offset/limit), after a full Read the same file was sliced later in the turn LESS
-// often (39.7%, 25/63) than after a partial one (69.0%), and no reply named a size (0/1,102) —
+// often (34.9%, 22/63) than after a partial Bash read (69.1%), and no reply named a size (0/1,102) —
 // at 1.57 KB/session, plus the framing header of the 426 blocks it was the only content of.
 // CLAUDE_MEM_FILE_INTEL=1 turns it back on.
 const FILE_INTEL_ON = fileIntelEnabled();

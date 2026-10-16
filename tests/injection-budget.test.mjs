@@ -18,6 +18,8 @@ import {
   memFaceOf,
   sessionVerdict,
   triggerKind,
+  bashReadsPartially,
+  isActivityCall,
   visibleText,
   projectSessionEvents,
   assertIdentityProjection,
@@ -163,6 +165,28 @@ describe('value-proxy helpers', () => {
     expect(triggerKind({ name: 'Read', input: { file_path: '/a', offset: 10 } })).toBe('read_partial');
     expect(triggerKind({ name: 'Bash', input: { command: "sed -n '1,40p' a.mjs" } })).toBe('bash_partial');
     expect(triggerKind({ name: 'Bash', input: { command: 'cat a.mjs' } })).toBe('bash_full');
+  });
+
+  it('judges a Bash read per pipeline naming the file, not over the whole command', () => {
+    // Claims review P2-4: a whole-command test called this a partial read of a.mjs.
+    const cmd = 'cat a.mjs; echo; sed -n 1,40p b.mjs';
+    expect(bashReadsPartially(cmd, 'a.mjs')).toBe(false);
+    expect(bashReadsPartially(cmd, 'b.mjs')).toBe(true);
+    expect(bashReadsPartially('cat a.mjs | head -50', 'a.mjs')).toBe(true);
+    expect(bashReadsPartially('wc -l a.mjs && cat a.mjs', 'a.mjs')).toBe(false);
+    // A pipeline that names the file without reading it does not make the read "full".
+    expect(bashReadsPartially('sed -n 5,9p a.mjs 2>/dev/null || find . -name a.mjs', 'a.mjs')).toBe(true);
+    expect(bashReadsPartially('sed -n 1,9p a.mjs; git check-ignore -v a.mjs', 'a.mjs')).toBe(true);
+    expect(triggerKind({ name: 'Bash', input: { command: cmd } }, 'a.mjs')).toBe('bash_full');
+  });
+
+  it('counts a CLI `activity` call, not a command that only names lib/activity.mjs', () => {
+    expect(isActivityCall('node /x/cli.mjs activity recent')).toBe(true);
+    expect(isActivityCall('claude-mem-lite activity recent --limit 5')).toBe(true);
+    expect(isActivityCall('node "/x/cli.mjs" activity recent')).toBe(true);
+    // Claims review P2-1: these four shapes were counted as runs.
+    expect(isActivityCall('grep -n "x" cli/activity.mjs cli.mjs')).toBe(false);
+    expect(isActivityCall('python3 patch.py lib/activity.mjs && node cli.mjs help')).toBe(false);
   });
 
   it('calls a truncated past question an echo only when one text starts the other', () => {

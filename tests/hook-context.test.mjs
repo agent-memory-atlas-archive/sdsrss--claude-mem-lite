@@ -1320,6 +1320,10 @@ describe('buildSessionContextLines: Recent table row cap (injection budget C4)',
     process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS = '12';
     expect(tableRows(buildSessionContextLines(db, 'test'))).toHaveLength(8);
     process.env.CLAUDE_MEM_STARTUP_RECENT_ROWS = '0';
-    expect(buildSessionContextLines(db, 'test')).not.toMatch(/### Recent/);
+    // The TABLE's heading only: `### Recent Activity` is a different section (the no-summary
+    // fallback), rendered or not by adoption state — matching it made this case pass only in an
+    // adopted cwd (pre-ship claims review).
+    expect(buildSessionContextLines(db, 'test')).not.toMatch(/### Recent \(/);
+    expect(tableRows(buildSessionContextLines(db, 'test'))).toEqual([]);
   });
 });

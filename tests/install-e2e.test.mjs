@@ -609,6 +609,22 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(out).toMatch(/claude mcp remove -s user mem-lite/);
   });
 
+  // Round 2 (install B15): install printed "✓ CLI: ~/.local/bin/claude-mem-lite → …" with that
+  // directory off PATH, so the command it announced was not found; only `status` said so.
+  it('install says when the directory it linked the CLI into is not on PATH', () => {
+    const localBin = join(home, '.local', 'bin');
+    const off = runInstall('install', home, ['--dev', '--skip-repos'], {
+      PATH: `${binDir}:${process.env.PATH}`,
+    });
+    expect(off).toMatch(/CLI: .*claude-mem-lite →/);
+    expect(off).toMatch(/not on PATH/);
+    const on = runInstall('install', home, ['--dev', '--skip-repos'], {
+      PATH: `${localBin}:${binDir}:${process.env.PATH}`,
+    });
+    expect(on).toMatch(/CLI: .*claude-mem-lite →/);
+    expect(on).not.toMatch(/\.local\/bin is not on PATH/);
+  });
+
   it('uninstall --purge removes data directory', () => {
     runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
 

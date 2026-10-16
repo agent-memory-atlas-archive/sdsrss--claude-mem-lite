@@ -19,7 +19,7 @@ import {
   readlinkSync,
   constants as fsConstants,
 } from 'fs';
-import { join, resolve, dirname, basename, sep, relative, isAbsolute } from 'path';
+import { join, resolve, dirname, basename, sep, relative, isAbsolute, delimiter } from 'path';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'node:module';
@@ -726,6 +726,13 @@ function createCliSymlink() {
       clearLinkPath(cliLink);
       symlinkSync(cliSource, cliLink);
       ok(`CLI: ${cliLink} → ${cliSource}`);
+      // Only `status` said so, and the command this line announces was not found (E2E
+      // 2026-10-16 round 2).
+      const onPath = (process.env.PATH || '').split(delimiter).some((d) => d && resolve(d) === localBin);
+      if (!onPath)
+        warn(
+          `${localBin} is not on PATH, so the command is not found yet — add it: export PATH=${shellWord(localBin)}:"$PATH"`,
+        );
     } catch {
       // Fallback: try /usr/local/bin (may need sudo)
       try {

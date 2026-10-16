@@ -851,9 +851,10 @@ export function initSchema(db) {
   // row written before it. Backfilled BEFORE ensureEventsFTS below: the old triggers fire only on
   // title/body, so these UPDATEs touch no index, and the drifted (4-column) events_fts is then
   // recreated and rebuilt from the filled column in one pass. '' marks "computed, nothing to add"
-  // so the IS NULL scan is a one-time cost. Rows a pre-d366 build writes later carry NULL and are
-  // filled by the next full pass. Additive + nullable, no CURRENT_SCHEMA_VERSION bump — an older
-  // build opening this DB keeps writing events (the triggers index '' for its missing value).
+  // so the IS NULL scan is a one-time cost. Rows a pre-d366 build writes later carry NULL and keep
+  // it: this pass reruns only while a LATEST_MIGRATION_COLUMNS column is missing, which the ALTER
+  // ended (D#384). Additive + nullable, no CURRENT_SCHEMA_VERSION bump — an older build opening
+  // this DB keeps writing events (the triggers index '' for its missing value).
   // Not wrapped in a swallowing catch, unlike the ALTERs above: ensureEventsFTS installs triggers
   // that read new.search_terms, so carrying on without the column would fail every event write.
   // A throw here rolls the whole pass back and the next open retries it.

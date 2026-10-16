@@ -720,6 +720,13 @@ function foreignCliEntry(p) {
   return isOwnCliLink(p) ? null : p;
 }
 
+/** Whether PATH holds `dir` spelled with a leading literal ~ (bash expands it; Node does not). */
+function pathHoldsTildeFor(dir) {
+  return (process.env.PATH || '')
+    .split(delimiter)
+    .some((d) => /^~(?=$|[\\/])/.test(d) && resolve(d.replace(/^~/, homedir())) === resolve(dir));
+}
+
 function createCliSymlink() {
   // 2b. Create global CLI symlink (claude-mem-lite command)
   const cliSource = join(INSTALL_DIR, 'cli.mjs');
@@ -742,12 +749,10 @@ function createCliSymlink() {
       ok(`CLI: ${cliLink} → ${cliSource}`);
       // Only `status` said so, and the command this line announces was not found (E2E
       // 2026-10-16 round 2).
+      const onPath = (process.env.PATH || '').split(delimiter).some((d) => d && resolve(d) === localBin);
       // A leading ~ counts as home: a quoted `export PATH="~/.local/bin:$PATH"` leaves it
       // literal, and bash expands it at lookup (E2E 2026-10-16 round 3).
-      const onPath = (process.env.PATH || '')
-        .split(delimiter)
-        .some((d) => d && resolve(d.replace(/^~(?=$|[\\/])/, homedir())) === localBin);
-      if (!onPath)
+      if (!onPath && !pathHoldsTildeFor(localBin))
         warn(
           `${localBin} is not on PATH, so the command is not found yet — add it: export PATH=${shellWord(localBin)}:"$PATH"`,
         );
@@ -2191,7 +2196,16 @@ async function status() {
         }
       };
       const binDir = CLI_BIN_DIRS.find(isLinkedCli);
-      if (binDir) {
+      if (binDir && pathHoldsTildeFor(binDir)) {
+        // A quoted `export PATH="~/.local/bin:$PATH"` leaves a literal ~: bash expands it at
+        // lookup and finds the command; this process's lookup does not (E2E 2026-10-16 round 4).
+        push(
+          'warn',
+          'cli',
+          `CLI: installed at ${join(binDir, 'claude-mem-lite')}; PATH holds that directory as a literal ~, which bash expands and other shells and programs may not — write it as $HOME: export PATH=${shellWord(binDir)}:"$PATH"`,
+          { available: false, linked: join(binDir, 'claude-mem-lite') },
+        );
+      } else if (binDir) {
         push(
           'warn',
           'cli',

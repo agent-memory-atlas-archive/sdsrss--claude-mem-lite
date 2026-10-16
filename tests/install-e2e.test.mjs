@@ -699,6 +699,10 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
       PATH: `~/.local/bin:${binDir}:${process.env.PATH}`,
     });
     expect(tilde).not.toMatch(/\.local\/bin is not on PATH/);
+    // Round 4 (install STILL-BROKEN-1): status asked the same question through its own lookup.
+    const status = runInstall('status', home, [], { PATH: `~/.local/bin:${binDir}:${process.env.PATH}` });
+    expect(status).not.toMatch(/\.local\/bin is not on PATH/);
+    expect(status).toMatch(/literal ~/);
   });
 
   it('uninstall --purge removes data directory', () => {

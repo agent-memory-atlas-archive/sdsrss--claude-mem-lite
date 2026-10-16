@@ -275,3 +275,26 @@ export function extractDeferredRefs(text) {
   }
   return out;
 }
+
+/**
+ * Whether a stored prompt is an echo of the current one: the same text after whitespace and
+ * case are folded, or one a prefix of the other covering at least 80% of the longer (a re-paste
+ * with a line added). Injection budget C5: the past-question fallback handed the model its own
+ * prompt back in 8 of 52 rows on the frozen corpus (docs/audits/20261016-injection-budget-baseline.md).
+ * @param {string} stored
+ * @param {string} current
+ * @returns {boolean}
+ */
+export function isPromptEcho(stored, current) {
+  const norm = (s) =>
+    String(s ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  const a = norm(stored);
+  const b = norm(current);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 0.8 * long.length && long.startsWith(short);
+}

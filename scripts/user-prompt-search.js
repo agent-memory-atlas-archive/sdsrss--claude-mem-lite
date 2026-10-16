@@ -40,6 +40,7 @@ import {
   extractDeferredRefs,
   DEDUP_STALE_MS,
   detectMemOverride,
+  isPromptEcho,
 } from './prompt-search-utils.mjs';
 import { injectedIdsFileName, mergeInjectedMarker } from '../lib/injected-ids.mjs';
 import { getDeferredByIds } from '../lib/deferred-work.mjs';
@@ -566,7 +567,13 @@ function searchByFile(db, files, project, limit) {
 // ranking with no scoring multipliers and no top-|rel| gate (prompts are
 // sparser and more surface-form than observations; the gate would rarely
 // fire and mostly kill real hits).
-function searchByUserPrompts(db, queryText, project, limit) {
+//
+// Injection budget C5: a prompt from THIS Claude Code session is already in the context, and the
+// current prompt itself can be in the table (hook.mjs user-prompt writes it in parallel with this
+// search) — so rows of the current session are excluded in SQL, and a row that is an echo of the
+// current prompt (isPromptEcho) in JS. Rows written before cc_session_id existed (NULL) stay
+// eligible.
+function searchByUserPrompts(db, queryText, project, limit, ccSessionId = null) {
   const ftsQuery = upsFtsQuery(queryText);
   if (!ftsQuery) return [];
 
@@ -584,6 +591,7 @@ function searchByUserPrompts(db, queryText, project, limit) {
       AND s.project = ?
       AND up.created_at_epoch > ?
       AND up.prompt_text NOT LIKE '<task-notification>%'
+      AND (? IS NULL OR up.cc_session_id IS NULL OR up.cc_session_id != ?)
     ORDER BY relevance
     LIMIT ?
   `;
@@ -596,13 +604,18 @@ function searchByUserPrompts(db, queryText, project, limit) {
   // filter, then take `limit` — same ORDER BY, so the old result is a prefix of this
   // one and a row can only be added, never displaced by something worse.
   const poolLimit = Math.min(limit * PROMPT_FALLBACK_POOL_FACTOR, PROMPT_FALLBACK_POOL_MAX);
-  let rows = db.prepare(sql).all(ftsQuery, project, cutoff, poolLimit);
+  const session = typeof ccSessionId === 'string' && ccSessionId ? ccSessionId : null;
+  // The echo filter runs BEFORE the OR relaxation decides: the current prompt matches every one
+  // of its own AND terms, so an echo is often the AND query's only row — filtering it after
+  // would leave nothing and never try the OR pool (the LIMIT-upstream-of-a-JS-filter shape).
+  const notEcho = (rs) => rs.filter((r) => !isPromptEcho(r.prompt_text, queryText));
+  let rows = notEcho(db.prepare(sql).all(ftsQuery, project, cutoff, session, session, poolLimit));
 
   if (rows.length === 0) {
     const orQuery = relaxFtsQueryToOr(ftsQuery);
     if (orQuery) {
       try {
-        rows = db.prepare(sql).all(orQuery, project, cutoff, poolLimit);
+        rows = notEcho(db.prepare(sql).all(orQuery, project, cutoff, session, session, poolLimit));
       } catch {}
     }
   }
@@ -1092,7 +1105,7 @@ async function main() {
     // single highest-noise UPS path. Restored when REQUIRE_SIGNAL=0.
     let promptRows = [];
     if (rows.length === 0 && (!REQUIRE_EXPLICIT_SIGNAL || signalPresent)) {
-      promptRows = searchByUserPrompts(db, promptText, project, PROMPT_FALLBACK_LIMIT);
+      promptRows = searchByUserPrompts(db, promptText, project, PROMPT_FALLBACK_LIMIT, hookData.session_id);
     }
 
     const candidateIds = rows.length > 0 ? rows.map((r) => r.id) : promptRows.map((r) => `P${r.id}`);

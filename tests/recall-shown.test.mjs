@@ -1,9 +1,9 @@
 // lib/recall-shown.mjs — what one thread has already been shown once (injection budget C1/C3).
 //
-// The framing header and the full cite directive are the same text on every recall block; a
-// thread needs each once. The plan is a pure function so benchmark/injection-budget.mjs can
-// replay recorded blocks through it; the marker is per THREAD (same key as the cooldown) and is
-// cleared on compaction, when the earlier copy leaves the context.
+// The framing header (or the factual arm's line naming the file) and the full cite directive open
+// recall block after recall block; a thread needs each once. The plan is a pure function so
+// benchmark/injection-budget.mjs can replay recorded blocks through it; the marker is per THREAD
+// (same key as the cooldown) and is cleared whenever the main context starts over (not on resume).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,8 +98,8 @@ describe('the per-thread marker', () => {
   });
 });
 
-// The hook.mjs half: SessionStart(compact) clears the main thread's marker, and the runtime GC
-// reaps stale ones with the cooldown files. Driven through the real entry point.
+// The hook.mjs half: SessionStart clears the main thread's marker on every source but `resume`, and
+// the runtime GC reaps stale ones with the cooldown files. Driven through the real entry point.
 describe('SessionStart wiring (hook.mjs)', () => {
   const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'hook.mjs');
   let root;

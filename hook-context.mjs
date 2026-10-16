@@ -534,7 +534,7 @@ const MIN_LOCAL_OBS = 3;
  * MIN_LOCAL_OBS, so the table gains at most two rows.
  *
  * The COUNT never shrinks; the composition can, and that is a ranking decision rather than
- * an accident. At the uncapped table site this only adds. At the `.slice(0, MIN_LOCAL_OBS)`
+ * an accident. At the table site, before its 5-row cap, this only added. At the `.slice(0, MIN_LOCAL_OBS)`
  * site the selected rows are PREPENDED, so with 1 local row and 3+ fallback rows the third
  * fallback title is evicted — still three rows, one of them now local. Exhaustive
  * enumeration over 42,436 ordered input pairs: 0 cases render fewer rows, 3,000 evict a

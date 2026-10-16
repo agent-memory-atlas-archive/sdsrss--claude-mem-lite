@@ -1273,12 +1273,13 @@ describe('D#75: created_at_epoch ties break newest-id-first', () => {
   });
 });
 
-// ─── Injection budget C4: the Recent table carries the newest 5 rows ─────────────────────
+// ─── Injection budget C4: the Recent table carries 5 rows ──────────────────────────────────
 //
 // On the frozen 52-session corpus (docs/audits/20261016-injection-budget-baseline.md) the
 // table cost 1.02 KB/session and its ids were cited 2 times in 498 (session, id) pairs. The
-// cap applies after the display sort, so it keeps the newest picks; the knapsack and its
-// budget are untouched. CLAUDE_MEM_STARTUP_RECENT_ROWS sets the cap, 0 hides the table.
+// cap keeps the project's own picks first, newest first (here all rows are own, so the newest
+// five; the thin-project case is the describe below); the knapsack and its budget are untouched.
+// CLAUDE_MEM_STARTUP_RECENT_ROWS sets the cap, 0 hides the table.
 describe('buildSessionContextLines: Recent table row cap (injection budget C4)', () => {
   let db;
   const MINUTE = 60000; // minutes apart: the adaptive windows admit all eight

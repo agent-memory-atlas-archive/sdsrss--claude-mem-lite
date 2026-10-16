@@ -20,6 +20,7 @@ import {
   triggerKind,
   bashReadsPartially,
   isActivityCall,
+  sessionEvents,
   visibleText,
   projectSessionEvents,
   assertIdentityProjection,
@@ -187,6 +188,10 @@ describe('value-proxy helpers', () => {
     // Claims review P2-1: these four shapes were counted as runs.
     expect(isActivityCall('grep -n "x" cli/activity.mjs cli.mjs')).toBe(false);
     expect(isActivityCall('python3 patch.py lib/activity.mjs && node cli.mjs help')).toBe(false);
+    // Delta review P3-4: the `node $C` shorthand, flags before the verb, and a grep for the words.
+    expect(isActivityCall('C=/x/cli.mjs; node $C activity recent')).toBe(true);
+    expect(isActivityCall('node "$C" --json activity recent')).toBe(true);
+    expect(isActivityCall('grep -n "claude-mem-lite activity" README.md')).toBe(false);
   });
 
   it('calls a truncated past question an echo only when one text starts the other', () => {
@@ -333,12 +338,58 @@ describe('after-arm projection (shipped decision functions over recorded blocks)
     expect(() => assertNoLessonRowLost(lost)).toThrow(/lost lesson rows/);
   });
 
+  it('a blocking hook’s feedback is read as model-visible text (delta review P3-3, R7)', () => {
+    const entries = [
+      { type: 'user', message: { content: 'go' } },
+      {
+        type: 'attachment',
+        attachment: {
+          type: 'hook_blocking_error',
+          hookEvent: 'Stop',
+          blockingError: {
+            blockingError: 'restate in 中文',
+            command: 'bash "/p/hooks/reply-language-check.sh"',
+          },
+        },
+      },
+    ];
+    const hook = sessionEvents(entries).events.find((e) => e.kind === 'hook');
+    expect(hook.text).toBe('restate in 中文');
+    expect(hook.label).toBe('Stop|reply-language-check.sh');
+  });
+
+  it('the after-arm keeps a thin project’s own Recent rows first (delta review P3-3, R8)', () => {
+    const ss = [
+      '<claude-mem-context>',
+      '### Recent (2026-10-16)',
+      '',
+      '| ID | Time | T | Title |',
+      '|----|------|---|-------|',
+      ...[1, 2, 3, 4, 5].map((i) => `| #${10 + i} | 0${i}:00 | 🔵 | foreign ${i} (dev--other) |`),
+      '| #1 | 06:00 | 🔴 | own A |',
+      '| #2 | 07:00 | 🔴 | own B |',
+      '</claude-mem-context>',
+    ].join('\n');
+    const [out] = projectSessionEvents([{ kind: 'hook', face: 'session_start', text: ss }], {}).filter(
+      (e) => e.kind === 'hook',
+    );
+    const rows = out.text.split('\n').filter((l) => l.startsWith('| #'));
+    expect(rows).toHaveLength(5);
+    expect(rows.filter((l) => l.includes('own'))).toHaveLength(2);
+    expect(rows.filter((l) => l.includes('foreign')).map((l) => l.match(/foreign (\d)/)[1])).toEqual([
+      '1',
+      '2',
+      '3',
+    ]);
+  });
+
   it('the lesson-row check covers every face, not only pretool', () => {
     const fyi = '[mem] FYI — Related memories (continue your task):\n#42 🔴 a title — a lesson';
     const emptied = [[{ kind: 'hook', face: 'ups_search', before: fyi, text: '' }]];
     expect(() => assertNoLessonRowLost(emptied)).toThrow(/ups_search/);
     // ...while the rows a change removes on purpose (past questions) do not count.
-    const pq = '[mem] FYI — Past similar questions (continue your task):\nP#9 💬 x';
+    // A past question whose PROMPT text names a memory id: removing that row must not count (R6).
+    const pq = '[mem] FYI — Past similar questions (continue your task):\nP#9 💬 is #42 still right';
     expect(() =>
       assertNoLessonRowLost([[{ kind: 'hook', face: 'ups_search', before: pq, text: '' }]]),
     ).not.toThrow();

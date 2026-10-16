@@ -659,9 +659,18 @@ export function fileInfoValue(sessionsEvents) {
   return r;
 }
 
-const ACTIVITY_CALL_RE = /(?:claude-mem-lite|cli\.mjs)["']?\s+activity\b/;
-/** A Bash command that RUNS `activity` (the CLI verb), not one that names lib/activity.mjs. */
-export const isActivityCall = (command) => ACTIVITY_CALL_RE.test(String(command || ''));
+// The CLI at the HEAD of a command segment — `claude-mem-lite`, `[node] …/cli.mjs`, or the
+// `node $C` / `node "$C"` shorthand — optional env assignments before it, flags before the verb.
+const ACTIVITY_CALL_RE =
+  /^(?:\w+=\S*\s+)*(?:node\s+)?(?:\S*cli\.mjs|claude-mem-lite|"?\$\{?C\}?"?)["']?(?:\s+-{1,2}\S+)*\s+activity\b/;
+/**
+ * A Bash command that RUNS `activity` (the CLI verb), not one that names lib/activity.mjs or
+ * greps for the words (claims review P2-1; delta review P3-4 for the `node $C` shape).
+ */
+export const isActivityCall = (command) =>
+  String(command || '')
+    .split(/;|&&|\|\||\||\n/)
+    .some((seg) => ACTIVITY_CALL_RE.test(seg.trim()));
 const RECENT_ROW_RE = new RegExp(`^\\| #(${OBS_ID_DIGITS}) \\|`);
 const KEYCTX_ID_RE = new RegExp(`#(${OBS_ID_DIGITS})\\b`);
 const DEFERRED_ROW_RE = /\(D#(\d+)\)\s*$/;
@@ -840,8 +849,10 @@ function projectPretool(text, state, env) {
     .join('\n');
 }
 
-// hook-context renders ` (${o.project})` after a foreign row's title; project names are `a--b`.
-const FOREIGN_ROW_RE = /\(([\w.-]*--[\w.-]+)\) \|$/;
+// hook-context renders ` (${o.project})` after a foreign row's title. Project names are `a--b`
+// (projectNameFromDir keeps any letter, so Unicode too). A project at a root-level dir is a bare
+// basename with no `--` and would read as OWN here — this corpus has none (4 `dev--*` projects).
+const FOREIGN_ROW_RE = /\(([\p{L}\p{N}_.-]*--[\p{L}\p{N}_.-]+)\) \|$/u;
 
 function projectSessionStart(text, env, opts) {
   const cls = classifyLines('session_start', text);

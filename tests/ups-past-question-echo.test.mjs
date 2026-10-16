@@ -2,7 +2,8 @@
 // must not hand the model its own prompt back.
 //
 // On the frozen 52-session corpus (docs/audits/20261016-injection-budget-baseline.md) 8 of 52
-// rows were the very prompt that triggered them and 1 an earlier prompt of the same session:
+// rows were the very prompt that triggered them (one more matched an earlier `继续`, too short to
+// attribute):
 // `hook.mjs user-prompt` writes the current prompt into user_prompts in parallel with this
 // search, and nothing excluded the current session. A prompt from THIS session is already in
 // the context; one that is the same text as the current prompt says nothing new either.

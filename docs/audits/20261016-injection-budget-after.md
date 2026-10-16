@@ -15,7 +15,7 @@
 | C6 | 启动面板去掉 `💡 mem events …` 这一行 | `25b14389`，评审修复见下 | `CLAUDE_MEM_DASHBOARD_EVENTS=1` |
 
 线程状态放在新文件 `lib/recall-shown.mjs`：每个线程一个标记文件 `recall-shown-<线程>.json`，键和 cooldown
-一样（子代理线程单独计）；SessionStart 收到 `source: compact` 时清掉主线程的标记，运行目录 GC 按 24 小时回收。
+一样（子代理线程单独计）；SessionStart 除了 `resume` 都清掉主线程的标记（压缩、`/clear`、新启动都是新上下文；初版只在 `compact` 时清，评审后改），运行目录 GC 按 24 小时回收。
 教训行一行都没动，实验档位（`verdict` / `bind` / `bridge`）的指令文字也没动。`post-tool-recall.js` 的抬头只在
 `bind` 档位出现，按"实验档位文字不变"的约束没有改（和计划不同的一处）。
 

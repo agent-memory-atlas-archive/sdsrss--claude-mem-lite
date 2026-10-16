@@ -7,6 +7,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
+import { eventSearchTerms } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
@@ -205,6 +206,10 @@ const LATEST_MIGRATION_COLUMNS = [
   { table: 'observations', column: 'importance_set_at' },
   // D12, same again (tests/maintain-hide-then-purge.test.mjs).
   { table: 'observations', column: 'hidden_at' },
+  // d366, no bump either. Keyed on the INDEX column rather than events.search_terms: the pass
+  // must also run when the column exists but events_fts is still (or again) the 4-column shape
+  // (tests/events-cjk-search.test.mjs pins the upgrade).
+  { table: 'events_fts', column: 'search_terms' },
   { table: 'observations', column: 'last_access_session_id' }, // v48
   { table: 'observations', column: 'decay_seen_at_first_cite' }, // v46
   { table: 'citation_surface_log', column: 'surface' }, // v45
@@ -829,7 +834,8 @@ export function initSchema(db) {
       accessed_count       INTEGER NOT NULL DEFAULT 0,
       last_accessed_epoch  INTEGER,
       superseded_at_epoch  INTEGER,
-      superseded_by_id     INTEGER REFERENCES events(id)
+      superseded_by_id     INTEGER REFERENCES events(id),
+      search_terms         TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_events_project ON events(project);
     CREATE INDEX IF NOT EXISTS idx_events_type    ON events(event_type);
@@ -837,37 +843,33 @@ export function initSchema(db) {
     -- T7 compound: supports recentEvents() ORDER BY created_at_epoch DESC filtered by project (index-only sort, avoids temp B-tree).
     CREATE INDEX IF NOT EXISTS idx_events_project_created
       ON events(project, created_at_epoch DESC);
-
-    CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-      title, body, event_type UNINDEXED, project UNINDEXED,
-      content='events', content_rowid='id',
-      tokenize="unicode61 remove_diacritics 2 tokenchars '_-'"
-    );
-
-    CREATE TRIGGER IF NOT EXISTS events_fts_ai AFTER INSERT ON events BEGIN
-      INSERT INTO events_fts(rowid, title, body, event_type, project)
-      VALUES (new.id, COALESCE(new.title,''), COALESCE(new.body,''), new.event_type, new.project);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS events_fts_ad AFTER DELETE ON events BEGIN
-      INSERT INTO events_fts(events_fts, rowid, title, body, event_type, project)
-      VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.body,''), old.event_type, old.project);
-    END;
-
-    -- v36: scoped to title, body (the FTS-indexed columns) so non-indexed bumps
-    -- (importance / accessed_count / citation-decay) no longer thrash events_fts.
-    CREATE TRIGGER IF NOT EXISTS events_fts_au AFTER UPDATE OF title, body ON events BEGIN
-      INSERT INTO events_fts(events_fts, rowid, title, body, event_type, project)
-      VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.body,''), old.event_type, old.project);
-      INSERT INTO events_fts(rowid, title, body, event_type, project)
-      VALUES (new.id, COALESCE(new.title,''), COALESCE(new.body,''), new.event_type, new.project);
-    END;
   `);
 
+  // d366: events.search_terms — the CJK segmentation (nlp.mjs eventSearchTerms) events_fts
+  // indexes as its fifth column, so a CJK substring or title query can match an event. The
+  // CREATE above carries it for a fresh DB; an existing one gets the ALTER and a backfill of every
+  // row written before it. Backfilled BEFORE ensureEventsFTS below: the old triggers fire only on
+  // title/body, so these UPDATEs touch no index, and the drifted (4-column) events_fts is then
+  // recreated and rebuilt from the filled column in one pass. '' marks "computed, nothing to add"
+  // so the IS NULL scan is a one-time cost. Rows a pre-d366 build writes later carry NULL and are
+  // filled by the next full pass. Additive + nullable, no CURRENT_SCHEMA_VERSION bump — an older
+  // build opening this DB keeps writing events (the triggers index '' for its missing value).
+  // Not wrapped in a swallowing catch, unlike the ALTERs above: ensureEventsFTS installs triggers
+  // that read new.search_terms, so carrying on without the column would fail every event write.
+  // A throw here rolls the whole pass back and the next open retries it.
+  const eventCols = db
+    .prepare(`PRAGMA table_info(events)`)
+    .all()
+    .map((c) => c.name);
+  if (!eventCols.includes('search_terms')) db.exec(`ALTER TABLE events ADD COLUMN search_terms TEXT`);
+  const pendingTerms = db.prepare(`SELECT id, title, body FROM events WHERE search_terms IS NULL`).all();
+  const fillTerms = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ?`);
+  for (const e of pendingTerms) fillTerms.run(eventSearchTerms(e.title, e.body), e.id);
+
   // v42: column-aware self-heal for events_fts (the one FTS table the generic ensureFTS can't
-  // manage — UNINDEXED cols + custom tokenizer + events_fts_* triggers). The CREATE ... IF NOT
-  // EXISTS above never widens a drifted (older, narrower) events_fts; this drops+recreates it on
-  // column drift and repopulates. No-op on a healthy DB.
+  // manage — UNINDEXED cols + custom tokenizer + events_fts_* triggers). Creates events_fts and its
+  // triggers on a fresh DB, and drops+recreates+repopulates a drifted (older, narrower) one. The
+  // DDL lives only there since d366: two hand-kept copies of it had to stay byte-identical.
   ensureEventsFTS(db);
 
   // Observation files junction table for normalized file lookups (replaces LIKE scans on files_modified JSON)
@@ -1676,7 +1678,8 @@ export function ensureFTS(db, ftsName, tableName, columns) {
 // F8/P2-4 gap: events_fts was the one FTS table outside self-heal, so a future events column
 // addition would leave a stale narrow index whose (wider) triggers throw "no column" and
 // silently drop event writes. Idempotent: a no-op once the column set matches.
-const EVENTS_FTS_COLUMNS = ['title', 'body', 'event_type', 'project']; // full set (drift check)
+// search_terms (d366) is LAST so the existing columns keep their bm25() weight positions.
+const EVENTS_FTS_COLUMNS = ['title', 'body', 'event_type', 'project', 'search_terms']; // full set (drift check)
 export function ensureEventsFTS(db) {
   const ftsRow = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts'`).get();
   let recreated = false;
@@ -1704,29 +1707,34 @@ export function ensureEventsFTS(db) {
   if (!ftsRow || recreated) {
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-        title, body, event_type UNINDEXED, project UNINDEXED,
+        title, body, event_type UNINDEXED, project UNINDEXED, search_terms,
         content='events', content_rowid='id',
         tokenize="unicode61 remove_diacritics 2 tokenchars '_-'"
       );
     `);
   }
-  // Triggers reinstated from the canonical template (INSERT all 4 columns; AFTER UPDATE OF the
-  // two INDEXED columns only, so non-indexed bumps don't thrash the index). IF NOT EXISTS so an
-  // unchanged definition is a no-op — byte-identical to the events block in initSchema.
+  // Triggers reinstated from the canonical template (INSERT all 5 columns; AFTER UPDATE OF the
+  // three INDEXED columns only, so non-indexed bumps (importance / accessed_count /
+  // citation-decay, v36) don't thrash the index). IF NOT EXISTS so an unchanged definition is a
+  // no-op. A drifted index drops its triggers above, so a recreated one always gets this body.
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS events_fts_ai AFTER INSERT ON events BEGIN
-      INSERT INTO events_fts(rowid, title, body, event_type, project)
-      VALUES (new.id, COALESCE(new.title,''), COALESCE(new.body,''), new.event_type, new.project);
+      INSERT INTO events_fts(rowid, title, body, event_type, project, search_terms)
+      VALUES (new.id, COALESCE(new.title,''), COALESCE(new.body,''), new.event_type, new.project,
+              COALESCE(new.search_terms,''));
     END;
     CREATE TRIGGER IF NOT EXISTS events_fts_ad AFTER DELETE ON events BEGIN
-      INSERT INTO events_fts(events_fts, rowid, title, body, event_type, project)
-      VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.body,''), old.event_type, old.project);
+      INSERT INTO events_fts(events_fts, rowid, title, body, event_type, project, search_terms)
+      VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.body,''), old.event_type, old.project,
+              COALESCE(old.search_terms,''));
     END;
-    CREATE TRIGGER IF NOT EXISTS events_fts_au AFTER UPDATE OF title, body ON events BEGIN
-      INSERT INTO events_fts(events_fts, rowid, title, body, event_type, project)
-      VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.body,''), old.event_type, old.project);
-      INSERT INTO events_fts(rowid, title, body, event_type, project)
-      VALUES (new.id, COALESCE(new.title,''), COALESCE(new.body,''), new.event_type, new.project);
+    CREATE TRIGGER IF NOT EXISTS events_fts_au AFTER UPDATE OF title, body, search_terms ON events BEGIN
+      INSERT INTO events_fts(events_fts, rowid, title, body, event_type, project, search_terms)
+      VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.body,''), old.event_type, old.project,
+              COALESCE(old.search_terms,''));
+      INSERT INTO events_fts(rowid, title, body, event_type, project, search_terms)
+      VALUES (new.id, COALESCE(new.title,''), COALESCE(new.body,''), new.event_type, new.project,
+              COALESCE(new.search_terms,''));
     END;
   `);
   if (recreated) {

@@ -42,7 +42,7 @@ const ftsHits = (d, q) =>
     .all(q);
 
 describe('ensureEventsFTS (P2-4 / v42 events_fts self-heal)', () => {
-  it('is a no-op on a healthy DB — 4 columns, canonical triggers only, no wrong-named events_* set', () => {
+  it('is a no-op on a healthy DB — 5 columns, canonical triggers only, no wrong-named events_* set', () => {
     db = createTestDb();
     insertSession(db, { id: 's', project: 'p' });
     addEvent(db, { title: 'zebracrossing healthy' });
@@ -50,7 +50,7 @@ describe('ensureEventsFTS (P2-4 / v42 events_fts self-heal)', () => {
     ensureEventsFTS(db); // second pass over an already-correct schema
     ensureEventsFTS(db); // idempotent
 
-    expect(ftsCols(db)).toEqual(['title', 'body', 'event_type', 'project']);
+    expect(ftsCols(db)).toEqual(['title', 'body', 'event_type', 'project', 'search_terms']);
     const trigs = triggerNames(db).sort();
     expect(trigs).toEqual(['events_fts_ad', 'events_fts_ai', 'events_fts_au']);
     // The generic ensureFTS would have added events_ai/events_ad/events_au (double-write). Assert absent.
@@ -74,9 +74,9 @@ describe('ensureEventsFTS (P2-4 / v42 events_fts self-heal)', () => {
 
     ensureEventsFTS(db);
 
-    // Healed: full 4-column set restored, and the pre-existing event is searchable again
+    // Healed: full 5-column set restored, and the pre-existing event is searchable again
     // (repopulated via the 'rebuild' command — an empty recreated index would return 0).
-    expect(ftsCols(db)).toEqual(['title', 'body', 'event_type', 'project']);
+    expect(ftsCols(db)).toEqual(['title', 'body', 'event_type', 'project', 'search_terms']);
     expect(ftsHits(db, 'zebracrossing')).toHaveLength(1);
 
     // Triggers restored under the canonical names → a NEW event indexes correctly.

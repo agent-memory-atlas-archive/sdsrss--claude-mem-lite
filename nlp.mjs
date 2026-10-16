@@ -68,6 +68,20 @@ export function cjkBigrams(text) {
   return [...new Set(tokens)].join(' ');
 }
 
+/**
+ * The extra terms events_fts indexes for an event (its `search_terms` column): the CJK
+ * segmentation of title + body, i.e. what observations append to their indexed `text`.
+ * Without it an event matched a CJK query only when the query equalled a whole CJK run,
+ * because unicode61 stores a run as one token while the query side reduces CJK to words and
+ * bigrams. '' for an event with no CJK, so English events index nothing extra.
+ * @param {string|null} title
+ * @param {string|null} body
+ * @returns {string}
+ */
+export function eventSearchTerms(title, body) {
+  return cjkBigrams(`${title || ''} ${body || ''}`);
+}
+
 // ─── CJK Keyword Extraction ─────────────────────────────────────────────────
 
 // Extract known CJK words (from SYNONYM_MAP) out of unsegmented CJK text.

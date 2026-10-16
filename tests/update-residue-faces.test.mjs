@@ -1017,7 +1017,10 @@ describe('install.lock that cannot be taken: the delta review repairs', () => {
       });
       expect(r.out).toMatch(/Checking for updates/);
       expect(r.out).not.toMatch(/install\.lock cannot be taken/);
-      expect(r.status, r.out).toBe(0);
+      // It got past the lock and ran the check, which fails offline; a failed check exits 1
+      // (E2E 2026-10-16), so the output, not the status, is what tells the two apart here.
+      expect(r.out).toMatch(/could not reach GitHub/);
+      expect(r.status, r.out).toBe(1);
     } finally {
       chmodSync(runtime, 0o755);
     }

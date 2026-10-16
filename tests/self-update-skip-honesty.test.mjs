@@ -22,7 +22,20 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+let lastStatus = null;
 function selfUpdate(extraEnv) {
+  // A failed check exits 1 (E2E 2026-10-16), so read stdout off the thrown error too.
+  try {
+    const out = selfUpdateRaw(extraEnv);
+    lastStatus = 0;
+    return out;
+  } catch (e) {
+    lastStatus = e.status;
+    return e.stdout || '';
+  }
+}
+
+function selfUpdateRaw(extraEnv) {
   return execFileSync(process.execPath, [CLI, 'self-update'], {
     encoding: 'utf8',
     timeout: 30000,
@@ -72,6 +85,8 @@ describe('self-update says why it did not check', () => {
     expect(out).toMatch(/Checking for updates/);
     expect(out).not.toMatch(/up to date/i);
     expect(out).toMatch(/could not reach GitHub/i);
+    // Nothing was checked or installed: `self-update && …` must not read that as success.
+    expect(lastStatus).toBe(1);
   });
 
   it('prints the updater name in its banner, not the memory editor `update`', () => {

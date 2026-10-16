@@ -3869,6 +3869,9 @@ async function manualUpdate() {
         ? 'Not checked: GitHub is rate-limiting requests from this address. Try again later.'
         : 'Not checked: could not reach GitHub Releases (network, proxy or DNS). Nothing was installed.',
     );
+    // Nothing was checked or installed; `self-update && …` must not read that as success
+    // (repair already exits 1 for the same condition).
+    process.exitCode = 1;
   } else if (result?.updated) {
     ok(`Updated: v${result.from} → v${result.to}`);
   } else if (result?.updateAvailable && result?.installDeferred) {
@@ -3877,7 +3880,9 @@ async function manualUpdate() {
     log('    /plugin marketplace update sdsrss');
     log('    /plugin install claude-mem-lite@sdsrss');
   } else if (result?.updateAvailable) {
-    warn(`v${result.to} available but install failed — try: node install.mjs install`);
+    // `node install.mjs install` named a relative path the user is rarely standing next to.
+    warn(`v${result.to} available but install failed — try: npx claude-mem-lite@latest install`);
+    process.exitCode = 1;
   } else {
     const ver = getCurrentVersion();
     ok(`Already up to date (v${ver})`);

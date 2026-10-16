@@ -158,7 +158,7 @@ describe('P3-4 disabled plugin stops appending reads-<project>.txt', () => {
 // E2E 2026-10-16 round 2 (hooks REGRESSION-1): Claude Code merges enabledPlugins user <
 // project < local; the guard read the user scope only.
 describe('the bash guard merges the project and local scopes like the host', () => {
-  function scopedRead({ user, project, local }) {
+  function scopedRead({ user, project, local, projectRaw }) {
     const home = sandbox('mem-disabled-home-');
     const memDir = sandbox('mem-disabled-data-');
     const proj = join(sandbox('mem-disabled-proj-'), 'org', 'proj');
@@ -167,6 +167,7 @@ describe('the bash guard merges the project and local scopes like the host', () 
     if (user !== undefined) writeFileSync(join(home, '.claude', 'settings.json'), settingsWith(user));
     if (project !== undefined) writeFileSync(join(proj, '.claude', 'settings.json'), settingsWith(project));
     if (local !== undefined) writeFileSync(join(proj, '.claude', 'settings.local.json'), settingsWith(local));
+    if (projectRaw !== undefined) writeFileSync(join(proj, '.claude', 'settings.json'), projectRaw);
     const r = spawnSync('bash', [SCRIPT], {
       input: JSON.stringify({
         session_id: 'scoped',
@@ -196,6 +197,15 @@ describe('the bash guard merges the project and local scopes like the host', () 
   });
   it('control: user false alone is still off', () => {
     expect(scopedRead({ user: false })).toBe(false);
+  });
+  // E2E 2026-10-16 round 3 (NEW-4): a regex reads the key out of a file that is not valid JSON,
+  // where node ignores the whole file. A trailing comma is the common hand edit.
+  it('a project file that does not parse sets nothing, as on the node side', () => {
+    const broken = `{"enabledPlugins":{"${PLUGIN_KEY}": false,}}`;
+    expect(() => JSON.parse(broken)).toThrow();
+    expect(scopedRead({ user: true, projectRaw: broken })).toBe(true);
+    // Control: the same file without the comma still switches it off.
+    expect(scopedRead({ user: true, projectRaw: `{"enabledPlugins":{"${PLUGIN_KEY}": false}}` })).toBe(false);
   });
 });
 

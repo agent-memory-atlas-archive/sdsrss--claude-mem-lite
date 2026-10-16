@@ -19,7 +19,8 @@
 # claudeConfigDir; a relative value is ignored on both sides) — the same plugin key, and the
 # same fail-open-on-unreadable semantics (its try/catch returns false). Parity pinned by
 # tests/post-tool-use-disabled.test.mjs.
-# Cheap by construction: no `node`, no external command on this ~5ms per-tool-call path.
+# Cheap by construction: no `node`, no external command on this ~5ms per-tool-call path — except
+# when the regex says disabled, which node then confirms (see _mem_plugin_disabled).
 # `-r` covers missing/unreadable in one builtin test, and `$(<file)` slurps the whole file
 # for ONE regex — measured +0.4ms/call vs +4.0ms for a `while read` loop over the same
 # 239-line settings.json (bash pays a syscall + a regex per line there).
@@ -54,7 +55,22 @@ _mem_plugin_disabled() {
     [[ "$_settings" =~ \"claude-mem-lite@sdsrss\"[[:space:]]*:[[:space:]]*(true|false) ]] &&
       _value="${BASH_REMATCH[1]}"
   done
-  [[ "$_value" == false ]]
+  [[ "$_value" == false ]] || return 1
+  # A regex is not a JSON parser: it read the key out of a file node cannot parse, where node
+  # ignores the whole file (fail open), so the two disagreed on a hand-edited settings file
+  # with a trailing comma (E2E 2026-10-16 round 3, NEW-4). Disabled is the rare verdict, so only
+  # it pays for node (~20 ms) to re-decide with the shared predicate; enabled never gets here.
+  # Exit 1 is node's "enabled"; node missing or failing keeps the bash verdict.
+  local _dir="${BASH_SOURCE[0]%/*}"
+  [[ "$_dir" == "${BASH_SOURCE[0]}" ]] && _dir=.
+  [[ -r "$_dir/../lib/plugin-key.mjs" ]] || return 0
+  node --input-type=module -e '
+    const [lib, home, proj] = process.argv.slice(1);
+    const { pathToFileURL } = process.getBuiltinModule("node:url");
+    const { isPluginDisabledForProject } = await import(pathToFileURL(lib).href);
+    process.exit(isPluginDisabledForProject(home, proj) ? 0 : 1);
+  ' "$_dir/../lib/plugin-key.mjs" "$_mem_config_home" "$_mem_project_dir"
+  [[ $? -ne 1 ]]
 }
 
 # Read stdin (tool hook JSON). The whole-file tier (8 MB, lib/hook-stdin.mjs

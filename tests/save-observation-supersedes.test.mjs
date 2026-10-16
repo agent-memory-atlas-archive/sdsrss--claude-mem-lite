@@ -383,6 +383,15 @@ describe('saveObservation supersedes', () => {
       expect(msg, 'a non-id token is quoted back as-is').toContain('abc (not a positive integer id)');
     });
 
+    // E2E 2026-10-16 round 2 (data N3): `#N` is how every listing prints an observation id, and
+    // get / timeline / delete take it; supersedes reported it malformed and left the row live.
+    it('#N names an observation, as listings print it', () => {
+      const r = splitSupersedeTokens(['#7', ' #8 ', '#', '##9', '#E9']);
+      expect(r.obs).toEqual([7, 8]);
+      expect(r.events).toEqual([]);
+      expect(r.malformed.map((m) => m.id)).toEqual(['#', '##9', '#E9']);
+    });
+
     it('a bare number is never routed to events, and E# is never routed to observations', () => {
       // The one-line statement of the invariant, asserted rather than described.
       expect(splitSupersedeTokens([42]).events).toEqual([]);

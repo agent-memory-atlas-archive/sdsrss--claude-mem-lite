@@ -758,4 +758,41 @@ describe('array fields accept the serialised shapes their siblings accept', () =
       're-enrich',
     ]);
   });
+  // E2E 2026-10-16 round 2 (data R3): the coercion read "" as [], and an empty task list means
+  // EVERY task in optimizeRun, so `tasks: ""` ran all four LLM passes where it was refused.
+  it('an empty or blank string is still refused, not read as an empty list', () => {
+    for (const blank of ['', '  ', ',', ' , ']) {
+      expect(
+        parseSchema(memOptimizeSchema, { action: 'run', tasks: blank }).success,
+        `tasks ${JSON.stringify(blank)}`,
+      ).toBe(false);
+      expect(
+        parseSchema(memMaintainSchema, { action: 'execute', operations: blank }).success,
+        `operations ${JSON.stringify(blank)}`,
+      ).toBe(false);
+      expect(parseSchema(memSaveSchema, { content: 'x', supersedes: blank }).success).toBe(false);
+    }
+  });
+  // Round 2 (data S5): merge_ids was the one array argument left out.
+  it('merge_ids: a JSON-array string', () => {
+    const r = parseSchema(memMaintainSchema, {
+      action: 'execute',
+      operations: ['dedup'],
+      merge_ids: '[[3,"4"]]',
+    });
+    expect(r.success).toBe(true);
+    expect(r.data.merge_ids).toEqual([[3, 4]]);
+    expect(
+      parseSchema(memMaintainSchema, { action: 'execute', operations: ['dedup'], merge_ids: '[[3]]' })
+        .success,
+    ).toBe(false);
+  });
+  // Round 2 (data N3): the id form every listing prints.
+  it('supersedes: #N is an observation id', () => {
+    expect(parseSchema(memSaveSchema, { content: 'x', supersedes: ['#5', 'E#7'] }).data.supersedes).toEqual([
+      5,
+      'E#7',
+    ]);
+    expect(parseSchema(memSaveSchema, { content: 'x', supersedes: '#5' }).data.supersedes).toEqual([5]);
+  });
 });

@@ -107,10 +107,13 @@ const asArrayOrRaw = (v) => {
         /* fall through to comma-split */
       }
     }
-    return s
+    const parts = s
       .split(',')
       .map((x) => x.trim())
       .filter((x) => x.length > 0);
+    // A blank string stays a string, so the schema refuses it: read as [], `tasks: ""` ran
+    // every optimize task, since an empty list means all of them (E2E round 2, data R3).
+    return parts.length > 0 ? parts : v;
   }
   return v;
 };
@@ -364,8 +367,11 @@ const coerceDeferredTokens = z.preprocess(
 const coerceSupersedes = z.preprocess(
   (raw) => {
     const v = asArrayOrRaw(raw);
+    // `#N` too: it is how every listing prints an observation id (E2E round 2, data N3).
     return Array.isArray(v)
-      ? v.map((x) => (typeof x === 'string' && /^\d+$/.test(x.trim()) ? parseInt(x.trim(), 10) : x))
+      ? v.map((x) =>
+          typeof x === 'string' && /^#?\d+$/.test(x.trim()) ? parseInt(x.trim().replace(/^#/, ''), 10) : x,
+        )
       : v;
   },
   z
@@ -484,12 +490,15 @@ export const memMaintainSchema = {
     ),
   merge_ids: z
     .preprocess(
-      (v) =>
-        Array.isArray(v)
+      (raw) => {
+        // A JSON-array string as well, like every other array argument (E2E round 2, data S5).
+        const v = asArrayOrRaw(raw);
+        return Array.isArray(v)
           ? v.map((g) =>
               Array.isArray(g) ? g.map((x) => (typeof x === 'string' ? wholeIntOrRaw(x.trim()) : x)) : g,
             )
-          : v,
+          : v;
+      },
       z.array(z.array(z.number().int()).min(2)),
     )
     .optional()

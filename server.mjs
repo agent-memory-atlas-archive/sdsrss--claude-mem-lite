@@ -129,7 +129,7 @@ import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from '
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
-import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError, ftsCorruptionRemedy } from './lib/db-unusable.mjs';
 import { fetchRecent } from './lib/recent-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
@@ -411,8 +411,8 @@ function safeHandler(fn, { verbatim = false } = {}) {
       // could have had fixed in one command — and mem_recent / mem_recall / mem_browse
       // keep answering, so the dead end reads as "nothing matched". Both channels carry the
       // same string here, deliberately: unlike the file-level remedy this one is lossless
-      // (see FTS_CORRUPTION_REMEDY in lib/db-unusable.mjs).
-      const hint = isFtsCorruptionError(err) ? `\n${FTS_CORRUPTION_REMEDY}` : '';
+      // (see ftsCorruptionRemedy in lib/db-unusable.mjs).
+      const hint = isFtsCorruptionError(err) ? `\n${ftsCorruptionRemedy(CLI_INVOKE)}` : '';
       return defangResult({
         content: [{ type: 'text', text: `Error: ${err.message}${hint}` }],
         isError: true,

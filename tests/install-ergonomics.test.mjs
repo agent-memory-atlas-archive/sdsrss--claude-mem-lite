@@ -380,6 +380,70 @@ describe('collectOrphanHookPaths (v2.79)', () => {
   });
 });
 
+// E2E round 2 (install B11): on a direct-only install (no plugin), the two-step repair
+// "cleanup-hooks, then install" left the install with no hooks after step 1, and doctor then said
+// only "hooks not configured" with no remedy and passed. There `install` alone is the repair: it
+// strips the dead entries and writes its own.
+describe('doctor on a direct-only install', () => {
+  function directOnlyHome(settings) {
+    const home = makeTmpDir();
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    mkdirSync(join(home, '.claude-mem-lite', 'scripts'), { recursive: true });
+    writeFileSync(join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs'), '// stub');
+    // A managed install's entry points (lib/install-shape.mjs MANAGED_ENTRY_POINTS).
+    for (const f of ['install.mjs', 'server.mjs', 'hook.mjs', 'cli.mjs', 'mem-cli.mjs'])
+      writeFileSync(join(home, '.claude-mem-lite', f), '// stub');
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify(settings));
+    return home;
+  }
+  const doctor = (home) => {
+    try {
+      return execFileSync(process.execPath, [INSTALL_PATH, 'doctor'], {
+        encoding: 'utf8',
+        env: envWithoutPluginRoot({ HOME: home }),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      return (e.stdout || '') + (e.stderr || '');
+    }
+  };
+  it('names install as the one-step orphan repair', () => {
+    const home = directOnlyHome({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'Skill',
+            hooks: [
+              {
+                type: 'command',
+                command: `node "${'/x'}/.claude-mem-lite/scripts/hook-launcher.mjs" scripts/pre-skill-bridge.js`,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    try {
+      const out = doctor(home);
+      expect(out).toMatch(/Orphan hooks:/);
+      expect(out).toMatch(/Repair: node \S*\.claude-mem-lite\/install\.mjs"? install/);
+      expect(out).not.toMatch(/cleanup-hooks/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+  it('a direct install with no hooks at all names the repair', () => {
+    const home = directOnlyHome({});
+    try {
+      const out = doctor(home);
+      expect(out).toMatch(/hooks not configured — the direct install/);
+      expect(out).toMatch(/Repair: node \S*\.claude-mem-lite\/install\.mjs"? install/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('doctor surfaces orphan hooks (v2.79)', () => {
   it('emits "Orphan hooks:" line with file count and repair hint', () => {
     const home = makeTmpDir();

@@ -2662,6 +2662,14 @@ async function doctor() {
       );
       issues++;
     }
+  } else if (shape.managed) {
+    // A direct install with no plugin and no hook entries captures nothing — the state a
+    // two-step orphan repair left when its second step was skipped, which doctor reported with
+    // no remedy (E2E 2026-10-16 round 2).
+    dwarn(`Plugin lifecycle: hooks not configured — the direct install at ${INSTALL_DIR} captures nothing`);
+    log(
+      `    Repair: node ${shellWord(join(INSTALL_DIR, 'install.mjs'))} install    # writes its hook entries`,
+    );
   } else {
     dwarn('Plugin lifecycle: hooks not configured');
   }
@@ -2693,13 +2701,21 @@ async function doctor() {
     // cleanup-hooks, not uninstall: uninstall also removes the MCP registration and, on a machine
     // that moved to the plugin, the working plugin itself (E2E 2026-10-16). cleanup-hooks touches
     // settings.json hook entries only, which is all an orphan is.
-    log(
-      `    Repair: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} cleanup-hooks    # removes claude-mem-lite's settings.json hook entries; the plugin and your memories stay`,
-    );
-    if (existsSync(join(INSTALL_DIR, 'scripts', 'hook-launcher.mjs'))) {
+    if (shape.managed && !shape.activePluginVersion) {
+      // No plugin: `install` alone strips the dead entries and writes its own. The two steps
+      // left the install hookless whenever the second was skipped (round 2).
       log(
-        `    Then, if you use the direct install at ${INSTALL_DIR}: node ${shellWord(join(INSTALL_DIR, 'install.mjs'))} install    # writes its hook entries again`,
+        `    Repair: node ${shellWord(join(INSTALL_DIR, 'install.mjs'))} install    # rewrites its hook entries, dropping the dead ones`,
       );
+    } else {
+      log(
+        `    Repair: node ${shellWord(join(PROJECT_DIR, 'install.mjs'))} cleanup-hooks    # removes claude-mem-lite's settings.json hook entries; the plugin and your memories stay`,
+      );
+      if (existsSync(join(INSTALL_DIR, 'scripts', 'hook-launcher.mjs'))) {
+        log(
+          `    Then, if you use the direct install at ${INSTALL_DIR}: node ${shellWord(join(INSTALL_DIR, 'install.mjs'))} install    # writes its hook entries again`,
+        );
+      }
     }
     issues++;
   } else if (hasHooks) {

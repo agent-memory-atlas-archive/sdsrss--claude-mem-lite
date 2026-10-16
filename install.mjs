@@ -141,6 +141,7 @@ import {
   stripMemHooks,
   launcherEntryPath,
   ourInstallRoots,
+  unconfirmedDeadPrefilters,
 } from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
@@ -2838,7 +2839,19 @@ async function doctor() {
     }
     issues++;
   } else if (hasHooks) {
-    ok('Orphan hooks: none (all hook targets present)');
+    ok("Orphan hooks: none (all of claude-mem-lite's hook targets present)");
+  }
+  // Hooks named like our prefilters whose script is gone and that no install root vouches for:
+  // not removed (a user's own hook can look the same), so said here rather than passed as
+  // "all hook targets present" (E2E 2026-10-16 round 4).
+  const unconfirmed = settings === null ? [] : unconfirmedDeadPrefilters(settings);
+  if (unconfirmed.length > 0) {
+    dwarn(
+      `Hooks named like claude-mem-lite's point at missing files (not confirmed ours, so left alone): ${unconfirmed.join(', ')}`,
+    );
+    log(
+      '    Each fails on every fire. If they are from an old claude-mem-lite install, delete them from settings.json.',
+    );
   }
 
   // MCP registration. This lives in doctor, not status: `claude mcp list` health-checks —

@@ -7,7 +7,13 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { isMemHook, stripMemHooks, pruneDanglingMemHooks, ourInstallRoots } from '../lib/hook-prune.mjs';
+import {
+  isMemHook,
+  stripMemHooks,
+  pruneDanglingMemHooks,
+  ourInstallRoots,
+  unconfirmedDeadPrefilters,
+} from '../lib/hook-prune.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -123,6 +129,22 @@ describe('isMemHook leaves user hooks that share a script NAME with ours', () =>
     expect(stripMemHooks(deadReloc.hooks.PostToolUse, roots).removed).toBe(1);
     expect(ourInstallRoots({ hooks: {} }, { CLAUDE_MEM_DIR: '/data/mem' }).has('/data/mem')).toBe(true);
   });
+  // Round 4 (install NEW-1): with no launcher entry left to vouch for the root, a dead
+  // relocated install's prefilters are not removed (a user's own hook could look the same), and
+  // doctor said "all hook targets present". They are now listed for the user to decide.
+  it('unconfirmed dead prefilters are listed, not removed', () => {
+    const settings = {
+      hooks: {
+        PostToolUse: [
+          { hooks: [{ type: 'command', command: 'bash "/home/me/old-reloc/scripts/post-tool-use.sh"' }] },
+        ],
+        PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'bash /usr/bin/true' }] }],
+      },
+    };
+    expect(unconfirmedDeadPrefilters(settings, {})).toEqual(['/home/me/old-reloc/scripts/post-tool-use.sh']);
+    expect(unconfirmedDeadPrefilters(deadReloc, {})).toEqual([]); // confirmed: ours, cleaned up instead
+  });
+
   // Round 3 (install NEW-2): "a dead script is ours" alone deleted a user's own hook whose script
   // was briefly missing (a dotfiles checkout on an unmounted drive), on a machine that never
   // installed the product.

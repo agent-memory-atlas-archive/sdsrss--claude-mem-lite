@@ -507,6 +507,14 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(out).toMatch(/claude mcp remove -s user mem-lite/);
   });
 
+  // E2E 2026-10-16 (install P2-9): the note named only the CLAUDE.md block an explicit adopt
+  // writes; the CLAUDE.local.md block every session writes went unmentioned.
+  it('uninstall names the CLAUDE.local.md blocks it leaves behind', () => {
+    const out = runInstall('uninstall', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+    expect(out).toMatch(/CLAUDE\.local\.md/);
+    expect(out).toMatch(/unadopt --all/);
+  });
+
   it('uninstall --purge removes data directory', () => {
     runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
 

@@ -1577,8 +1577,13 @@ async function uninstall() {
     !flags.has('--purge') && existsSync(keptCli)
       ? `node ${shellWord(keptCli)} unadopt --all`
       : 'npx claude-mem-lite unadopt --all';
-  log('Invited-memory: project adoption left in place (each adopted project keeps its');
-  log('  CLAUDE.md managed block + .claude/plugin_claude_mem_lite.md). To remove it from');
+  // Most projects never ran `adopt`: since v6.20 the block a session writes goes to
+  // CLAUDE.local.md (or .claude/rules/), and the old note named only the CLAUDE.md copy, so a
+  // user who never adopted read it as "nothing to do" (E2E 2026-10-16).
+  log('Invited-memory: project steering left in place — every git repository a session ran in');
+  log('  keeps its block in CLAUDE.local.md (or .claude/rules/claude-mem-lite.md), and a project');
+  log('  you ran adopt in keeps its CLAUDE.md block + .claude/plugin_claude_mem_lite.md. Those');
+  log('  still tell Claude to call memory tools that are now gone. To remove them from');
   log(`  every known project: ${unadoptCmd}`);
   log('  A project Claude Code never opened is not in the known list — run unadopt from');
   log('  inside it.');

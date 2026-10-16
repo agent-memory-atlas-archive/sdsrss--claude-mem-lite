@@ -45,7 +45,11 @@ REWRITE_JSON_SCHEMA})`，和 deep-search 的 `callRewriteLLM` 一样。一个 fe
 自己构造的请求体，只按组加上 `provider` 字段（`req-params-no-temp` 组另外删掉 `temperature`），再经仓库
 自己的 `postViaConnectProxy` 发出去。`CLAUDE_CODE_PATH` 指向不存在的文件，挡住 CLI 兜底。样本是
 `haiku-model-ab.mjs` 的 24 条 rewrite 查询（三个 fixture 查询集，`pickEvenly`），每条 3 次，6 组共
-432 次调用，2026-10-15T22:33–22:44Z。探针启动时工作树就是 `3d975c32`（v6.26.0 的 release 提交），haiku-client.mjs 还没有改动；它在启动时加载模块，之后的编辑不影响这一轮。"bad" 表示 `assembleVariants` 少于两个变体。
+432 次调用，2026-10-15T22:33–22:44Z。探针在 22:32:47Z 启动，启动时加载模块，之后的编辑不影响这一轮。启动时 HEAD 是
+`3d975c32`（v6.26.0 的 release 提交）。那个会话的 transcript 里，对 haiku-client.mjs 的第一次 Edit 在 22:35:46Z，
+`65a09c6a` 在 22:36:58Z 提交。用别的方式改过的文件不在这个记录里，所以"启动时工作树没有改动"无法完全证实。
+不过读数不受影响：`65a09c6a` 只改了应答的处理，本轮 as-shipped 组 72 次都是正常结束，用不到那段代码；
+`bfd77396` 不改基础 slug 的请求体。"bad" 表示 `assembleVariants` 少于两个变体。
 
 ## 输出（run1.log，原样）
 
@@ -66,6 +70,35 @@ rows -> /tmp/claude-1000/-home-ai-dev-claude-mem-lite/d888a8f3-388b-42a6-ab4e-4a
 失败，不是模型的答案。as-shipped 组 72 次的 `finish_reason/native_finish_reason` 都是 `stop/end_turn`：
 `native_finish_reason` 带的确实是 Anthropic 自己的 stop_reason。这和 65a09c6a 的假设（Anthropic 的拒答会以
 `native_finish_reason: "refusal"` 出现）一致，但拒答本身没有观察到。
+
+**这两句和上面的端点表，依据在哪里**（2026-10-16 补，发版前说法评审指出它们在仓库里没有存档）：
+逐行文件 `run1.jsonl` 在那个会话的临时目录里，没有存档，已经清理掉了。以下原样摘自那个会话 transcript
+（`~/.claude/projects/-home-ai-dev-claude-mem-lite/d888a8f3-388b-42a6-ab4e-4af6f5426d2c.jsonl`）里的工具输出：
+
+- 22:48:11Z 读 `run1.jsonl` 的输出，统计的是 `as-shipped` 组全部行里 finish 取值的去重集合：
+
+  ~~~~text
+  no-request rows: anthropic-only:queue
+  as-shipped finish: stop/end_turn
+  req-params-no-temp sent: max_tokens,messages,model,provider,reasoning,response_format
+  as-shipped sent: max_tokens,messages,model,reasoning,response_format,temperature
+  ~~~~
+
+- 端点表来自 `curl https://openrouter.ai/api/v1/models/anthropic/claude-haiku-5.5/endpoints` 的输出。
+  每个端点的 supported_parameters 原样如下（`sp=` 后面是参数列表）：
+
+  ~~~~text
+  Google | google-vertex/global | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
+  Claude Platform on AWS | claude-on-aws | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  Azure | azure/global | sp=reasoning,include_reasoning,structured_outputs,max_tokens,max_completion_tokens,tools,tool_choice,response_format,verbosity,stop,reasoning_effort
+  Anthropic | anthropic | sp=reasoning,include_reasoning,max_tokens,stop,tools,tool_choice,structured_outputs,response_format,verbosity,reasoning_effort
+  Amazon Bedrock | amazon-bedrock | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  Google | google-vertex/europe | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
+  Google | google-vertex/us | sp=reasoning,include_reasoning,max_tokens,response_format,tool_choice,tools,verbosity,structured_outputs,stop,reasoning_effort
+  Azure | azure/us | sp=reasoning,include_reasoning,structured_outputs,max_tokens,max_completion_tokens,tools,tool_choice,response_format,verbosity,stop,reasoning_effort
+  Amazon Bedrock | amazon-bedrock/us-east-1 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  Amazon Bedrock | amazon-bedrock/eu-west-1 | sp=reasoning,include_reasoning,max_tokens,stop,tool_choice,tools,response_format,verbosity,reasoning_effort
+  ~~~~
 
 `req-params` 组 404 的 routing_funnel（原样）：
 

@@ -701,8 +701,10 @@ async function callModelAPI(
       debugLog('WARN', `${model}-api`, `refusal (${data.stop_details?.category ?? 'no category'})`);
       return null;
     }
-    // Every caller parses a fixed-schema JSON answer out of this text, so a reply cut off at
-    // max_tokens is a failed call too: the CLI fallback has no such cap. (D#322)
+    // The callers parse a fixed-schema JSON answer out of this text (the opt-in lesson bridge
+    // keeps its first line), so a reply cut off at max_tokens is a failed call too: the CLI
+    // fallback has no such cap. A whole JSON answer followed by cut-off prose is discarded with
+    // it, although parseJsonFromLLM would have recovered it (D#322; D#338).
     if (data.stop_reason === 'max_tokens') {
       debugLog('WARN', `${model}-api`, 'reply cut off at max_tokens');
       return null;
@@ -788,9 +790,10 @@ function claudeArgs(modelName) {
 /**
  * The environment every headless spawn runs with. MAX_THINKING_TOKENS=0: these are
  * structured extraction calls, and the thinking the CLI enables by default was most of
- * their output tokens and latency (measured above, 2026-09-29). Claude Code 2.1.301 no longer
- * changes its request for Claude Haiku 5.5 on this variable: the body carries adaptive
- * thinking either way (D#334).
+ * their output tokens and latency (measured above, 2026-09-29; the model the CLI ran then was
+ * not recorded). Claude Code 2.1.301 does not change its request for Claude Haiku 5.5 on this
+ * variable: the body carries adaptive thinking either way (D#334). Earlier versions were not
+ * checked.
  */
 function cliSpawnEnv() {
   return {

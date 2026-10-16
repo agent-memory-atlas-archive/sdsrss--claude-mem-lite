@@ -2557,7 +2557,7 @@ function buildFallbackFastSummary(db, { project, now, prevSessionId }) {
   }
 }
 
-async function buildStartupDashboardText(db, project) {
+async function buildStartupDashboardText(db, project, { skipHandoff = false } = {}) {
   // T10c: Startup dashboard — aggregate git/tasks/plans/handoff/events into text.
   //
   // Returns the text rather than writing it: SessionStart has three would-be
@@ -2573,7 +2573,7 @@ async function buildStartupDashboardText(db, project) {
     // process.cwd(): otherwise the dashboard renders directory A's git state and task list
     // under directory B's project name whenever the hook process was not spawned at the
     // project root. See inferProjectDir()'s docblock for the case this closed.
-    let dashboardText = buildDashboard({ db, project, projectPath: inferProjectDir() });
+    let dashboardText = buildDashboard({ db, project, projectPath: inferProjectDir(), skipHandoff });
     const citeNudge = buildCiteRecallNudge(project);
     if (citeNudge) {
       dashboardText = dashboardText ? `${citeNudge}\n${dashboardText}` : citeNudge;
@@ -3264,7 +3264,9 @@ async function handleSessionStart() {
 
     buildFallbackFastSummary(db, { project, now, prevSessionId });
 
-    const dashboardText = await buildStartupDashboardText(db, project);
+    const dashboardText = await buildStartupDashboardText(db, project, {
+      skipHandoff: startSource === 'clear' || startSource === 'compact',
+    });
 
     // Build the full context body via shared helper (also used by `mem-cli context`).
     // Queries session_summaries, key observations, clear handoff, and the
@@ -3273,6 +3275,17 @@ async function handleSessionStart() {
     // preventing parallel sessions from seeing each other's /clear handoff.
     const contextCollector = {};
     const fullContext = buildSessionContextLines(db, project, now, ccSessionId, contextCollector);
+    // The Working State block just rendered IS this session's /clear handoff; left unconsumed,
+    // the first prompt's <session-handoff> injection delivered the same state a second time
+    // (E2E 2026-10-16). `context` from the CLI renders it too and must not consume, so this
+    // stays here rather than in the shared builder.
+    if (ccSessionId && fullContext.includes('### Working State')) {
+      try {
+        consumeHandoff(db, { project, type: 'clear', session_id: ccSessionId });
+      } catch (e) {
+        debugCatch(e, 'session-start-consume-clear-handoff');
+      }
+    }
 
     // Stdout is the sole context-delivery channel, and it carries exactly ONE
     // JSON envelope. Everything SessionStart wants to say is collected here and

@@ -263,6 +263,22 @@ describe('consumeHandoff marks the row instead of deleting it', () => {
     );
   });
 
+  // E2E 2026-10-16 (hooks F4): after /clear and /compact the pointer named the session's own
+  // exit handoff (Stop writes one per turn) and told the model to "resume" the session it was
+  // in; the /clear Working State block carries the state there anyway. A restart within one
+  // Claude Code process skips the pointer.
+  it('the continuation pointer is skipped on a /clear or /compact start', () => {
+    insertHandoff(db, { project: 'mem', type: 'exit', sessionId: 's1' });
+    const stubs = {
+      git: { changed: ['M x'], stashes: [], branch: 'main', headSha: 'abc' },
+      tasks: [],
+      plans: [],
+    };
+    const base = { db, project: 'mem', projectPath: process.cwd(), stubs };
+    expect(buildDashboard(base)).toMatch(/Continuation available/); // premise: a startup shows it
+    expect(buildDashboard({ ...base, skipHandoff: true })).not.toMatch(/Continuation available/);
+  });
+
   // ─── site 4: SessionStart "Working State (from /clear)" ───────────────────
 
   it('the /clear Working State block disappears once the handoff is consumed', () => {

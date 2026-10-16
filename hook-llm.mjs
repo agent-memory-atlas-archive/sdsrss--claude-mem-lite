@@ -2,7 +2,7 @@
 // Extracted from hook.mjs for testability and reduced complexity
 
 import { basename, join } from 'path';
-import { existsSync, readFileSync, unlinkSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, unlinkSync, readdirSync, statSync, renameSync } from 'fs';
 import {
   jaccardSimilarity,
   truncate,
@@ -40,11 +40,13 @@ import {
   RUNTIME_DIR,
   DEDUP_WINDOW_MS,
   RELATED_OBS_WINDOW_MS,
+  ORPHAN_EPISODE_AGE_MS,
   sessionFile,
   getSessionId,
   openDb,
   callLLM,
   sleep,
+  spawnBackground,
 } from './hook-shared.mjs';
 import { EVENT_TYPES, saveEvent } from './lib/activity.mjs';
 import { isNoiseObservation, capNoiseImportance, isLowYieldChangeObs } from './lib/low-signal-patterns.mjs';
@@ -1015,6 +1017,78 @@ const EPISODE_WORKER_SLACK_MS = 60_000;
  */
 export function episodeWorkerMaxMs() {
   return EPISODE_DELAY_MAX_MS + 2 * (LLM_SEM_TIMEOUT + BG_LLM_TIMEOUT_MS) + EPISODE_WORKER_SLACK_MS;
+}
+
+/** The ending a flush file takes when it is handed to a second worker. It is never handed on again. */
+export const RECOVERED_FLUSH_SUFFIX = '.recovered.json';
+// Per SessionStart: LLM_SEM_MAX workers can call the model at once, and a backlog after a reboot
+// drains over the next few starts rather than all at once.
+const FLUSH_RECOVERIES_PER_START = 2;
+
+/**
+ * Hand flush files that no live worker can still own to a new `llm-episode` worker, oldest first,
+ * at most `limit` per call. Returns the paths handed on.
+ *
+ * E2E 2026-10-16 P2-3: a flush file goes to exactly one worker (flushEpisode spawns it with the
+ * path), so a worker killed by a reboot, the OOM killer or `kill -9` lost its episode: nothing
+ * read the file again and the 1 h sweep deleted it. Three properties make the hand-off safe:
+ *
+ *   - Not a live worker's file: only files older than episodeWorkerMaxMs(), the longest a worker
+ *     can legitimately run. A suspended machine is the gap: a worker paused mid-call past that
+ *     bound can still finish after its file was handed on.
+ *   - One taker: the file is renamed before the spawn, and of two SessionStarts only one rename
+ *     succeeds.
+ *   - No loop: the new name ends in RECOVERED_FLUSH_SUFFIX, which this never hands on. If the
+ *     second worker dies too, the file waits for the 1 h sweep (`ep-flush-` prefix; the rename
+ *     keeps the mtime, so that clock still runs from the original flush).
+ *
+ * Files at or past ORPHAN_EPISODE_AGE_MS are the sweep's, as before.
+ *
+ * @param {string} [runtimeDir]
+ * @param {{now?: number, limit?: number, spawn?: (file: string) => void}} [opts]
+ * @returns {string[]}
+ */
+export function recoverOrphanEpisodeFlushes(
+  runtimeDir = RUNTIME_DIR,
+  {
+    now = Date.now(),
+    limit = FLUSH_RECOVERIES_PER_START,
+    spawn = (file) => spawnBackground('llm-episode', file),
+  } = {},
+) {
+  let names;
+  try {
+    names = readdirSync(runtimeDir);
+  } catch {
+    return [];
+  }
+  const minAge = episodeWorkerMaxMs();
+  const candidates = [];
+  for (const f of names) {
+    if (!f.startsWith('ep-flush-') || !f.endsWith('.json') || f.endsWith(RECOVERED_FLUSH_SUFFIX)) continue;
+    let mtimeMs;
+    try {
+      mtimeMs = statSync(join(runtimeDir, f)).mtimeMs;
+    } catch {
+      continue; // its worker finished meanwhile
+    }
+    const age = now - mtimeMs;
+    if (age > minAge && age < ORPHAN_EPISODE_AGE_MS) candidates.push({ f, mtimeMs });
+  }
+  candidates.sort((a, b) => a.mtimeMs - b.mtimeMs || (a.f < b.f ? -1 : 1));
+  const handed = [];
+  for (const { f } of candidates) {
+    if (handed.length >= limit) break;
+    const to = join(runtimeDir, f.slice(0, -'.json'.length) + RECOVERED_FLUSH_SUFFIX);
+    try {
+      renameSync(join(runtimeDir, f), to);
+    } catch {
+      continue; // another SessionStart took it
+    }
+    spawn(to);
+    handed.push(to);
+  }
+  return handed;
 }
 
 export async function handleLLMEpisode() {

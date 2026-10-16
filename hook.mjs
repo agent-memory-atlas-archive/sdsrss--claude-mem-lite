@@ -105,7 +105,12 @@ import {
   lastSchemaSkew,
   lastDbUnusable,
 } from './hook-shared.mjs';
-import { handleLLMEpisode, handleLLMSummary, saveEpisodeImmediate } from './hook-llm.mjs';
+import {
+  handleLLMEpisode,
+  handleLLMSummary,
+  saveEpisodeImmediate,
+  recoverOrphanEpisodeFlushes,
+} from './hook-llm.mjs';
 import {
   legacyProjectNameFromDir,
   rekeyLegacyProject,
@@ -3234,6 +3239,16 @@ async function handleSessionStart() {
       adoptOrphanEpisodes(ccSessionId);
     } finally {
       releaseLock();
+    }
+  }
+  // An episode whose llm-episode worker was killed (reboot, OOM, kill -9) is still in its flush
+  // file; hand the ones no live worker can own to a new worker (E2E 2026-10-16 P2-3). Gated like
+  // the spawn in flushEpisode, which never writes a flush file for a worker under this flag.
+  if (!process.env.CLAUDE_MEM_SKIP_EPISODE_LLM) {
+    try {
+      recoverOrphanEpisodeFlushes();
+    } catch (e) {
+      debugCatch(e, 'session-start-flush-recovery');
     }
   }
 

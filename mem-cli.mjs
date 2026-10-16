@@ -3774,7 +3774,12 @@ const MUTATING_FILTER_READS = {
     writes: ({ flags }) => isTrue(flags.run) || isTrue(flags['run-all']),
     reads: ['project', 'scope'],
   },
-  delete: { writes: ({ flags }) => isTrue(flags.confirm), reads: [] },
+  delete: { writes: ({ flags }) => isTrue(flags.confirm), reads: [], byId: true },
+  // Subcommands are keyed `<command> <sub>`: keyed on `activity` alone, `activity promote
+  // --execute --type lesson` promoted every event type and `activity delete N --confirm --project
+  // P` deleted another project's event (E2E 2026-10-16 round 2).
+  'activity promote': { writes: ({ flags }) => isTrue(flags.execute), reads: ['project'] },
+  'activity delete': { writes: ({ flags }) => isTrue(flags.confirm), reads: [], byId: true },
 };
 // Every flag adopt-cli.mjs reads (hasFlag) for the two commands that write into a repository.
 const WRITER_COMMAND_FLAGS = {
@@ -3866,7 +3871,8 @@ async function runDispatch(argv) {
   // --type change` had compressed every type, `maintain execute --type change` had decayed and
   // hidden every type, and optimize (argv-parsed) said nothing (E2E 2026-10-16). A preview
   // writes nothing and keeps the notice.
-  const mutating = MUTATING_FILTER_READS[cmd];
+  const mutatingKey = cmd === 'activity' ? `activity ${cmdArgs[0]}` : cmd;
+  const mutating = MUTATING_FILTER_READS[mutatingKey];
   if (mutating) {
     const parsed = parseArgs(cmdArgs);
     if (mutating.writes(parsed)) {
@@ -3876,7 +3882,10 @@ async function runDispatch(argv) {
       if (unread.length > 0) {
         const names = unread.map((f) => `--${f}`).join(', ');
         fail(
-          `[mem] ${cmd} does not filter on ${names} — nothing was changed, since the run would have acted on every row. ` +
+          `[mem] ${mutatingKey} does not filter on ${names} — nothing was changed, since ` +
+            (mutating.byId
+              ? `it acts on the ids it is given and ${names} would not have narrowed them. `
+              : 'the run would have acted on every row. ') +
             (mutating.reads.length > 0
               ? `It narrows by: ${mutating.reads.map((f) => `--${f}`).join(' ')}.`
               : 'It takes no filter flags.'),

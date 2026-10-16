@@ -86,3 +86,56 @@ describe('mutating commands refuse a filter flag they do not read', () => {
     expect(cli('maintain', 'execute', '--project', 'w--p').status).toBe(0);
   });
 });
+
+// Round 2 (data S3): the guard was keyed on the top-level command, so `activity promote --execute
+// --type lesson` promoted EVERY event type, and `activity delete N --confirm --project P` deleted
+// an event of another project, both exit 0. And the delete refusal said the run "would have acted
+// on every row", which a delete of named ids would not.
+describe('activity subcommands and delete wording', () => {
+  const events = () => {
+    const h = db();
+    try {
+      return h.prepare('SELECT id, project, superseded_at_epoch AS s FROM events ORDER BY id').all();
+    } finally {
+      h.close();
+    }
+  };
+  it('activity promote --execute --type lesson is refused, nothing promoted', () => {
+    expect(
+      cli(
+        'activity',
+        'save',
+        '--type',
+        'lesson',
+        'Lesson about retries',
+        '--body',
+        'retry with jitter',
+        '--importance',
+        '2',
+      ).status,
+    ).toBe(0);
+    expect(
+      cli('activity', 'save', '--type', 'bug', 'Bug about cron', '--body', 'use flock', '--importance', '2')
+        .status,
+    ).toBe(0);
+    const r = cli('activity', 'promote', '--execute', '--type', 'lesson');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--type/);
+    expect(events().every((e) => e.s === null)).toBe(true);
+  });
+  it('activity delete N --confirm --project P is refused, the event stays', () => {
+    expect(
+      cli('activity', 'save', '--type', 'bug', 'Elsewhere', '--body', 'x', '--project', 'zz--other').status,
+    ).toBe(0);
+    const id = events().find((e) => e.project === 'zz--other').id;
+    const r = cli('activity', 'delete', String(id), '--confirm', '--project', 'w--p');
+    expect(r.status).toBe(1);
+    expect(events().some((e) => e.id === id)).toBe(true);
+  });
+  it('the delete refusal does not claim every row would have been hit', () => {
+    const r = cli('delete', '1', '--confirm', '--type', 'change');
+    expect(r.status).toBe(1);
+    expect(r.stderr).not.toMatch(/every row/);
+    expect(r.stderr).toMatch(/ids/);
+  });
+});

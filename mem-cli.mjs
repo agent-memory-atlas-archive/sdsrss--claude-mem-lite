@@ -1113,6 +1113,23 @@ function cmdTimeline(db, args) {
     anchorNote = resolved.anchorNote;
   }
 
+  // A lone positional that names a record (`timeline 12`, `timeline #12`, `timeline E#3`) is the
+  // anchor the user meant: it used to go to the query search, which answered "No anchor found
+  // for \"12\"" with #12 right there (E2E 2026-10-16). Only when it resolves; otherwise it stays
+  // a query, so a search for a number still works.
+  if (
+    (!anchorId || isNaN(anchorId)) &&
+    flags.query === undefined &&
+    positional.length === 1 &&
+    parseIdToken(positional[0])
+  ) {
+    const resolved = resolveAnchorToken(db, positional[0], { project });
+    if (resolved.ok) {
+      anchorId = resolved.anchorId;
+      anchorNote = resolved.anchorNote;
+    }
+  }
+
   // Support query-based anchor: `timeline --query "search terms"` or positional.
   // Shared with MCP so AND→OR fallback semantics match `search` — without this,
   // queries like "ep-flush leak" miss rows whose title is "ep-flush ... leaked"

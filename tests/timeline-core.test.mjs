@@ -238,8 +238,8 @@ describe('timeline-core', () => {
     it.each([
       [
         { code: 'invalid-token', raw: 'xx' },
-        '[mem] Invalid --anchor "xx". Expected N, #N, P#N, or S#N.',
-        'Invalid anchor "xx". Expected N, #N, P#N, or S#N.',
+        '[mem] Invalid --anchor "xx". Expected N, #N, P#N, S#N or E#N.',
+        'Invalid anchor "xx". Expected N, #N, P#N, S#N or E#N.',
       ],
       [
         { code: 'source-not-found', name: 'Prompt', prefix: 'P#', id: 7 },

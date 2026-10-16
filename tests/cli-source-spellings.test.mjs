@@ -48,3 +48,19 @@ describe('--source accepts both spellings', () => {
     expect(cli('get', '1', '--source', 'obsrv').status).not.toBe(0);
   });
 });
+
+// E2E 2026-10-16 (cli F17): `timeline 1` sent "1" to the query search and answered "No anchor
+// found for \"1\"" with #1 right there. A lone positional naming a record is the anchor.
+describe('timeline takes a lone id positional as the anchor', () => {
+  it('timeline 1 centres on #1', () => {
+    const r = cli('timeline', '1', '--json');
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).anchor?.id).toBe(1);
+    expect(r.stderr).not.toMatch(/No anchor found/);
+  });
+  it('a positional that names no record is still a query', () => {
+    const r = cli('timeline', 'redis');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('Redis pool exhaustion');
+  });
+});

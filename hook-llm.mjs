@@ -50,6 +50,7 @@ import {
   processAlive,
 } from './hook-shared.mjs';
 import { EVENT_TYPES, saveEvent } from './lib/activity.mjs';
+import { isDbBusyError } from './lib/db-busy.mjs';
 import { isNoiseObservation, capNoiseImportance, isLowYieldChangeObs } from './lib/low-signal-patterns.mjs';
 import { episodeHasSignificantContent } from './hook-episode.mjs';
 import { OBS_TYPE_SET } from './lib/obs-types.mjs';
@@ -759,6 +760,18 @@ export function saveEpisodeImmediate(episode, externalDb, scope = 'saveEpisodeIm
     return saveObservation(obs, episode.project, episode.sessionId, externalDb) || null;
   } catch (e) {
     debugCatch(e, scope);
+    // Another process holds the write lock past this connection's wait. The callers flush one
+    // episode per session on one connection, and each save waited the whole busy timeout again:
+    // three sessions in Stop's buffer took 3 x 3.4 s, past the host's 5 s (pre-tag review
+    // 2026-10-16). The rest of this connection's saves fail at once; each episode still goes to
+    // its flush file and llm-episode worker, which saves it without the pre-save.
+    if (externalDb && isDbBusyError(e)) {
+      try {
+        externalDb.pragma('busy_timeout = 0');
+      } catch {
+        /* a closed handle: nothing waits on it */
+      }
+    }
     return null;
   }
 }

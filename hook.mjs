@@ -98,7 +98,7 @@ import {
   createSessionId,
   recordHandoffWriter,
   liveOtherHostHandoffIds,
-  setHookDbBusyTimeout,
+  setHookDbDeadline,
   openDb,
   spawnBackground,
   sweepOrphanEpisodeFiles,
@@ -256,7 +256,7 @@ async function loadCacheGuard() {
 //     risk than the milliseconds are worth.
 import { SKIP_TOOLS, SKIP_PREFIXES } from './skip-tools.mjs';
 
-import { DAY_MS, HOOK_DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
+import { DAY_MS, HOOK_DB_DEADLINE_MS, SESSION_START_DB_DEADLINE_MS } from './lib/time-constants.mjs';
 import { isDbBusyError } from './lib/db-busy.mjs';
 import { workerDirGone } from './lib/worker-data-dir.mjs';
 import { claudeConfigDir } from './lib/data-paths.mjs';
@@ -284,9 +284,10 @@ const BG_EVENTS = new Set([
   'update-check',
 ]);
 
-// The events hooks.json runs under a 5 s timeout. Their DB waits get HOOK_DB_BUSY_TIMEOUT_MS
-// instead of the 5 s every other opener uses, so a lock held past 5 s fails the write inside the
-// hook rather than getting the hook killed with its output (E2E 2026-10-16 F9).
+// The events hooks.json runs under a fixed timeout wait for another writer only until a deadline
+// counted from this process's start (performance.timeOrigin), shared by every connection they
+// open, so a lock held past it fails the write inside the hook rather than getting the hook
+// killed with its output (E2E 2026-10-16 F9), and a shorter lock is still waited out.
 const FIVE_SECOND_HOOK_EVENTS = new Set([
   'user-prompt',
   'stop',
@@ -294,7 +295,8 @@ const FIVE_SECOND_HOOK_EVENTS = new Set([
   'post-tool-failure',
   'pre-compact',
 ]);
-if (FIVE_SECOND_HOOK_EVENTS.has(event)) setHookDbBusyTimeout(HOOK_DB_BUSY_TIMEOUT_MS);
+if (FIVE_SECOND_HOOK_EVENTS.has(event)) setHookDbDeadline(performance.timeOrigin + HOOK_DB_DEADLINE_MS);
+else if (event === 'session-start') setHookDbDeadline(performance.timeOrigin + SESSION_START_DB_DEADLINE_MS);
 
 // Respect Claude Code plugin disable state even when legacy settings.json hooks remain.
 // install.mjs writes direct hooks into ~/.claude/settings.json, so disabling the plugin
@@ -1879,6 +1881,13 @@ async function handleStop() {
       // turn; run before them, it parsed the parent a second time in any session with subagents.
       trackCitationsAtStop(db, { sessionId, project, ccSessionId, transcriptPath });
       writeFastSummaryBaseline(db, { sessionId, project, transcriptPath });
+    } catch (e) {
+      // Another process held the write lock past HOOK_DB_DEADLINE_MS: this turn's handoff,
+      // citations and baseline are lost either way. The summary worker below does not run under
+      // the host's timeout and waits for the lock itself, so it is still spawned (pre-tag review
+      // 2026-10-16: the throw skipped it).
+      if (!isDbBusyError(e)) throw e;
+      debugLog('WARN', 'stop', 'database locked by another process; this turn was not recorded');
     } finally {
       db.close();
     }
@@ -3944,7 +3953,7 @@ async function handleUserPrompt() {
     try {
       recorded = recordUserPromptRow(db, { sessionId, project, promptText, hookData, now });
     } catch (e) {
-      // Another process holds the write lock past HOOK_DB_BUSY_TIMEOUT_MS (F9). The prompt row is
+      // Another process holds the write lock past HOOK_DB_DEADLINE_MS (F9). The prompt row is
       // lost either way; what is left is the context that does not depend on it. Stop waiting
       // for this lock, so each best-effort write below fails at once instead of waiting again.
       if (!isDbBusyError(e)) throw e;

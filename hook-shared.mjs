@@ -50,7 +50,7 @@ export {
   UNCONSUMED_HANDOFF_SQL,
 } from './lib/handoff-constants.mjs';
 
-import { DAY_MS, ORPHAN_EPISODE_AGE_MS } from './lib/time-constants.mjs';
+import { DAY_MS, ORPHAN_EPISODE_AGE_MS, DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // P1-14: one resolver, so this module honours CLAUDE_MEM_RUNTIME_DIR like the five
@@ -608,19 +608,22 @@ export function lastDbUnusable() {
   return lastUnusable;
 }
 
-// The busy timeout every connection openDb() hands out in this process; null keeps
-// ensureDb's DB_BUSY_TIMEOUT_MS. Set once, by hook.mjs, for the hook events the host kills at a
-// fixed timeout (setHookDbBusyTimeout).
-let hookBusyTimeoutMs = null;
+// The epoch (ms) until which a connection openDb() hands out in this process may wait for another
+// writer; null keeps ensureDb's DB_BUSY_TIMEOUT_MS. Set once, by hook.mjs, for the hook events the
+// host kills at a fixed timeout (setHookDbDeadline).
+let hookDbDeadline = null;
 
 /**
- * Give every connection this process opens through openDb() a busy timeout of `ms` (E2E
- * 2026-10-16 F9: a 5 s wait in a hook the host kills at 5 s never fails inside the hook).
+ * Bound every busy wait of the connections this process opens through openDb() by one deadline:
+ * each gets the time left until `epochMs` (never more than DB_BUSY_TIMEOUT_MS, 0 once it has
+ * passed). E2E 2026-10-16 F9 and its pre-tag review: a 5 s wait in a hook the host kills at 5 s
+ * never fails inside the hook, and one fixed shorter wait per connection both lost writes a
+ * shorter lock only delayed and added up across Stop's several connections.
  *
- * @param {number} ms
+ * @param {number} epochMs
  */
-export function setHookDbBusyTimeout(ms) {
-  hookBusyTimeoutMs = Math.max(0, Math.floor(ms));
+export function setHookDbDeadline(epochMs) {
+  hookDbDeadline = epochMs;
 }
 
 export function openDb() {
@@ -628,7 +631,10 @@ export function openDb() {
     // WAL-corruption self-heal (was server.mjs-only): without it, hooks stayed
     // silently dead (null DB) on a corrupt WAL until the next MCP server start.
     const db = ensureDbWithWalRecovery();
-    if (hookBusyTimeoutMs !== null) db.pragma(`busy_timeout = ${hookBusyTimeoutMs}`);
+    if (hookDbDeadline !== null) {
+      const left = Math.min(DB_BUSY_TIMEOUT_MS, Math.max(0, Math.floor(hookDbDeadline - Date.now())));
+      db.pragma(`busy_timeout = ${left}`);
+    }
     lastSkew = null;
     lastUnusable = false;
     return db;

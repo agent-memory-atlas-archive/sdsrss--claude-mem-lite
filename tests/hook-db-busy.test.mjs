@@ -8,17 +8,13 @@
 // under the host's own timeout.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { makeFixtureTracker } from './test-helpers.mjs';
-import {
-  DB_BUSY_TIMEOUT_MS,
-  HOOK_DB_BUSY_TIMEOUT_MS,
-  UPS_DB_BUSY_TIMEOUT_MS,
-} from '../lib/time-constants.mjs';
+import { DB_BUSY_TIMEOUT_MS, HOOK_DB_DEADLINE_MS, UPS_DB_BUSY_TIMEOUT_MS } from '../lib/time-constants.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOST_TIMEOUT_MS = 5000; // hooks.json: user-prompt, stop, post-tool-failure, pre-compact
@@ -162,6 +158,19 @@ async function underLock(fn, lockMs) {
 
 const PROMPT = 'invoice totals reduce crashed again on undefined lines';
 
+function promptTexts() {
+  const q = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `const D = require('better-sqlite3'); const db = new D(${JSON.stringify(dbPath)}, { readonly: true });
+       process.stdout.write(JSON.stringify(db.prepare('SELECT prompt_text FROM user_prompts').all().map((r) => r.prompt_text)));`,
+    ],
+    { cwd: REPO, encoding: 'utf8' },
+  );
+  return JSON.parse(q.stdout);
+}
+
 describe('a hook under a write lock held past its host timeout', () => {
   it('without a lock, the prompt finds the lessons (premise)', () => {
     const r = hook('user-prompt', { session_id: 'cc-premise', prompt: PROMPT });
@@ -176,10 +185,10 @@ describe('a hook under a write lock held past its host timeout', () => {
     expect(r.status).toBe(0);
     expect(r.ms).toBeLessThan(HOST_TIMEOUT_MS);
     expect(r.stdout).toContain('Default invoice lines to an empty array');
-    // One lock wait (the prompt row), and none for the writes behind each injected row: a wait
-    // per row ran 1.5 s + 3 x 1.5 s here, past the host's 5 s.
+    // One lock wait (the prompt row, until the deadline), and none for the writes behind each
+    // injected row: they still had the connection's whole wait each, 3 x ~3.4 s past the host's 5 s.
     expect(injectedCount(r.stdout)).toBeGreaterThan(1);
-    expect(r.ms).toBeLessThan(2 * HOOK_DB_BUSY_TIMEOUT_MS);
+    expect(r.ms).toBeLessThan(HOOK_DB_DEADLINE_MS + 1000);
   });
 
   it('the 2 s prompt search exits inside its timeout and still injects', async () => {
@@ -232,11 +241,83 @@ describe('a hook under a write lock held past its host timeout', () => {
     expect(r.ms).toBeLessThan(1.5 * DB_BUSY_TIMEOUT_MS);
   });
 
+  // Pre-tag review 2026-10-16 (P2): one 1.5 s wait per statement turned the kill under a long lock
+  // into an exit, but under a lock of 1.5–4.5 s it lost writes v6.27.0 had waited out: the prompt
+  // row (and with it the handoff phase), and Stop's handoff and summary spawn. The 5 s hooks now
+  // wait until a deadline 3.5 s after their process started, spread over every connection.
+  it('UserPromptSubmit under a 2.5 s lock records the prompt, as v6.27.0 did', async () => {
+    const text = `${PROMPT}, asked while a short lock is held`;
+    const r = await underLock(() => hook('user-prompt', { session_id: 'cc-short', prompt: text }), 2500);
+    expect(r.status).toBe(0);
+    expect(r.stdout.length, 'premise: the hook ran to its output').toBeGreaterThan(0);
+    expect(promptTexts()).toContain(text);
+  });
+
+  it('Stop under a 2.5 s lock writes its turn instead of failing on the lock', async () => {
+    const r = await underLock(() => hook('stop', { session_id: 'cc-short' }), 2500);
+    expect(r.signal).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toMatch(/database is locked/);
+  });
+
+  it('Stop with three sessions in the episode buffer exits inside its timeout under a long lock', async () => {
+    for (const sid of ['cc-multi-a', 'cc-multi-b', 'cc-multi-c']) {
+      hook('post-tool-use', {
+        session_id: sid,
+        tool_name: 'Edit',
+        tool_input: {
+          file_path: join(projectDir, 'src/invoice.js'),
+          old_string: 'a',
+          new_string: `a /* ${sid} */`,
+        },
+        tool_response: { success: true },
+      });
+    }
+    const r = await underLock(() => hook('stop', { session_id: 'cc-multi-a' }));
+    expect(r.signal, `killed at the host timeout after ${r.ms} ms`).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.ms).toBeLessThan(HOST_TIMEOUT_MS);
+  });
+
+  // A leftover buffer, two sessions in it, and an orphan one (a Claude Code process that died
+  // mid-turn): three connections flush before the handler's own, and at 5 s each they reached
+  // the host's 15 s (pre-tag review 2026-10-16: SIGKILL at 15018 ms, 0 B). They now share
+  // SessionStart's deadline.
+  it('SessionStart after /compact with buffered and orphaned episodes emits the context inside its timeout', async () => {
+    for (const sid of ['cc-cmp-a', 'cc-cmp-b']) {
+      hook('post-tool-use', {
+        session_id: sid,
+        tool_name: 'Edit',
+        tool_input: {
+          file_path: join(projectDir, 'src/invoice.js'),
+          old_string: 'b',
+          new_string: `b /* ${sid} */`,
+        },
+        tool_response: { success: true },
+      });
+    }
+    const runtime = join(home, '.claude-mem-lite', 'runtime');
+    const own = join(runtime, `ep-work--invoice-app@h${process.pid}.json`);
+    expect(existsSync(own), 'premise: the edits left an episode buffer').toBe(true);
+    // Above any pid_max, so the host it names is gone.
+    copyFileSync(own, join(runtime, 'ep-work--invoice-app@h999999999.json'));
+    const r = await underLock(
+      () => hook('session-start', { session_id: 'cc-cmp-a', source: 'compact' }, SESSION_START_TIMEOUT_MS),
+      SESSION_START_TIMEOUT_MS + 1000,
+    );
+    expect(r.signal, `killed at the host timeout after ${r.ms} ms`).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('invoice totals reduce');
+  }, 30000);
+
   it('Stop exits inside its timeout', async () => {
     const r = await underLock(() => hook('stop', {}));
     expect(r.signal, `killed at the host timeout after ${r.ms} ms`).toBeNull();
     expect(r.status).toBe(0);
     expect(r.ms).toBeLessThan(HOST_TIMEOUT_MS);
+    // The lock is caught in the handler, which goes on to spawn the summary worker; thrown, it
+    // reached the dispatcher's error line and skipped the spawn (pre-tag review 2026-10-16).
+    expect(r.stderr).not.toMatch(/database is locked/);
   });
 
   it('without a lock, the prompt is stored as before (premise)', () => {

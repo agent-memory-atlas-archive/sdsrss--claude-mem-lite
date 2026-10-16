@@ -63,6 +63,7 @@ import {
   PROMPT_DETAIL_FIELDS,
   EVENT_DETAIL_FIELDS,
   supersededNotice,
+  supersededEventNotice,
 } from './lib/get-core.mjs';
 import {
   collectBrowseTiers,
@@ -1123,6 +1124,8 @@ server.registerTool(
       for (const row of fetchEventDetail(db, bySrc.event)) {
         foundBySource.event.add(row.id);
         const lines = [`── E#${row.id} [${row.event_type}] ──`];
+        const retired = supersededEventNotice(row);
+        if (retired) lines.push(retired);
         for (const f of EVENT_DETAIL_FIELDS) {
           if (f === 'id' || f === 'event_type') continue; // already in the header
           const val = row[f];

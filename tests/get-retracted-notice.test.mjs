@@ -26,7 +26,7 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
-import { supersededNotice } from '../lib/get-core.mjs';
+import { supersededNotice, supersededEventNotice } from '../lib/get-core.mjs';
 
 const CLI = resolve(import.meta.dirname, '../cli.mjs');
 const SERVER = resolve(import.meta.dirname, '../server.mjs');
@@ -84,7 +84,7 @@ function mcpGet(id) {
     [
       '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}',
       '{"jsonrpc":"2.0","method":"notifications/initialized"}',
-      `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_get","arguments":{"ids":[${id}]}}}`,
+      `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_get","arguments":{"ids":[${JSON.stringify(id)}]}}}`,
     ].join('\n') + '\n';
   const raw = execFileSync(process.execPath, [SERVER], {
     env,
@@ -151,5 +151,62 @@ describe('get / mem_get — retracted rows announce the retraction first', () =>
     expect(supersededNotice({ superseded_at: 123, superseded_by: 'auto-dedup-fuzzy' })).toMatch(/RETRACTED/);
     expect(supersededNotice({ superseded_at: 123, superseded_by: 'auto-dedup-fuzzy' })).not.toMatch(/#/);
     expect(supersededNotice({ superseded_at: null, superseded_by: null })).toBe(null);
+  });
+});
+
+// E2E 2026-10-16 (MCP P2-11): an EVENT retired by `supersedes: ["E#N"]` (or promoted into an
+// observation — the column carries both meanings) is hidden from search and from the injected
+// lessons, but `get E#N` rendered it like a live row. Events are what the lessons block cites
+// as E#N, so a reader following that citation took the withdrawn claim as current.
+describe('get / mem_get — a superseded event says it is not live', () => {
+  const EVENT_BAD = 'Use 2.1-3.8x per call budget';
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'retracted-ev-'));
+    env = {
+      ...process.env,
+      CLAUDE_MEM_DIR: dir,
+      CLAUDE_MEM_SKIP_UPDATE: '1',
+      MEM_QUIET_HOOKS: '1',
+      MEM_NO_AUTO_ADOPT: '1',
+    };
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function seedEvents() {
+    const db = new Database(join(dir, 'claude-mem-lite.db'));
+    initSchema(db);
+    const ins = db.prepare(
+      `INSERT INTO events (project, event_type, title, body, importance, created_at_epoch, superseded_at_epoch)
+       VALUES ('p--proj', 'lesson', ?, ?, 2, ?, ?)`,
+    );
+    const now = Date.now();
+    const retired = Number(ins.run(EVENT_BAD, 'measured once on a cold cache', now, now).lastInsertRowid);
+    const live = Number(
+      ins.run('Budget remeasured at 1.2x', 'warm cache, 20 runs', now, null).lastInsertRowid,
+    );
+    db.close();
+    return { retired, live };
+  }
+
+  it('CLI `get E#N` puts the notice ahead of the withdrawn title', () => {
+    const { retired } = seedEvents();
+    const out = execFileSync(process.execPath, [CLI, 'get', `E#${retired}`], { env, encoding: 'utf8' });
+    expect(out).toContain('SUPERSEDED');
+    expect(out.indexOf('SUPERSEDED')).toBeLessThan(out.indexOf(EVENT_BAD));
+  });
+
+  it('MCP `mem_get E#N` does the same', () => {
+    const { retired } = seedEvents();
+    const out = mcpGet(`E#${retired}`);
+    expect(out).toContain('SUPERSEDED');
+    expect(out.indexOf('SUPERSEDED')).toBeLessThan(out.indexOf(EVENT_BAD));
+  });
+
+  it('says nothing on a live event', () => {
+    const { live } = seedEvents();
+    expect(mcpGet(`E#${live}`)).not.toContain('SUPERSEDED');
+    expect(supersededEventNotice({ superseded_at_epoch: null })).toBe(null);
   });
 });

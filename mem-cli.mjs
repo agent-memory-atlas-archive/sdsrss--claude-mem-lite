@@ -36,6 +36,7 @@ import {
   PROMPT_DETAIL_FIELDS,
   EVENT_DETAIL_FIELDS,
   supersededNotice,
+  supersededEventNotice,
 } from './lib/get-core.mjs';
 import {
   collectBrowseTiers,
@@ -890,6 +891,8 @@ function renderEventRows(db, ids) {
   const parts = [];
   for (const r of rows) {
     const lines = [`E#${r.id} [${r.event_type}] ${r.created_at ? fmtDateShort(r.created_at) : ''}`];
+    const retired = supersededEventNotice(r);
+    if (retired) lines.push(retired);
     for (const f of EVENT_DETAIL_FIELDS) {
       if (f === 'id' || f === 'event_type' || f === 'created_at') continue; // in the header
       const val = r[f];

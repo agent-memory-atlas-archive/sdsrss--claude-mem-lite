@@ -8,7 +8,7 @@
 // The LLM is dependency-injected by every caller, so this module is unit-tested with
 // deterministic stubs and never statically imports the native-heavy LLM client (the
 // default provider is pulled in lazily on first real call).
-import { parseJsonFromLLM } from './utils.mjs';
+import { parseJsonFromLLM, scrubSecrets } from './utils.mjs';
 
 // Module-internal: only buildRerankPrompt (below) consumes these. Kept un-exported
 // so the module's public surface is just the three functions callers actually import.
@@ -21,7 +21,8 @@ function buildRerankPrompt(query, snippets) {
   const lines = snippets.map((s, i) => `${i + 1}. ${String(s).replace(/\s+/g, ' ').slice(0, 400)}`);
   return {
     system: RERANK_SYSTEM,
-    user: `QUERY: ${query}\n\nCANDIDATES:\n${lines.join('\n')}\n\nReturn {"ranked":[...]} over 1..${snippets.length}, best first.`,
+    // Scrubbed like the rewrite prompt's query (deep-search.mjs buildRewritePrompt).
+    user: `QUERY: ${scrubSecrets(String(query ?? ''))}\n\nCANDIDATES:\n${lines.join('\n')}\n\nReturn {"ranked":[...]} over 1..${snippets.length}, best first.`,
   };
 }
 

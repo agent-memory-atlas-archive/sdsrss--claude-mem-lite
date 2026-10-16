@@ -32,7 +32,7 @@
 // provider is pulled in lazily on first real call).
 
 import { searchObservationsHybrid } from './search-engine.mjs';
-import { sanitizeFtsQuery } from './utils.mjs';
+import { sanitizeFtsQuery, scrubSecrets } from './utils.mjs';
 import { RRF_K, rrfAccumulate } from './lib/rrf.mjs';
 import { llmRerankOrder, defaultRerankLLM } from './rerank.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
@@ -294,7 +294,9 @@ export const REWRITE_JSON_SCHEMA = {
  * @returns {{system: string, user: string}}
  */
 export function buildRewritePrompt(query) {
-  return { system: REWRITE_SYSTEM, user: String(query ?? '') };
+  // Scrubbed: a secret typed into a query went to the provider verbatim, on the automatic
+  // escalation path too (E2E 2026-10-16). The local search still runs the query as typed.
+  return { system: REWRITE_SYSTEM, user: scrubSecrets(String(query ?? '')) };
 }
 
 /**

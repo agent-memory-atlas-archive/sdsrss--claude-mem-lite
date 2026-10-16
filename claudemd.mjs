@@ -331,8 +331,8 @@ export function needsRefresh(cwd, { slug, version, block, doc }) {
 /**
  * Write (insert-or-replace) the managed block in CLAUDE.md and the detail doc
  * under .claude/, plus a state sidecar. Idempotent on the user-visible files:
- * re-running with identical inputs leaves CLAUDE.md and the detail doc byte-for-
- * byte unchanged (only the state sidecar's writtenAt updates).
+ * re-running with identical inputs leaves CLAUDE.md, the detail doc and the state
+ * sidecar byte-for-byte unchanged.
  *
  * CLAUDE.md is created if absent. Only our slug-scoped region is rewritten;
  * everything else in the file is preserved verbatim.
@@ -351,12 +351,20 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
   const existingDoc = existsSync(dp) ? readFileSync(dp, 'utf8') : null;
   if (existingDoc !== docContent) atomicWrite(dp, docContent);
 
-  writeState(cwd, slug, {
-    version,
-    blockHash: sha256(block),
-    docHash: sha256(doc),
-    writtenAt: new Date().toISOString(),
-  });
+  // Only when what the sidecar records changed: it is committed alongside the block in a team
+  // repo, and a fresh writtenAt on every re-run of `adopt` left a diff each time (E2E
+  // 2026-10-16). Nothing reads writtenAt.
+  const blockHash = sha256(block);
+  const docHash = sha256(doc);
+  let prev = null;
+  try {
+    prev = JSON.parse(readFileSync(stateFilePath(cwd, slug), 'utf8'));
+  } catch {
+    /* absent or unreadable: write it */
+  }
+  if (!(prev?.version === version && prev?.blockHash === blockHash && prev?.docHash === docHash)) {
+    writeState(cwd, slug, { version, blockHash, docHash, writtenAt: new Date().toISOString() });
+  }
   return { action };
 }
 

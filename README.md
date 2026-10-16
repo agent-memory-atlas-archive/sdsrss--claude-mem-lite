@@ -1242,7 +1242,7 @@ what is already stored — only whether new work runs.
 | `CLAUDE_MEM_SKIP_UPDATE` | Skip the 24h update check against GitHub Releases, its session-start notice, and `self-update` / `install.mjs update` (unset it to update). A `repair` triggered by a missing module or dependency still runs. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SIG_VERIFY` | Skip Ed25519 signature verification of a downloaded update. **Escape hatch — leaves updates unauthenticated.** | _(verifies)_ |
 | `CLAUDE_MEM_NO_LESSON_RETRY` | `1` disables the one-shot retry that re-asks for a missing `lesson_learned`. | _(retries)_ |
-| `CLAUDE_MEM_FLUSH_TIMEOUT` | Seconds the Stop hook waits for pending episode flushes. | `15` |
+| `CLAUDE_MEM_FLUSH_TIMEOUT` | Seconds the background session-summary worker waits for its pending episode flushes; it stops as soon as they clear. The default spans the episode worker's longest legitimate run. | `275` |
 | `CLAUDE_MEM_BACKUP_BUDGET_MB` | Disk budget for backup snapshots; the next maintain/save evicts oldest snapshots past the 7-day undo grace. | `256` |
 
 ### Experimental

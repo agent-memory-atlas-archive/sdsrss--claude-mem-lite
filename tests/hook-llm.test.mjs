@@ -8,7 +8,9 @@ import { computeMinHash, parseJsonFromLLM } from '../utils.mjs';
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
-vi.mock('../hook-semaphore.mjs', () => ({
+vi.mock('../hook-semaphore.mjs', async (importOriginal) => ({
+  // The real budgets: handleLLMSummary derives its default flush wait from LLM_SEM_TIMEOUT.
+  ...(await importOriginal()),
   acquireLLMSlot: vi.fn(async () => true),
   releaseLLMSlot: vi.fn(),
 }));

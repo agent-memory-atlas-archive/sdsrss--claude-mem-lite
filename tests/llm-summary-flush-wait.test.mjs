@@ -162,6 +162,40 @@ describe('handleLLMSummary flush wait', () => {
     expect(existsSync(join(runtimeDir, 'ep-flush-4-someone-else.json'))).toBe(true);
   });
 
+  // E2E 2026-10-16 P2-4: the default wait was 15 s, below one CLI-leg episode (2-5 s delay +
+  // 8-13 s call, + the lesson retry on a bugfix), so the summary found no observation yet and the
+  // session kept its Stop-time baseline. The default now spans the episode worker's own bound.
+  it('by default keeps waiting past 15 s for an episode worker still inside its bound', async () => {
+    delete process.env.CLAUDE_MEM_FLUSH_TIMEOUT;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { handleLLMSummary } = await import('../hook-llm.mjs');
+      const inFlight = flushFile('ep-flush-6-cli-leg.json');
+      let done = false;
+      const run = handleLLMSummary().then(() => {
+        done = true;
+      });
+      // delay 5 s + call 13 s + lesson retry 13 s: the slow end of a CLI-leg bugfix episode.
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(done, 'gave up on an episode worker that was still working').toBe(false);
+      rmSync(inFlight);
+      await vi.advanceTimersByTimeAsync(2 * POLL_MS);
+      await run;
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not wait on a flush file older than an episode worker can live', async () => {
+    // Its worker is gone however young the file is next to the 1 h sweep: waiting on it only
+    // delays this summary (by the whole default wait, now that the default spans that bound).
+    const { episodeWorkerMaxMs } = await import('../hook-llm.mjs');
+    const orphan = flushFile('ep-flush-7-dead-worker.json', episodeWorkerMaxMs() + 60_000);
+    expect(await timeSummary()).toBeLessThan(1000);
+    expect(existsSync(orphan)).toBe(true);
+  });
+
   it('gives up after the timeout rather than hanging on a file that never clears', async () => {
     flushFile('ep-flush-5-stuck.json');
     const elapsed = await timeSummary();

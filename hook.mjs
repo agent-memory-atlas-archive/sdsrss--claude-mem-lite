@@ -338,7 +338,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
           // salvages the in-flight episode on abnormal termination (audit #6). A
           // detached llm-episode child can't be spawned from a dying process, so no
           // ep-flush-* file is written here: it would have NO consumer AND would make
-          // every later handleLLMSummary poll the full CLAUDE_MEM_FLUSH_TIMEOUT (~15s)
+          // every later handleLLMSummary poll the full CLAUDE_MEM_FLUSH_TIMEOUT (275 s default)
           // waiting for a file that only the 24h orphan-sweep ever removes.
           // Split by CC session first (v3.35.2 parity): the normal flush and the Stop
           // lock-contended fallback both planEpisodeFlush, but this crash path flushed the

@@ -23,7 +23,7 @@ import {
   getCurrentBranch,
   notLowSignalTitleClause,
 } from './utils.mjs';
-import { acquireLLMSlot, releaseLLMSlot } from './hook-semaphore.mjs';
+import { acquireLLMSlot, releaseLLMSlot, LLM_SEM_TIMEOUT } from './hook-semaphore.mjs';
 import { BG_LLM_TIMEOUT_MS } from './haiku-client.mjs';
 import { scrubRecord, scrubFilePaths } from './lib/scrub-record.mjs';
 import { mergeModelSummary, summarySuperseded } from './lib/fast-summary.mjs';
@@ -40,7 +40,6 @@ import {
   RUNTIME_DIR,
   DEDUP_WINDOW_MS,
   RELATED_OBS_WINDOW_MS,
-  ORPHAN_EPISODE_AGE_MS,
   sessionFile,
   getSessionId,
   openDb,
@@ -991,6 +990,33 @@ ${diagnosisBlock(diag)}`;
   return { system, user };
 }
 
+// The pre-call delay's ceiling while the session is still open (handleLLMEpisode spreads
+// background calls over 2-5 s so they do not compete with the live session).
+const EPISODE_DELAY_MAX_MS = 5000;
+// Node boot, the DB opens (each can wait DB_BUSY_TIMEOUT_MS) and the writes around the calls.
+// Generous rather than measured: it only has to cover what the two terms below do not.
+const EPISODE_WORKER_SLACK_MS = 60_000;
+
+/**
+ * The longest an `llm-episode` worker can legitimately run: its delay, then up to two model calls
+ * (the episode, and the bugfix/decision lesson retry), each behind an LLM slot wait. Each term is
+ * a bound its own code enforces: acquireLLMSlot gives up at LLM_SEM_TIMEOUT, and a call ends by
+ * BG_LLM_TIMEOUT_MS, keyed provider and CLI fallback together (haiku-client fallbackBudget).
+ * 275 s today.
+ *
+ * Two consumers, and both need the bound itself rather than a typical duration: the summary
+ * worker waits this long for the episode it summarises (E2E 2026-10-16 P2-4), and a flush file
+ * older than this has no live worker left to finish it.
+ *
+ * A function rather than a module-level constant so that loading this module reads no imported
+ * binding: several suites mock haiku-client / hook-semaphore with only the calls they drive.
+ *
+ * @returns {number} ms
+ */
+export function episodeWorkerMaxMs() {
+  return EPISODE_DELAY_MAX_MS + 2 * (LLM_SEM_TIMEOUT + BG_LLM_TIMEOUT_MS) + EPISODE_WORKER_SLACK_MS;
+}
+
 export async function handleLLMEpisode() {
   const tmpFile = process.argv[3];
   if (!tmpFile) return;
@@ -1015,7 +1041,9 @@ export async function handleLLMEpisode() {
   // Rate-limit background LLM calls to avoid competing with active sessions
   if (!process.env.CLAUDE_MEM_NO_DELAY) {
     const sessionActive = existsSync(sessionFile());
-    const delayMs = sessionActive ? 2000 + Math.random() * 3000 : 500 + Math.random() * 1000;
+    const delayMs = sessionActive
+      ? 2000 + Math.random() * (EPISODE_DELAY_MAX_MS - 2000)
+      : 500 + Math.random() * 1000;
     debugLog(
       'DEBUG',
       'llm-episode',
@@ -1445,8 +1473,13 @@ export async function handleLLMEpisode() {
 // ─── Background: LLM Session Summary ────────────────────────────────────────
 
 export async function handleLLMSummary() {
+  // Seconds. The default spans an episode worker's whole bound (E2E 2026-10-16 P2-4): it was 15,
+  // below one CLI-leg episode (2-5 s delay + 8-13 s call, + the lesson retry on a bugfix), so the
+  // summary read the DB before the episode's observation existed, found nothing, and the session
+  // kept its Stop-time baseline. A longer default costs nothing when the flush clears early: the
+  // loop below exits on the first tick that finds this summary's files gone.
   const parsed = parseInt(process.env.CLAUDE_MEM_FLUSH_TIMEOUT, 10);
-  const flushTimeout = Number.isNaN(parsed) ? 15 : parsed;
+  const flushTimeout = Number.isNaN(parsed) ? Math.ceil(episodeWorkerMaxMs() / 1000) : parsed;
 
   // Wait for a DEFINED SET of flush files, not for "the directory is empty" (audit
   // 2026-09-02 P1-7). RUNTIME_DIR is shared by every project on the machine, and the old
@@ -1461,8 +1494,9 @@ export async function handleLLMSummary() {
   //
   // The set is snapshotted at entry and filtered to files young enough to belong to a live
   // worker. A file that appears after this point is somebody else's; a file older than
-  // ORPHAN_EPISODE_AGE_MS is nobody's. Both were previously indistinguishable from work in
-  // progress.
+  // episodeWorkerMaxMs() is nobody's (it was ORPHAN_EPISODE_AGE_MS, the 1 h sweep's age, which
+  // let a dead worker's file cost every summary the whole default wait for up to an hour). Both
+  // were previously indistinguishable from work in progress.
   //
   // Not narrowed to this project: the flush filename is `ep-flush-<ts>-<rand>.json` and
   // carries no project. Widening it is a marker-format change with in-flight files during
@@ -1470,7 +1504,7 @@ export async function handleLLMSummary() {
   // is a bounded overlap with genuinely concurrent work.
   let pending;
   try {
-    const cutoff = Date.now() - ORPHAN_EPISODE_AGE_MS;
+    const cutoff = Date.now() - episodeWorkerMaxMs();
     pending = readdirSync(RUNTIME_DIR)
       .filter((f) => f.startsWith('ep-flush-'))
       .filter((f) => {

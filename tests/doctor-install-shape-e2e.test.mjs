@@ -657,6 +657,11 @@ describe('doctor: the MCP SDK is checked in each code home', () => {
     const sdkFails = failLines(r.stdout).filter((l) => l.includes('@modelcontextprotocol/sdk'));
     expect(sdkFails, r.stdout).toEqual([]);
     expect(r.stdout).toMatch(/@modelcontextprotocol\/sdk: not installed yet in .*first start/);
+    // Round 3 (install STILL-BROKEN-2): b191ef09 fixed the SDK line only; better-sqlite3 and the
+    // native binding still called the same root broken, beside the ⚠ calling it benign.
+    const depFails = failLines(r.stdout).filter((l) => /better-sqlite3|Native DB binding/.test(l));
+    expect(depFails, r.stdout).toEqual([]);
+    expect(r.stdout).toMatch(/better-sqlite3: not installed yet in .*first start/);
   });
 
   it('a managed install with the SDK is green', () => {

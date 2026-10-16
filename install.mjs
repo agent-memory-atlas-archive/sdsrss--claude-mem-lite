@@ -102,6 +102,7 @@ import {
   detectInstallShape,
   probeRuntimeRoots,
   probeRuntimeRootsSdk,
+  isUnprovisionedPluginRoot,
   hasAnyManagedCode,
 } from './lib/install-shape.mjs';
 import { probeSchemaCompat, probeSchemaCompatInFreshProcess, schemaSkewRemedy } from './lib/schema-skew.mjs';
@@ -2346,7 +2347,11 @@ async function doctor() {
   // (which reuses these results) honest rather than answering from a poisoned
   // process.
   const rootProbes = probeRuntimeRoots(shape.runtimeRoots);
-  const brokenRoots = rootProbes.filter((r) => !r.ok);
+  // A plugin cache version not yet provisioned is not broken (lib/install-shape.mjs
+  // isUnprovisionedPluginRoot): said once, below, and kept out of the ✗ lines and the
+  // rebuild-binding remedy.
+  const pendingRoots = rootProbes.filter((r) => !r.ok && isUnprovisionedPluginRoot(r.root));
+  const brokenRoots = rootProbes.filter((r) => !r.ok && !isUnprovisionedPluginRoot(r.root));
   // Database and DB stats below open the store IN this process, through the better-sqlite3 the
   // running CLI's tree resolves. When the out-of-process probe of that tree has already failed,
   // loading it here is not just pointless: a truncated prebuild raises SIGBUS in dlopen, which
@@ -2359,9 +2364,15 @@ async function doctor() {
     fail('better-sqlite3: no install on this machine owns a native binding — nothing here can open the DB');
     issues++;
   } else if (brokenRoots.length === 0) {
-    ok(
-      `better-sqlite3: verified in ${rootProbes.length} install${rootProbes.length === 1 ? '' : 's'} (${rootProbes.map((r) => r.label).join('; ')})`,
-    );
+    const verified = rootProbes.filter((r) => r.ok);
+    if (verified.length > 0)
+      ok(
+        `better-sqlite3: verified in ${verified.length} install${verified.length === 1 ? '' : 's'} (${verified.map((r) => r.label).join('; ')})`,
+      );
+    for (const p of pendingRoots)
+      dwarn(
+        `better-sqlite3: not installed yet in ${p.label} — its MCP server installs its dependencies on first start`,
+      );
   } else {
     // Name the ROOT, not just the fault: the repair is per-tree, and pointing a
     // user at the wrong `cd` is how `rebuild-binding` used to report success
@@ -2607,6 +2618,9 @@ async function doctor() {
     dwarn(
       `Native DB binding: not checked — ${why}${breakage ? `; a fire failed ${breakageSeen(breakage)}` : ''}`,
     );
+  } else if (rootProbes.every((r) => !r.ok)) {
+    // Every root is a plugin cache version not yet provisioned (pendingRoots): no binding to load.
+    dwarn('Native DB binding: not checked — no install is provisioned yet (first MCP start installs it)');
   } else if (breakageUnread) {
     notCheckedDenied(`Native DB binding: loadable on Node ${process.version}, past failures`);
   } else if (breakage) {

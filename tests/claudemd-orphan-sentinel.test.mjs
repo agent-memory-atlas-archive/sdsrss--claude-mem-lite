@@ -344,6 +344,32 @@ describe('an unpaired managed sentinel must not eat user content or be reported 
       }
     });
 
+    // SessionStart now stays out of such a file, so doctor is where it is said (D#369 B14).
+    it('doctor names the damaged line', () => {
+      expect(adoptCli().status).toBe(0);
+      writeFileSync(md, read().replace(/(<!-- claude-mem-lite:begin v\d+ -->)\n/, '$1 (team note)\n'));
+      let out;
+      try {
+        out = execFileSync(process.execPath, [join(REPO, 'cli.mjs'), 'doctor'], {
+          cwd,
+          env: {
+            ...process.env,
+            HOME: tmpHome,
+            CLAUDE_MEM_DIR: join(tmpHome, 'data'),
+            CLAUDE_PROJECT_DIR: cwd,
+            MEM_NO_AUTO_ADOPT: '1',
+            CLAUDE_MEM_TEST_GUARD: '0',
+          },
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (e) {
+        out = `${e.stdout || ''}${e.stderr || ''}`;
+      }
+      expect(out).toMatch(/Project steering: .*damaged claude-mem-lite marker line/);
+      expect(out).toMatch(/\(team note\)/);
+    });
+
     it('still adopts a CLAUDE.md that mentions the sentinel inside a sentence', () => {
       writeFileSync(md, '# Docs\n\nPlugins wrap their block in `<!-- claude-mem-lite:begin v1 -->`.\n');
       const r = adoptCli();

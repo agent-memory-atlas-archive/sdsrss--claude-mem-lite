@@ -288,6 +288,24 @@ describe('silentAutoAdopt (SessionStart sync)', () => {
     expect(memdirIsAdopted(memdirPath(fakeCwd), PLUGIN_SLUG)).toBe(false); // legacy migrated
   });
 
+  // D#369 B14 follow-up: a CLAUDE.md whose begin line was edited (`… --> (team note)`) holds the
+  // block's text, which the host loads, but the block no longer parses, so SessionStart took the
+  // project for unadopted and injected (or wrote to CLAUDE.local.md) a second copy.
+  it('a CLAUDE.md with a damaged sentinel line: no copy written or injected', () => {
+    cmdAdopt([]);
+    const md = claudeMd(fakeCwd);
+    writeFileSync(
+      md,
+      readFileSync(md, 'utf8').replace(/(<!-- claude-mem-lite:begin v\d+ -->)\n/, '$1 (team note)\n'),
+    );
+    const before = readFileSync(md, 'utf8');
+    const r = silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });
+    expect(r.action).toBe('damaged');
+    expect(r.lines.map((l) => l.text).join('\n')).toMatch(/\(team note\)/);
+    expect(readFileSync(md, 'utf8')).toBe(before);
+    expect(existsSync(join(fakeCwd, 'CLAUDE.local.md'))).toBe(false);
+  });
+
   it('a project adopted explicitly is kept in sync: already-adopted, CLAUDE.md unchanged', () => {
     cmdAdopt([]);
     silentAutoAdopt({ cwd: fakeCwd, markerDir, markerKey: 'proj-x' });

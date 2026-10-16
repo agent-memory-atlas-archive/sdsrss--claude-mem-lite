@@ -3010,6 +3010,30 @@ async function doctor() {
   // 'absent' / 'not-git' are silent: an npm-channel or npx user has no marketplace clone,
   // and a check that reports on a thing you do not have is noise.
 
+  // A damaged marker line in this project's CLAUDE.md: SessionStart now stays out of it (a
+  // second copy would load beside the block's text), so nothing else says the block stopped
+  // being kept in sync (D#369 B14). Silent when the file is fine or absent. Dynamic import:
+  // claudemd.mjs is not on the installer's load graph.
+  try {
+    const { straySentinelLines, claudeMdPath } = await import('./claudemd.mjs');
+    const md = claudeMdPath(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+    const stray = straySentinelLines(md, 'claude-mem-lite');
+    if (stray.length > 0) {
+      dwarn(
+        `Project steering: ${md} has a damaged claude-mem-lite marker line, so its block is not kept in sync`,
+      );
+      for (const line of stray) log(`    line ${line.line}: ${line.text}`);
+      log(
+        '    Fix: make the marker lines exact (`claude-mem-lite adopt` prints the expected lines), or delete',
+      );
+      log('    them and the text between them; then run adopt again.');
+    }
+  } catch (e) {
+    // straySentinelLines already reads an unreadable file as "nothing to report"; this is the
+    // module itself failing to load, which must not read as a passed check.
+    dwarn(`Project steering: not checked (${e?.code || e?.message || 'claudemd.mjs failed to load'})`);
+  }
+
   // Database
   if (dataDirUnreadable) {
     notCheckedDenied('Database');

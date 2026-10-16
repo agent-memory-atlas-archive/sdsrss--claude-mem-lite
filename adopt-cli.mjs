@@ -375,6 +375,11 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
     const hasBlock = blockIn(cwd);
     if (!hasBlock) {
       if (markerDir && markerKey) writeMarker(markerDir, markerKey);
+      // A damaged sentinel line (`… --> (team note)`) leaves the block's text in CLAUDE.md, which
+      // the host loads, while the block no longer parses: a copy written to CLAUDE.local.md or
+      // injected here was a second one. Neither; `adopt` names the line and the fix (D#369 B14).
+      const stray = straySentinelLines(claudeMdPath(cwd), PLUGIN_SLUG);
+      if (stray.length > 0) return { ok: true, action: 'damaged', reason: 'stray-sentinel', lines: stray };
       const root = localSteeringRoot(cwd);
       if (root) {
         // A session started below the top-level (pre-tag claims review P2-3, P1-4): the host

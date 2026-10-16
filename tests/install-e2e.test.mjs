@@ -591,6 +591,45 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(out).toMatch(/claude mcp remove -s user mem-lite/);
   });
 
+  // E2E 2026-10-16 round 2 (install B8): with no `claude` on PATH install printed "✗ MCP
+  // registration failed: spawnSync claude ENOENT", then "Done!", and exited 0 — no mem_* tools,
+  // and nothing a script or a skimming reader could catch.
+  it('install ends on a failed MCP registration and exits non-zero', () => {
+    const nodeOnly = join(home, 'node-only-bin');
+    mkdirSync(nodeOnly, { recursive: true });
+    symlinkSync(process.execPath, join(nodeOnly, 'node'));
+    let stdout;
+    let status = 0;
+    try {
+      stdout = runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${nodeOnly}:/usr/bin:/bin` });
+    } catch (e) {
+      status = e.status;
+      stdout = e.stdout || '';
+    }
+    expect(stdout).toMatch(/MCP registration failed/);
+    expect(status).toBe(1);
+    expect(stdout).not.toMatch(/Done! Restart Claude Code/);
+    expect(stdout.trim().split('\n').pop()).toMatch(/MCP server is NOT registered/);
+  });
+
+  // The same failure over a registration that already runs this install's server leaves the
+  // install whole (`claude` reached through a shell alias, re-running install): not a failure.
+  it('install keeps a registration that already runs its server when claude cannot run', () => {
+    const nodeOnly = join(home, 'node-only-bin');
+    mkdirSync(nodeOnly, { recursive: true });
+    symlinkSync(process.execPath, join(nodeOnly, 'node'));
+    const server = join(home, '.claude-mem-lite', 'server.mjs');
+    writeFileSync(
+      join(home, '.claude.json'),
+      JSON.stringify({ mcpServers: { 'mem-lite': { type: 'stdio', command: 'node', args: [server] } } }),
+    );
+    const stdout = runInstall('install', home, ['--dev', '--skip-repos'], {
+      PATH: `${nodeOnly}:/usr/bin:/bin`,
+    });
+    expect(stdout).toMatch(/already registered/);
+    expect(stdout).toMatch(/Done! Restart Claude Code/);
+  });
+
   // E2E 2026-10-16 (install P2-9): the note named only the CLAUDE.md block an explicit adopt
   // writes; the CLAUDE.local.md block every session writes went unmentioned.
   it('uninstall names the CLAUDE.local.md blocks it leaves behind', () => {

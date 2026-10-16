@@ -857,6 +857,19 @@ function warnProjectScopedMcpDuplicate() {
   );
 }
 
+/** Whether ~/.claude.json's user-scope `mem-lite` runs this install's server (unreadable → false). */
+function userMcpRunsOurServer() {
+  try {
+    const entry = JSON.parse(readFileSync(claudeStatePath(), 'utf8'))?.mcpServers?.['mem-lite'];
+    return Array.isArray(entry?.args) && entry.args.includes(SERVER_PATH);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @returns {boolean} false when the server ends up unregistered: install then fails on it
+ */
 function registerMcpServer() {
   // 3. Register MCP server (skip if plugin system already handles it)
   // Plugin MCP must stay at root .mcp.json so Claude Code registers plugin:*:mem-lite.
@@ -892,6 +905,7 @@ function registerMcpServer() {
         ok(`Removed stale global MCP "${name}"`);
       } catch {}
     }
+    return true;
   } else {
     log('Registering MCP server...');
     try {
@@ -911,9 +925,19 @@ function registerMcpServer() {
         { stdio: 'pipe' },
       );
       ok('MCP server registered: mem-lite');
+      return true;
     } catch (e) {
+      // What failed matters less than what is left: a registration that already runs this
+      // server (`claude` reached through a shell alias, a re-install) keeps the install whole.
+      if (userMcpRunsOurServer()) {
+        warn(
+          `Could not re-register the MCP server (${e.message}) — "mem-lite" is already registered to run it`,
+        );
+        return true;
+      }
       fail('MCP registration failed: ' + e.message);
       warn(`Try manually: claude mcp add -s user -t stdio mem-lite -- node ${shellWord(SERVER_PATH)}`);
+      return false;
     }
   }
 }
@@ -1579,7 +1603,7 @@ async function install() {
     await installDependencies(IS_DEV);
   });
   createCliSymlink();
-  registerMcpServer();
+  const mcpRegistered = registerMcpServer();
   // configureHooks BEFORE dedupe, and its result feeds the dedup gate: dedupe now
   // refuses to clear a hooks manifest unless install.mjs-managed hooks exist in
   // settings.json, and on a first install those entries do not exist until
@@ -1594,6 +1618,14 @@ async function install() {
   disableOldClaudeMemPlugin();
   offerCleanOldVectorDb();
 
+  // A failed registration used to be followed by "Done!" and exit 0 (E2E 2026-10-16 round 2, B8).
+  if (!mcpRegistered) {
+    console.log(
+      '\n  ✗ Installed, but the MCP server is NOT registered: the mem_* tools stay unavailable until the "Try manually" command above runs. Then restart Claude Code.\n',
+    );
+    process.exitCode = 1;
+    return;
+  }
   console.log('\n  Done! Restart Claude Code to activate.\n');
 }
 

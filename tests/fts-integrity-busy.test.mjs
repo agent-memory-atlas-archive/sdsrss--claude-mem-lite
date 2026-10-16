@@ -11,6 +11,8 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
 import { initSchema, checkFTSIntegrity } from '../schema.mjs';
+import { handleMemFtsCheck } from '../server/fts-check.mjs';
+import { cmdFtsCheck } from '../cli/fts-check.mjs';
 
 const REPO = resolve(import.meta.dirname, '..');
 
@@ -58,6 +60,47 @@ describe('checkFTSIntegrity on a database another connection is writing', () => 
     } finally {
       db.close();
     }
+  });
+});
+
+// E2E round 2 (install B9): the CLI and MCP faces ignored `busy` and printed "FTS5 issues
+// found", which invites `fts-check rebuild` / `mem_fts_check rebuild` on a healthy store.
+describe('fts-check and mem_fts_check say "not checked" for a busy database', () => {
+  function underLock(fn) {
+    const holder = new Database(dbPath);
+    holder.exec('BEGIN EXCLUSIVE');
+    const db = new Database(dbPath);
+    db.pragma('busy_timeout = 0');
+    try {
+      return fn(db);
+    } finally {
+      holder.exec('COMMIT');
+      holder.close();
+      db.close();
+    }
+  }
+  it('MCP: no "issues found", and it says not to rebuild', () => {
+    const text = underLock((db) => handleMemFtsCheck(db, { action: 'check' }).content[0].text);
+    expect(text).not.toMatch(/issues found/i);
+    expect(text).toMatch(/in use/);
+    expect(text).toMatch(/not corrupt|do not rebuild/i);
+  });
+  it('CLI: no "issues found", exit 1 since nothing was checked', () => {
+    const lines = [];
+    const write = process.stdout.write;
+    const prevCode = process.exitCode;
+    process.stdout.write = (chunk) => (lines.push(String(chunk)), true);
+    try {
+      underLock((db) => cmdFtsCheck(db, ['check']));
+    } finally {
+      process.stdout.write = write;
+    }
+    const code = process.exitCode;
+    process.exitCode = prevCode;
+    const text = lines.join('');
+    expect(text).not.toMatch(/issues found/i);
+    expect(text).toMatch(/in use/);
+    expect(code).toBe(1);
   });
 });
 

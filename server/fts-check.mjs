@@ -15,16 +15,14 @@ import { checkFTSIntegrity, rebuildFTS } from '../schema.mjs';
 export function handleMemFtsCheck(db, args) {
   if (args.action === 'check') {
     const result = checkFTSIntegrity(db);
-    return {
-      content: [
-        {
-          type: 'text',
-          text: result.healthy
-            ? 'FTS5 indexes are healthy — all integrity checks passed.'
-            : `FTS5 issues found:\n${result.details.join('\n')}`,
-        },
-      ],
-    };
+    // A busy store is not a finding: "issues found" invited mem_fts_check rebuild on a healthy
+    // store, a long write that blocks the live hooks (E2E 2026-10-16 round 2).
+    const text = result.healthy
+      ? 'FTS5 indexes are healthy — all integrity checks passed.'
+      : result.busy
+        ? 'FTS5 check not run — the database is in use by another process. This is not corruption; do not rebuild. Check again when the store is idle.'
+        : `FTS5 issues found:\n${result.details.join('\n')}`;
+    return { content: [{ type: 'text', text }] };
   }
   // args.action === 'rebuild' (Zod enum enforces one of the two)
   const result = rebuildFTS(db);

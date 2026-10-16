@@ -32,6 +32,12 @@ export function cmdFtsCheck(db, args) {
     const result = checkFTSIntegrity(db);
     if (result.healthy) {
       out('[mem] FTS5 indexes are healthy — all integrity checks passed.');
+    } else if (result.busy) {
+      // Not a finding: "issues found" invited a rebuild of a healthy store, a long write that
+      // blocks the live hooks (E2E 2026-10-16 round 2). Exit 1 all the same: nothing was checked.
+      out('[mem] FTS5 check not run — the database is in use by another process. This is not');
+      out('  corruption; do not rebuild. Run the check again when the store is idle.');
+      process.exitCode = 1;
     } else {
       out(`[mem] FTS5 issues found:`);
       for (const d of result.details) out(`  ${d}`);

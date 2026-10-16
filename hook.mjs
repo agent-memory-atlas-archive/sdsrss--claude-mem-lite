@@ -175,7 +175,7 @@ import { gcOldMetricShards, recordMetric } from './lib/metrics.mjs';
 import { detectMemOverride } from './lib/mem-override.mjs';
 import { injectedIdsFileName, keyContextIdsFileName, readInjectedMarker } from './lib/injected-ids.mjs';
 import { recordKeyContextInjection, touchKeyContextMarker } from './lib/keyctx-marker.mjs';
-import { RECALL_SHOWN_PREFIX, clearRecallShown } from './lib/recall-shown.mjs';
+import { RECALL_SHOWN_PREFIX, clearRecallShown, markCooldownCompacted } from './lib/recall-shown.mjs';
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { selectErrorRecall } from './lib/error-recall-core.mjs';
 import { errorRecallSuppression } from './lib/error-recall-gate.mjs';
@@ -3130,6 +3130,24 @@ async function handleSessionStart() {
   // hooks/hooks.json does not even match `resume`, so this branch only sees it from a direct
   // call. Clearing errs safe: the worst case is one more header.
   if (ccSessionId && startSource !== 'resume') clearRecallShown(RUNTIME_DIR, ccSessionId);
+  // Same reason, per file: the session id survives compaction, so the cooldown would keep every
+  // pre-compact file "already recalled" and its lesson was never shown again (lib/recall-shown.mjs).
+  // The two cross-hook "already shown" markers describe the pre-compact context too; left in
+  // place, they filtered the re-recalled lesson out of the very block the compaction made
+  // necessary. This SessionStart writes its own Key Context marker again further down.
+  if (ccSessionId && startSource === 'compact') {
+    markCooldownCompacted(RUNTIME_DIR, ccSessionId);
+    // inferProject(), not `project`: that const is declared further down this function, and
+    // reading it here is a TDZ ReferenceError that eslint's no-undef cannot see.
+    const proj = inferProject();
+    for (const name of [injectedIdsFileName(proj, ccSessionId), keyContextIdsFileName(proj, ccSessionId)]) {
+      try {
+        unlinkSync(join(RUNTIME_DIR, name));
+      } catch {
+        /* absent is fine */
+      }
+    }
+  }
 
   // Snapshot episode BEFORE flush for handoff extraction
   const episodeSnapshot = readEpisodeRaw();

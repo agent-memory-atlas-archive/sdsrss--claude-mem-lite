@@ -586,7 +586,9 @@ try {
     }
   };
   if (isSessionScoped) {
-    const entry = cooldown[filePath];
+    // A `compacted` entry (lib/recall-shown.mjs markCooldownCompacted) was recalled before a
+    // /compact that dropped it from context: recall the file afresh, as a first touch.
+    const entry = cooldown[filePath]?.compacted ? null : cooldown[filePath];
     if (entry) {
       // v2.98 salience: the old full-dedup meant a Read-injected lesson left the
       // actual Edit with ZERO context at the action point — the most likely spot

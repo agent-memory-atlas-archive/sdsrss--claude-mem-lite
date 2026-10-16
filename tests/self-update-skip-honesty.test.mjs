@@ -61,6 +61,8 @@ describe('self-update says why it did not check', () => {
     expect(out).not.toMatch(/up to date/i);
     expect(out).toMatch(/CLAUDE_MEM_SKIP_UPDATE/);
     expect(out).toMatch(/unset it/i);
+    // Nothing was checked, as in the offline case (E2E round 2, install B12).
+    expect(lastStatus).toBe(1);
   });
 
   it('names a development install instead of claiming it is up to date', () => {
@@ -71,6 +73,7 @@ describe('self-update says why it did not check', () => {
       const out = selfUpdate({ HOME: dev });
       expect(out).not.toMatch(/up to date/i);
       expect(out).toMatch(/development install/);
+      expect(lastStatus).toBe(1);
     } finally {
       rmSync(dev, { recursive: true, force: true });
     }

@@ -3923,12 +3923,15 @@ async function manualUpdate() {
   if (disabled === 'CLAUDE_MEM_SKIP_UPDATE') {
     warn('Not checked: CLAUDE_MEM_SKIP_UPDATE is set, which turns off update checks and installs.');
     log('  Unset it and run this command again to update.');
+    // Nothing was checked, as in the offline arm below (E2E 2026-10-16 round 2).
+    process.exitCode = 1;
     console.log('');
     return;
   }
   if (disabled === 'dev-install') {
     warn(`Not checked: ${INSTALL_DIR} is a development install (a git checkout or symlinks).`);
     log('  Update the checkout it points to with git instead.');
+    process.exitCode = 1;
     console.log('');
     return;
   }

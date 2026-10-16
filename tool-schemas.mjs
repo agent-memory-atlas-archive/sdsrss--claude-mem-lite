@@ -169,7 +169,12 @@ const coerceMixedIdTokens = z.preprocess(
 );
 
 export const memSearchSchema = {
-  query: z.string().optional().describe('Search query (FTS5 syntax supported)'),
+  query: z
+    .string()
+    .optional()
+    .describe(
+      'Search keywords; every word must match (see `or`). Operators and quotes are ignored: NOT, -term, prefix*, column:, "phrase"',
+    ),
   type: z
     .enum(['observations', 'sessions', 'prompts', 'events'])
     .optional()

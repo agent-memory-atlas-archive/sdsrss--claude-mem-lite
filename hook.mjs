@@ -831,10 +831,11 @@ async function handlePostToolUse() {
   const entry = {
     tool: tool_name,
     // A salvaged entry read as a fact about the change (`Created big.txt (0 chars)`, `x: "" →
-    // ""`) in the episode prompt; it now says what is known (E2E 2026-10-16 round 2).
+    // ""`) in the episode prompt; it now says what is known (E2E 2026-10-16 round 2). The command
+    // is scrubbed BEFORE the cut, or a token straddling it keeps its head (round 3).
     desc: scrubSecrets(
       salvaged
-        ? `${tool_name} ${toolInput.command ? truncate(toolInput.command, 50) : basename(toolInput.file_path || '')} (payload over 8 MB, not read)`
+        ? `${tool_name} ${toolInput.command ? truncate(scrubSecrets(toolInput.command), 50) : basename(toolInput.file_path || '')} (payload over 8 MB, not read)`
         : makeEntryDesc(tool_name, toolInput, resp, bashSig),
     ),
     ...workerEntryFields(tool_name, toolInput, resp, {

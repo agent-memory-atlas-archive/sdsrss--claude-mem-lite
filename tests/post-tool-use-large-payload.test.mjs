@@ -100,4 +100,21 @@ describe('PostToolUse past 256 KB still reaches the episode buffer', () => {
     expect(bDesc).toContain('cat /var/log/huge.log');
     expect(bDesc).toMatch(/not read/);
   }, 60000);
+
+  // Round 3 (hooks NEW-1): the salvaged command was cut to 50 characters BEFORE the scrub, so a
+  // token straddling the cut kept up to 25 of its secret characters in the episode buffer. The
+  // normal path scrubs first (scrubTruncate).
+  it('a salvaged Bash command is scrubbed before it is cut', () => {
+    const tok = 'gh' + 'p_' + 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+    const { buffer } = postToolUse({
+      session_id: 'big-bash-secret',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `docker login -u ci -p ${tok} ghcr.io` },
+      tool_response: { stdout: 'z'.repeat(9 * 1024 * 1024), stderr: '' },
+    });
+    const desc = (buffer?.entries ?? []).map((e) => e.desc).join(' | ');
+    expect(desc, 'premise: the salvaged entry exists').toMatch(/docker login/);
+    expect(desc).not.toMatch(/gh[p]_[A-Za-z0-9]{6,}/);
+  }, 60000);
 });

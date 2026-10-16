@@ -185,6 +185,30 @@ describe('importJsonl — a scrubbed title still deduplicates across runs', () =
       expect(row.narrative).not.toMatch(LEAK);
     });
 
+    // E2E 2026-10-16 round 2 (data R2): a string result was cut to 8000 characters BEFORE the
+    // scrub and to 4000 after it. Secrets earlier in the result shrink under the scrub (each
+    // 40-char token becomes `***`), so the head of a token split at 8000 moved inside the 4000
+    // kept, too short for its pattern.
+    it('string tool result: a token split by a pre-scrub cut, pulled inside the kept 4000', async () => {
+      const lead = Array.from(
+        { length: 150 },
+        (_, i) => `t=${token.slice(0, 32)}${String(i).padStart(4, '0')}`,
+      ).join(' ');
+      expect(scrubSecrets(lead).length, 'premise: the lead shrinks under the scrub').toBeLessThan(1000);
+      const content = `${lead} ${'y'.repeat(7984 - lead.length - 2)} ${token} tail`;
+      expect(content.indexOf(token), 'premise: the token straddles 8000').toBe(7984);
+      const file = join(dir, 'shrink.jsonl');
+      const [use, res] = toolPair('Read', { file_path: '/repo/bundle.txt' }, 'b3').split('\n');
+      const r = JSON.parse(res);
+      r.message.content[0].content = content;
+      writeFileSync(file, `${use}\n${JSON.stringify(r)}\n`);
+      await importJsonl(db, file, { project: 'proj' });
+      const row = db.prepare('SELECT text, narrative FROM observations').get();
+      expect(row.text).not.toMatch(LEAK);
+      expect(row.narrative).not.toMatch(LEAK);
+      expect(row.narrative.length, 'the cap still bounds it').toBeLessThan(5000);
+    });
+
     it('user prompt straddling 10000', async () => {
       const text = straddle(10000);
       expect(text.slice(0, 10000), 'premise: the cut splits it').toMatch(LEAK);

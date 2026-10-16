@@ -17,7 +17,7 @@ before retrieval, measurement, release, migration or schema work.**
 
 | Task | Command |
 |------|---------|
-| Setup · tests | `npm install` (Node >=22 toolchain) · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` · before tagging `npm run test:ci-env` (CI env) |
+| Setup · tests | `npm install` · `npx vitest run` · one file `npx vitest run tests/foo.test.mjs` · one case `-t 'case name'` · before tagging `npm run test:ci-env` (CI env) |
 | Coverage | `npm run test:coverage` (gate: statements 81 / branches 75 / functions 87 / lines 83) |
 | Lint · shell | `npx eslint .` · `shellcheck scripts/*.sh` |
 | Format | `npm run format` — **run it twice**, `tests/hook-update.test.mjs` needs a second pass to reach a fixed point. `format:check` is gated in CI and pre-commit |
@@ -44,7 +44,7 @@ series. Sandbox harness `tests/sandbox/` (`SBX_BASE` mandatory) after any depend
 
 Seven hook events in `hooks/hooks.json`: `SessionStart`, `PreCompact`, `PreToolUse`,
 `PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`. **`PreToolUse` has THREE
-matchers** (Bash via a prefilter); `install.mjs`'s settings.json twin must stay equal.
+matchers** (Bash via a prefilter).
 
 `code-graph-mcp overview .` maps the tree; the modules whose ROLE the filename does not give
 away are: **`tfidf.mjs` — the name is historical**, it is the Porter stemmer alone
@@ -132,7 +132,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 
 - **Search's reported `total` is NOT the number of rows you can page to** — `reachable` is `preFinalizeCount`, never a re-derived `max(limit*3,60)`. The disclosure goes **SILENT** under a post-filter rather than guess; do not "improve" it with `total - postFilterDropped`.
 - **A SQL `LIMIT` upstream of a JS-side relevance filter is a REACHABILITY bound, not a ranking bound** — an importance demotion becomes an *eviction*. Count such populations with the pool's own `liveObsFilterSql`, not a bare `WHERE importance = 3`.
-- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — SQLite returns ascending rowid, i.e. oldest first; `tests/order-by-created-at-guard.test.mjs` fails a new one. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
+- **`ORDER BY created_at_epoch DESC` without an id tiebreaker INVERTS on a tie** — `tests/order-by-created-at-guard.test.mjs` fails a new one. Spelling: `importance DESC, created_at_epoch DESC, id DESC`.
 - **Deep search floods on questions the corpus cannot answer** — holdout reads **FP@10 = 10.00, 12/12**. The flood is the **AND→OR fallback**, which is also the vocab-mismatch recall win, so three gates were tested against both arms and **rejected**.
 - **That same OR fallback DISARMS auto-escalation**, so both deep rulers describe EXPLICIT deep only and an escalation A/B reading Δ=0 is a blind instrument (rule 9).
 - **`benchmark:gate` CANNOT say NO about the eight scoring multipliers** — saturated corpus, ablations gated by nothing. Use `multiplier-discrimination.mjs`; all eight are wired at their declared magnitude, but whether they *help a real user* is not answerable on this corpus.
@@ -165,7 +165,7 @@ inversion (83 → 130 files). → `baselines.md`, `findings.md § Baselines`.
 ### Testing this repo
 
 - **Tests use a `:memory:` DB**; schema changes must sync to test files.
-- **A test that reads repo source as TEXT must use `dirname(fileURLToPath(...))` + `join()`, never `new URL('../x.mjs', import.meta.url)`** — it hides the module from knip; guarded by `tests/no-url-module-paths.test.mjs`.
+- **A test that reads repo source as TEXT must use `dirname(fileURLToPath(...))` + `join()`, never `new URL('../x.mjs', import.meta.url)`** — guarded by `tests/no-url-module-paths.test.mjs`.
 - **`MEM_NO_AUTO_ADOPT=1` is a GLOBAL opt-out every auto-adopt caller must honour** — any test spawning `install` or `repair` must set it, or the suite rewrites this repo's own CLAUDE.md and sidecar.
 - **`effectiveQuiet()` drops both Key Context sections under this repo's own cwd** (it is adopted), so a test asserting on them passes vacuously — point `CLAUDE_PROJECT_DIR` at a temp dir, set `MEM_NO_AUTO_ADOPT=1`, assert a premise.
 - **An MCP tool's advertised JSON Schema is not its enforced schema, and `.pipe()` is where they part** — zod 4 renders the ZodPipe's INPUT side. Put the constraint INSIDE the `z.preprocess`.

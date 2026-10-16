@@ -81,6 +81,7 @@ import { aggregateProjectCiteRecall } from './lib/citation-tracker.mjs';
 import {
   probeOtherSources as probeIdSources,
   bucketIdTokens,
+  formatSourceOverrideNote,
   splitDeferredTokens,
 } from './lib/id-routing.mjs';
 import { join, dirname } from 'path';
@@ -955,10 +956,16 @@ function cmdGet(db, args) {
   const { deferredIds, rest } = splitDeferredTokens(tokens);
 
   // Shared bucketing with MCP mem_get — single source of truth for P#/S#/E#/# routing (#8050).
-  const { bySrc, invalid: unparseable } = bucketIdTokens(rest, { explicit, defaultSource: 'obs' });
+  const {
+    bySrc,
+    invalid: unparseable,
+    overridden,
+  } = bucketIdTokens(rest, { explicit, defaultSource: 'obs' });
   if (unparseable.length > 0) {
     process.stderr.write(`[mem] Ignoring unparseable ID token(s): ${unparseable.join(', ')}\n`);
   }
+  const overrideNote = formatSourceOverrideNote(overridden, `--source ${flags.source}`);
+  if (overrideNote) process.stderr.write(`[mem] ${overrideNote}\n`);
   if (
     bySrc.obs.length +
       bySrc.session.length +

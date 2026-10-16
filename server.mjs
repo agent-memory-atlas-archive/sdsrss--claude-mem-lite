@@ -128,6 +128,7 @@ import { join } from 'path';
 import {
   probeOtherSources as probeIdSources,
   bucketIdTokens,
+  formatSourceOverrideNote,
   splitDeferredTokens,
 } from './lib/id-routing.mjs';
 import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from './lib/save-observation.mjs';
@@ -1061,7 +1062,11 @@ server.registerTool(
     const { deferredIds, rest } = splitDeferredTokens(args.ids);
     // Bucket by per-token prefix (or force all to `args.source` when explicit).
     // coerceMixedIdTokens has already stringified + regex-validated each token.
-    const { bySrc, invalid } = bucketIdTokens(rest, { explicit: args.source || null, defaultSource: 'obs' });
+    const { bySrc, invalid, overridden } = bucketIdTokens(rest, {
+      explicit: args.source || null,
+      defaultSource: 'obs',
+    });
+    const overrideNote = formatSourceOverrideNote(overridden, `source="${args.source}"`);
     if (invalid.length > 0) {
       // Should not happen — schema regex already rejected bad tokens — but guard defensively.
       return {
@@ -1254,7 +1259,8 @@ server.registerTool(
           ? ` Deferred item(s) not found: ${deferredMissing.map((i) => `D#${i}`).join(', ')}.`
           : '';
       const msg = `No records found in source(s) [${queriedList}] for the given ID(s).${deferredNote}${hint}`;
-      return { content: [{ type: 'text', text: fieldsNote ? `${msg}\n\n${fieldsNote}` : msg }] };
+      const notes = [fieldsNote, overrideNote].filter(Boolean);
+      return { content: [{ type: 'text', text: [msg, ...notes].join('\n\n') }] };
     }
 
     // Missing-ID note per bucket (mirrors mem_delete). Show missing IDs with their bucket prefix
@@ -1268,6 +1274,7 @@ server.registerTool(
     missingHints.push(...deferredMissing.map((id) => `D#${id}`));
 
     const parts = [];
+    if (overrideNote) parts.push(overrideNote);
     if (fieldsNote) parts.push(fieldsNote);
     parts.push(...deferredSections, ...sections);
     if (missingHints.length > 0) {

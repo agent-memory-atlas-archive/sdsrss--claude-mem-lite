@@ -591,3 +591,23 @@ describe('saveObservation blank title', () => {
     }
   });
 });
+
+// E2E 2026-10-16 (MCP P2-5): for CJK text the stored `text` column carries appended bigrams,
+// so the content arm compared the new raw content against a much longer token set and an
+// IDENTICAL CJK save under a different title was stored twice.
+describe('saveObservation dedups identical CJK content', () => {
+  it('a second save of the same CJK content is a duplicate', () => {
+    const db = createTestDb();
+    try {
+      const content =
+        '登录页面在会话过期后丢失刷新令牌，原因是中间件缓存了旧的令牌，修复方法是过期后重新读取';
+      const first = saveObservation(db, { content, title: '刷新令牌丢失', project: 'test' });
+      expect(first.kind).toBe('saved');
+      const second = saveObservation(db, { content, title: '会话过期问题', project: 'test' });
+      expect(second.kind).toBe('duplicate');
+      expect(second.existingId).toBe(first.id);
+    } finally {
+      db.close();
+    }
+  });
+});

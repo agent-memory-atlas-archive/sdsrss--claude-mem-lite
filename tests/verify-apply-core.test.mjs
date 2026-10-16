@@ -737,7 +737,9 @@ describe('pre-ship review of 9786874', () => {
             const w = (...a) => tx(...a);
             w.immediate = (...a) => {
               const r = tx.immediate(...a);
-              if (hook) {
+              // The outer apply's COMMIT, not a nested one: applyObsUpdate begins IMMEDIATE too
+              // (a savepoint inside the apply), and firing there wrote inside the apply.
+              if (hook && !t.inTransaction) {
                 const h = hook;
                 hook = null;
                 h();

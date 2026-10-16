@@ -211,14 +211,18 @@ export async function cmdActivity(db, args) {
     snapshotDb(db, { tag: 'pre-delete' });
     // The opt-in search telemetry keeps a title per returned result; an explicit delete drops the
     // deleted events' titles, as lib/delete-core.mjs does for observations (D#245 N6).
-    const result = db.transaction(() => {
-      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_results'").get()) {
-        db.prepare(
-          `UPDATE search_results SET snapshot_label = NULL WHERE source = 'event' AND result_id IN (${placeholders})`,
-        ).run(...ids);
-      }
-      return db.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).run(...ids);
-    })();
+    const result = db
+      .transaction(() => {
+        if (
+          db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_results'").get()
+        ) {
+          db.prepare(
+            `UPDATE search_results SET snapshot_label = NULL WHERE source = 'event' AND result_id IN (${placeholders})`,
+          ).run(...ids);
+        }
+        return db.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).run(...ids);
+      })
+      .immediate(); // IMMEDIATE: it starts with a read (E2E 2026-10-16 round 3; see delete-core)
     out(`[mem] Deleted ${result.changes} event(s).`);
     return;
   }

@@ -7,7 +7,7 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { isMemHook, stripMemHooks, pruneDanglingMemHooks } from '../lib/hook-prune.mjs';
+import { isMemHook, stripMemHooks, pruneDanglingMemHooks, ourInstallRoots } from '../lib/hook-prune.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -99,12 +99,50 @@ describe('isMemHook leaves user hooks that share a script NAME with ours', () =>
   // Round 2 (install B6): an install relocated by an older release whose directory was later
   // removed left three prefilter hooks that were no longer recognised (no launcher beside them
   // to confirm), so install kept them beside its own — each failing "No such file or directory"
-  // on every fire — and doctor reported no orphans. A script that is not there cannot run, so a
-  // dead entry under one of our exact names is removable.
-  it('a prefilter whose script is gone is ours to remove', () => {
-    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/post-tool-use.sh"'))).toBe(true);
-    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/pre-tool-recall-bash.sh"'))).toBe(true);
-    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/pre-agent-inject.sh"'))).toBe(true);
+  // on every fire — and doctor reported no orphans. A dead prefilter is ours when the same
+  // settings route one of OUR launcher commands through that directory (every install writes
+  // both), or the directory is CLAUDE_MEM_DIR.
+  const deadReloc = {
+    hooks: {
+      PostToolUse: [
+        { hooks: [{ type: 'command', command: 'bash "/home/me/old-reloc/scripts/post-tool-use.sh"' }] },
+      ],
+      Stop: [
+        {
+          hooks: [
+            { type: 'command', command: 'node "/home/me/old-reloc/scripts/hook-launcher.mjs" hook.mjs stop' },
+          ],
+        },
+      ],
+    },
+  };
+  it('a dead prefilter beside our dead launcher command is ours to remove', () => {
+    const roots = ourInstallRoots(deadReloc);
+    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/post-tool-use.sh"'), roots)).toBe(true);
+    expect(isMemHook(mk('bash "/home/me/old-reloc/scripts/pre-tool-recall-bash.sh"'), roots)).toBe(true);
+    expect(stripMemHooks(deadReloc.hooks.PostToolUse, roots).removed).toBe(1);
+    expect(ourInstallRoots({ hooks: {} }, { CLAUDE_MEM_DIR: '/data/mem' }).has('/data/mem')).toBe(true);
+  });
+  // Round 3 (install NEW-2): "a dead script is ours" alone deleted a user's own hook whose script
+  // was briefly missing (a dotfiles checkout on an unmounted drive), on a machine that never
+  // installed the product.
+  it("a user's briefly missing hook with one of our names is not ours", () => {
+    const settings = {
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: 'Edit|Write',
+            hooks: [
+              { type: 'command', command: 'bash /mnt/dotfiles/claude/scripts/post-tool-use.sh --prettier' },
+            ],
+          },
+        ],
+      },
+    };
+    const roots = ourInstallRoots(settings, {});
+    expect(isMemHook(settings.hooks.PostToolUse[0], roots)).toBe(false);
+    expect(stripMemHooks(settings.hooks.PostToolUse, roots).removed).toBe(0);
+    expect(pruneDanglingMemHooks(settings, '/nonexistent-install').removed).toEqual([]);
   });
   it('the dangling-hook prune keeps them too', () => {
     const settings = {

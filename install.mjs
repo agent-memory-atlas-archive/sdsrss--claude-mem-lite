@@ -127,7 +127,13 @@ import {
   claudeStatePath,
   ignoredClaudeConfigDir,
 } from './lib/data-paths.mjs';
-import { isMemHook, isMemHookCommand, stripMemHooks, launcherEntryPath } from './lib/hook-prune.mjs';
+import {
+  isMemHook,
+  isMemHookCommand,
+  stripMemHooks,
+  launcherEntryPath,
+  ourInstallRoots,
+} from './lib/hook-prune.mjs';
 
 // Re-export for backward compatibility — tests/install-hook-scripts.test.mjs
 // and any external consumers still import HOOK_SCRIPT_FILES from install.mjs.
@@ -1254,9 +1260,14 @@ function configureHooks() {
     UserPromptSubmit: [memUserPrompt],
   };
 
+  // Read before the loop rewrites the events: a dead prefilter is ours only under a root one of
+  // our launcher commands names (lib/hook-prune.mjs ourInstallRoots).
+  const roots = ourInstallRoots(settings);
   for (const [event, configs] of Object.entries(hookConfigs)) {
     // Per entry (stripMemHooks), so a hook the user added under one of our matchers stays.
-    const existing = Array.isArray(settings.hooks[event]) ? stripMemHooks(settings.hooks[event]).kept : [];
+    const existing = Array.isArray(settings.hooks[event])
+      ? stripMemHooks(settings.hooks[event], roots).kept
+      : [];
     settings.hooks[event] = [...existing, ...configs];
   }
 
@@ -3487,6 +3498,7 @@ function hookTargetState(p) {
  */
 export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR, unreadable = null) {
   if (!settings?.hooks) return [];
+  const roots = ourInstallRoots(settings);
   const out = [];
   const judge = (p) => {
     if (out.includes(p) || unreadable?.includes(p)) return;
@@ -3497,10 +3509,10 @@ export function collectOrphanHookPaths(settings, installDir = INSTALL_DIR, unrea
   for (const configs of Object.values(settings.hooks)) {
     if (!Array.isArray(configs)) continue;
     for (const cfg of configs) {
-      if (!isMemHook(cfg)) continue;
+      if (!isMemHook(cfg, roots)) continue;
       for (const h of cfg.hooks || []) {
         // A user's own entry inside one of our groups is not ours to call an orphan.
-        if (!isMemHookCommand(h?.command)) continue;
+        if (!isMemHookCommand(h?.command, roots)) continue;
         const cmd = h.command || '';
         if (cmd.includes('${CLAUDE_PLUGIN_ROOT}')) continue;
         // The launcher's entry argument, which is unquoted and so invisible to the
@@ -3620,9 +3632,10 @@ function cleanupMemHooksFromSettings(settings) {
   if (!settings?.hooks) return 0;
 
   let removed = 0;
+  const roots = ourInstallRoots(settings);
   for (const [event, configs] of Object.entries(settings.hooks)) {
     if (!Array.isArray(configs)) continue;
-    const { kept, removed: n } = stripMemHooks(configs);
+    const { kept, removed: n } = stripMemHooks(configs, roots);
     removed += n;
     if (kept.length > 0) settings.hooks[event] = kept;
     else delete settings.hooks[event];

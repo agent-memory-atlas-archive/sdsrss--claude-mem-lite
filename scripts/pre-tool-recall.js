@@ -29,7 +29,7 @@ import {
   toolEditPath,
 } from '../lib/file-edge-match.mjs';
 import { scrubFilePath } from '../lib/scrub-record.mjs';
-import { fileIntelFor } from '../lib/file-intel.mjs';
+import { fileIntelFor, fileIntelEnabled } from '../lib/file-intel.mjs';
 import { shouldWarnReread, buildRereadWarning, readFileMeta } from '../lib/reread-guard.mjs';
 import { recordMetric } from '../lib/metrics.mjs';
 import { presentIdents } from '../lib/lesson-idents.mjs';
@@ -205,9 +205,7 @@ const STALE_MS = 10 * 60 * 1000; // 10 minutes cleanup threshold for legacy file
 // often (39.7%, 25/63) than after a partial one (69.0%), and no reply named a size (0/1,102) —
 // at 1.57 KB/session, plus the framing header of the 426 blocks it was the only content of.
 // CLAUDE_MEM_FILE_INTEL=1 turns it back on.
-const FILE_INTEL_ON = ['1', 'on', 'true', 'yes'].includes(
-  String(process.env.CLAUDE_MEM_FILE_INTEL || '').toLowerCase(),
-);
+const FILE_INTEL_ON = fileIntelEnabled();
 // P2 (D#78): edge-level decay ENFORCEMENT — opt-in (default OFF, shadow-first).
 // When on, a (obs,file) edge whose miss_streak reached K consecutive uncited
 // injections stops firing on this surface; the lesson stays reachable via

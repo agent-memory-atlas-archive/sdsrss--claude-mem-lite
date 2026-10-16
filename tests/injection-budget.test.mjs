@@ -19,7 +19,11 @@ import {
   sessionVerdict,
   triggerKind,
   visibleText,
+  projectSessionEvents,
+  assertIdentityProjection,
+  assertNoLessonRowLost,
 } from '../benchmark/injection-budget.mjs';
+import { ACK_DIRECTIVE, ACK_DIRECTIVE_SHORT } from '../lib/recall-shown.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'benchmark', 'injection-budget.mjs');
 
@@ -253,5 +257,55 @@ describe('end to end over a hand-built root', () => {
     const again = run({ CLAUDE_MEM_TRANSCRIPT_ROOT: frozen }, []);
     expect(again.faces).toEqual(live.faces);
     expect(again.others).toEqual(live.others);
+  });
+});
+
+describe('after-arm projection (shipped decision functions over recorded blocks)', () => {
+  const HEADER = '[mem] PreToolUse recall — system-injected context, continue your planned action:';
+  const pre = (body) => ({ kind: 'hook', face: 'pretool', text: `${HEADER}\n${body}` });
+  const events = [
+    { kind: 'prompt', text: 'go' },
+    pre('[mem] 📄 big.mjs ~12k tok · x'),
+    pre(`[mem] Lessons for a.mjs:\n  #1 [bugfix] one\n[mem] ⚠ Before this edit: ${ACK_DIRECTIVE}`),
+    pre(`[mem] Lessons for b.mjs:\n  #2 [bugfix] two\n[mem] ⚠ Before this edit: ${ACK_DIRECTIVE}`),
+    { kind: 'compact' },
+    pre('[mem] Lessons for c.mjs:\n  E#3 [lesson] three'),
+  ];
+
+  it('drops a file-info-only block, keeps the header once, shortens the second directive, resets on compaction', () => {
+    const out = projectSessionEvents(events, {}).filter((e) => e.kind === 'hook');
+    expect(out[0].text).toBe('');
+    expect(out[1].text.startsWith(HEADER)).toBe(true);
+    expect(out[1].text).toContain(ACK_DIRECTIVE);
+    expect(out[2].text.startsWith(HEADER)).toBe(false);
+    expect(out[2].text).toContain(ACK_DIRECTIVE_SHORT);
+    expect(out[2].text).toContain('#2 [bugfix] two');
+    expect(out[3].text.startsWith(HEADER)).toBe(true);
+  });
+
+  it('is the identity with every switch restored', () => {
+    expect(assertIdentityProjection([{ events }])).toBe(4);
+  });
+
+  it('the identity check THROWS when a re-render changes a block', () => {
+    const broken = (evs, env, opts) =>
+      projectSessionEvents(evs, env, opts).map((e) =>
+        e.before !== undefined ? { ...e, text: e.text.trim() + ' ' } : e,
+      );
+    expect(() => assertIdentityProjection([{ events }], broken)).toThrow(/projection identity/);
+  });
+
+  it('the lesson-row check THROWS when a row goes missing', () => {
+    const lost = [
+      [
+        {
+          kind: 'hook',
+          face: 'pretool',
+          before: '  #1 [bugfix] one\n  #2 [bugfix] two',
+          text: '  #1 [bugfix] one',
+        },
+      ],
+    ];
+    expect(() => assertNoLessonRowLost(lost)).toThrow(/lost lesson rows/);
   });
 });

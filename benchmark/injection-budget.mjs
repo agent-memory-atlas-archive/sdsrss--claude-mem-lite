@@ -67,6 +67,9 @@ import {
   findSubagentTranscripts,
 } from '../lib/citation-tracker.mjs';
 import { TASK_IMPERATIVE_PREFIX } from '../lib/task-imperative.mjs';
+import { ACK_DIRECTIVE, ACK_DIRECTIVE_SHORT, planRecallBlock } from '../lib/recall-shown.mjs';
+import { fileIntelEnabled } from '../lib/file-intel.mjs';
+import { recentTableRowCap } from '../hook-context.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CORPUS_FORMAT = 'injection-budget/1';
@@ -435,8 +438,14 @@ export function sessionEvents(entries) {
   const toolUses = new Map();
   let turn = 0;
   let prompt = null;
-  for (const e of entries) {
+  for (const [index, e] of entries.entries()) {
     if (e?.isSidechain === true) continue;
+    // Compaction is where SessionStart(compact) resets the per-thread "shown once" marker
+    // (lib/recall-shown.mjs) — the after-arm projection replays that reset here.
+    if (e?.type === 'system' && e.subtype === 'compact_boundary') {
+      events.push({ kind: 'compact', turn });
+      continue;
+    }
     if (e?.type === 'user') {
       const p = hookPromptOf(e);
       if (p !== null && (e.origin?.kind ?? 'human') === 'human') {
@@ -466,6 +475,7 @@ export function sessionEvents(entries) {
     const vis = visibleText(att);
     events.push({
       kind: 'hook',
+      index,
       turn,
       prompt,
       event,
@@ -748,6 +758,188 @@ export function sessionStartAndUpsValue(sessions, sessionsEvents) {
   return out;
 }
 
+// ─── 5b. After-arm projection ───────────────────────────────────────────────
+//
+// Re-renders each RECORDED block through the SHIPPED decision functions, so an after-arm reads
+// the same sessions as the before-arm (doctrine rule 2) without re-running them:
+//   C1/C3  planRecallBlock (lib/recall-shown.mjs), per main thread, reset at compact_boundary
+//   C2     fileIntelEnabled (lib/file-intel.mjs) — the file-info line goes unless opted in
+//   C4     recentTableRowCap (hook-context.mjs) — Recent rows past the cap go
+//   C5     past-question rows that echo the triggering prompt or an earlier prompt of the
+//          session go. APPROXIMATE: production compares full texts (isPromptEcho) and excludes
+//          the session in SQL; a recorded row is cut to 80 chars, so this uses the prefix test
+//          isEcho, and it cannot add the row an OR relaxation would have found instead.
+//   C6     the dashboard's `💡 mem events` line goes (and the dashboard, if that empties it)
+// What a projection cannot show is how the model would have BEHAVED; it prices bytes and proves
+// which ids still reach it. Both self-checks below run on every --project.
+
+/** Every switch at its pre-change value: the projection must then be the identity. */
+export const RESTORE_ENV = Object.freeze({
+  CLAUDE_MEM_RECALL_HEADER_ONCE: '0',
+  CLAUDE_MEM_DIRECTIVE_ONCE: '0',
+  CLAUDE_MEM_FILE_INTEL: '1',
+  CLAUDE_MEM_STARTUP_RECENT_ROWS: '1000000',
+});
+
+const BRIDGE_LINE = /→ this edit must:/;
+
+function projectPretool(text, state, env) {
+  const keepIntel = fileIntelEnabled(env);
+  const lines = classifyLines('pretool', text).filter((c) => keepIntel || c.cls !== 'file_info');
+  // A block left with nothing but its header is a block production never emits.
+  if (!lines.some((c) => c.cls !== 'header' && c.cls !== 'blank')) return '';
+  const dir = lines.find(
+    (c) => (c.cls === 'edit_directive' || c.cls === 'read_edit_nudge') && !BRIDGE_LINE.test(c.line),
+  );
+  const plan = planRecallBlock(
+    state.shown,
+    { header: lines.some((c) => c.cls === 'header'), directive: Boolean(dir) },
+    env,
+  );
+  state.shown = plan.next;
+  return lines
+    .filter((c) => c.cls !== 'header' || plan.header)
+    .map((c) =>
+      c === dir && plan.directive === 'short' ? c.line.replace(ACK_DIRECTIVE, ACK_DIRECTIVE_SHORT) : c.line,
+    )
+    .join('\n');
+}
+
+function projectSessionStart(text, env, opts) {
+  const cls = classifyLines('session_start', text);
+  const cap = recentTableRowCap(env);
+  let rows = 0;
+  let out = [];
+  let inRecent = false;
+  for (const c of cls) {
+    if (c.cls.startsWith('ctx:recent') && /^### /.test(c.line)) inRecent = true;
+    else if (inRecent && !c.cls.startsWith('ctx:recent') && c.cls !== 'blank') inRecent = false;
+    if (inRecent && cap === 0) continue; // the whole section goes
+    if (inRecent && /^\| #/.test(c.line) && ++rows > cap) continue;
+    if (opts.c6 && c.cls === 'dashboard' && c.line.startsWith('💡 mem events')) continue;
+    out.push(c);
+  }
+  if (opts.c6) {
+    // A dashboard left with only its heading is '' in production (buildDashboard), and its part
+    // — joined to the next with a blank line — goes with it.
+    const h = out.findIndex((c) => c.line.startsWith('[mem] Startup dashboard:'));
+    if (h !== -1 && (h + 1 >= out.length || out[h + 1].cls !== 'dashboard')) {
+      const startsPart = h === 0 || out[h - 1].cls === 'blank';
+      out.splice(h, startsPart && out[h + 1]?.cls === 'blank' ? 2 : 1);
+    }
+  }
+  return out.map((c) => c.line).join('\n');
+}
+
+function projectUpsSearch(text, state, prompt, opts) {
+  if (!opts.c5) return text;
+  const cls = classifyLines('ups_search', text);
+  const earlier = state.prompts.slice(0, -1);
+  const out = cls.filter((c) => {
+    if (c.cls !== 'past_questions') return true;
+    const m = P_ROW_RE.exec(c.line.trim());
+    if (!m) return true;
+    return !(isEcho(m[2], prompt || '') || earlier.some((p) => isEcho(m[2], p)));
+  });
+  // The section heading goes when no row of it is left.
+  const final = out.filter(
+    (c, i) =>
+      !(c.cls === 'past_questions' && /^\[mem\] FYI — Past similar questions/.test(c.line)) ||
+      out.slice(i + 1).some((d) => d.cls === 'past_questions' && P_ROW_RE.test(d.line.trim())),
+  );
+  if (!final.some((c) => c.cls !== 'blank')) return '';
+  return final.map((c) => c.line).join('\n');
+}
+
+/**
+ * One session's hook events with their text replaced by what the shipped code would inject.
+ * @returns {Array} events, same order; projected hook events carry `before` (the recorded text)
+ */
+export function projectSessionEvents(events, env = process.env, opts = { c5: true, c6: true }) {
+  const state = { shown: { header: false, directive: false }, prompts: [] };
+  return events.map((ev) => {
+    if (ev.kind === 'compact') state.shown = { header: false, directive: false };
+    if (ev.kind === 'prompt') state.prompts.push(ev.text);
+    if (ev.kind !== 'hook' || !ev.face || !ev.text.trim()) return ev;
+    let text = ev.text;
+    if (ev.face === 'pretool') text = projectPretool(ev.text, state, env);
+    else if (ev.face === 'session_start') text = projectSessionStart(ev.text, env, opts);
+    else if (ev.face === 'ups_search') text = projectUpsSearch(ev.text, state, ev.prompt, opts);
+    return { ...ev, text, before: ev.text };
+  });
+}
+
+/** With every switch restored and C5/C6 off, the projection must reproduce every block. */
+export function assertIdentityProjection(sessionsEvents, project = projectSessionEvents) {
+  let blocks = 0;
+  for (const { events } of sessionsEvents) {
+    for (const ev of project(events, RESTORE_ENV, { c5: false, c6: false })) {
+      if (ev.kind !== 'hook' || ev.before === undefined) continue;
+      blocks++;
+      if (ev.text !== ev.before) {
+        throw new Error(
+          `projection identity: a ${ev.face} block changed with every switch restored — ` +
+            `the re-render does not reproduce what was recorded (${Buffer.byteLength(ev.before)} B → ${Buffer.byteLength(ev.text)} B)`,
+        );
+      }
+    }
+  }
+  return blocks;
+}
+
+const LESSON_ID_RE = new RegExp(`^\\s{0,6}(E?#${OBS_ID_DIGITS}) \\[`);
+const lessonIds = (face, text) =>
+  classifyLines(face, text)
+    .filter((c) => c.cls === 'lesson_row')
+    .map((c) => LESSON_ID_RE.exec(c.line)?.[1])
+    .filter(Boolean);
+
+/** No projected block may lose a lesson row: that is what keeps the cite pairs. */
+export function assertNoLessonRowLost(projectedSessions) {
+  for (const events of projectedSessions) {
+    for (const ev of events) {
+      if (ev.kind !== 'hook' || ev.before === undefined || ev.face !== 'pretool') continue;
+      const a = lessonIds('pretool', ev.before).join(',');
+      const b = lessonIds('pretool', ev.text).join(',');
+      if (a !== b) throw new Error(`projection lost lesson rows: [${a}] → [${b}]`);
+    }
+  }
+}
+
+/** Write a copy of the corpus whose hook stdout is the projected text (for citation-live-replay). */
+function writeProjected(corpus, projectedSessions, dir) {
+  corpus.sessions.forEach((s, si) => {
+    const byIndex = new Map();
+    for (const ev of projectedSessions[si])
+      if (ev.kind === 'hook' && ev.before !== undefined) byIndex.set(ev.index, ev.text);
+    const lines = s.kept.map((k, i) => {
+      if (!byIndex.has(i)) return k.line;
+      const o = structuredClone(k.entry);
+      const text = byIndex.get(i);
+      let parsed = null;
+      try {
+        parsed = JSON.parse(o.attachment.stdout);
+      } catch {
+        /* plain stdout */
+      }
+      if (parsed && typeof parsed === 'object' && parsed.hookSpecificOutput) {
+        if (text) {
+          parsed.hookSpecificOutput.additionalContext = text;
+          o.attachment.stdout = JSON.stringify(parsed);
+        } else o.attachment.stdout = '';
+      } else o.attachment.stdout = text;
+      return JSON.stringify(o);
+    });
+    mkdirSync(join(dir, s.project), { recursive: true });
+    writeFileSync(join(dir, s.project, `${s.session}.jsonl`), lines.join('\n') + '\n');
+    for (const sub of findSubagentTranscripts(s.path)) {
+      const subDir = join(dir, s.project, s.session, 'subagents');
+      mkdirSync(subDir, { recursive: true });
+      writeFileSync(join(subDir, basename(sub)), readFileSync(sub));
+    }
+  });
+}
+
 // ─── 6. Report ───────────────────────────────────────────────────────────────
 
 const kb = (b) => (b / 1024).toFixed(2);
@@ -863,11 +1055,62 @@ function main() {
         ss: sessionStartAndUpsValue(corpus.sessions, sessionsEvents),
       }
     : null;
+  let after = null;
+  const projectedDir = argOf('--write-projected');
+  if (has('--project') || projectedDir) {
+    const identityBlocks = assertIdentityProjection(sessionsEvents);
+    // `{}`: the shipped DEFAULTS, whatever this shell exports.
+    const projected = sessionsEvents.map(({ events, toolUses }) => ({
+      events: projectSessionEvents(events, {}),
+      toolUses,
+    }));
+    assertNoLessonRowLost(projected.map((p) => p.events));
+    after = { ...accountBytes(projected), identityBlocks };
+    if (projectedDir) {
+      if (existsSync(projectedDir) && readdirSync(projectedDir).length) {
+        console.error(`--write-projected: ${projectedDir} is not empty`);
+        process.exit(1);
+      }
+      mkdirSync(projectedDir, { recursive: true });
+      writeProjected(
+        corpus,
+        projected.map((p) => p.events),
+        projectedDir,
+      );
+      console.error(`wrote the projected corpus to ${projectedDir}`);
+    }
+  }
   if (has('--json')) {
-    console.log(JSON.stringify({ meta, ...acct, value }, null, 2));
+    console.log(JSON.stringify({ meta, ...acct, value, after }, null, 2));
     return;
   }
   printReport(meta, acct, value);
+  if (after) printAfter(meta, acct, after);
+}
+
+function printAfter(meta, before, after) {
+  const n = meta.sessions;
+  const sum = (a) => Object.values(a.faces).reduce((x, r) => x + r.bytes, 0);
+  console.log(
+    `\nAFTER (shipped defaults, recorded blocks re-rendered; identity self-check passed on ${after.identityBlocks} blocks, no lesson row lost)`,
+  );
+  console.log(`claude-mem-lite ${kb(sum(before) / n)} → ${kb(sum(after) / n)} KB/session`);
+  for (const [face, r] of Object.entries(before.faces).sort((a, b) => b[1].bytes - a[1].bytes)) {
+    const a = after.faces[face] || { bytes: 0, classes: {} };
+    if (r.bytes === a.bytes) continue;
+    console.log(
+      `  ${face.padEnd(16)} ${kb(r.bytes / n).padStart(6)} → ${kb(a.bytes / n).padStart(6)} KB/session`,
+    );
+    for (const [cls, c] of Object.entries(r.classes).sort((x, y) => y[1].bytes - x[1].bytes)) {
+      const ac = a.classes[cls] || { lines: 0, bytes: 0 };
+      if (ac.bytes === c.bytes) continue;
+      console.log(
+        `      ${cls.padEnd(20)} ${kb(c.bytes / n).padStart(6)} → ${kb(ac.bytes / n).padStart(6)}  (lines ${c.lines} → ${ac.lines})`,
+      );
+    }
+  }
+  const m = after.pretoolMix;
+  console.log(`  pretool blocks ${before.pretoolMix.fires} → ${m.fires}`);
 }
 
 // Run only when invoked as a script; importing stays side-effect-free for the tests.

@@ -6,7 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { truncate, typeIcon, inferProject, fmtDate, debugLog, debugCatch } from './utils.mjs';
-import { resolveProject as _resolveProjectShared } from './project-utils.mjs';
+import { resolveProject as _resolveProjectCached, _resetProjectCache } from './project-utils.mjs';
 import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
 // the DB is touched — a static import here adds no cold-start cost.
@@ -249,6 +249,18 @@ refreshPlannerStats(db, { busyTimeoutMs: 250 });
 // Users naturally type short names like "mem" but inferProject() stores
 // "projects--mem" (parent--base from CWD). resolveProject() bridges this gap.
 // Implementation extracted to project-utils.mjs; local adapter closes over module-level `db`.
+
+//
+// project-utils caches every answer for the life of the process. That suits a CLI command; this
+// server lives for a whole Claude Code session, so a short name resolved before its canonical
+// project had rows kept answering the old way after another session or the CLI wrote them:
+// reads stayed empty and writes went to a bare-name namespace a fresh process never reads by
+// that name (E2E 2026-10-16). Every resolution here starts from a cleared cache; it costs the
+// few indexed-or-scanned SELECTs of one lookup per tool call.
+function _resolveProjectShared(dbh, name, opts) {
+  _resetProjectCache();
+  return _resolveProjectCached(dbh, name, opts);
+}
 
 function resolveProject(name) {
   return _resolveProjectShared(db, name);

@@ -17,6 +17,7 @@ import {
   statSync,
   lstatSync,
   readlinkSync,
+  realpathSync,
   constants as fsConstants,
 } from 'fs';
 import { join, resolve, dirname, basename, sep, relative, isAbsolute, delimiter } from 'path';
@@ -1570,10 +1571,25 @@ async function install() {
  * @returns {boolean} true when refused (exit code set)
  */
 function refuseUnwritableConfigHome(label) {
-  const denied = dirAccessError(claudeConfigDir());
+  let dir = claudeConfigDir();
+  let denied = dirAccessError(dir);
+  if (!denied) {
+    // settings.json may be a symlink (dotfiles, Nix home-manager), and the atomic write puts its
+    // temp file beside the TARGET: a read-only target directory got the same half-done run and
+    // raw stack back (E2E 2026-10-16 round 3).
+    try {
+      const target = dirname(realpathSync(SETTINGS_PATH));
+      if (target !== dir) {
+        denied = dirAccessError(target);
+        if (denied) dir = target;
+      }
+    } catch {
+      /* no settings.json yet: the config home is where it will be written */
+    }
+  }
   if (!denied) return false;
   console.error(
-    `[${label}] ${claudeConfigDir()} is not writable (${denied}) — nothing was done. Fix: ${dataDirRemedy(denied, claudeConfigDir())}`,
+    `[${label}] ${dir} is not writable (${denied}) — nothing was done. Fix: ${dataDirRemedy(denied, dir)}`,
   );
   process.exitCode = 1;
   return true;

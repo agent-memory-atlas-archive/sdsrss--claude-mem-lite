@@ -592,6 +592,39 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     );
   }
 
+  // Round 3 (install STILL-BROKEN-3): settings.json may be a symlink (dotfiles, Nix home-manager),
+  // and the atomic write puts its temp file beside the TARGET; a read-only target directory got
+  // the half-done uninstall and the raw stack back.
+  it.skipIf(process.getuid?.() === 0)(
+    'uninstall refuses when a symlinked settings.json points into a read-only directory',
+    () => {
+      const store = join(home, 'ro-store');
+      mkdirSync(store, { recursive: true });
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(join(store, 'settings.json'), '{}');
+      symlinkSync(join(store, 'settings.json'), join(home, '.claude', 'settings.json'));
+      runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
+      const mcpBefore = readFileSync(join(home, '.claude', 'mcp-state.txt'), 'utf8');
+      chmodSync(store, 0o555);
+      try {
+        let out = '';
+        let status = 0;
+        try {
+          out = runInstall('uninstall', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+        } catch (e) {
+          status = e.status;
+          out = `${e.stdout || ''}${e.stderr || ''}`;
+        }
+        expect(status).toBe(1);
+        expect(out).toMatch(/ro-store is not writable .* nothing was done/);
+        expect(out).not.toMatch(/\n\s+at /);
+      } finally {
+        chmodSync(store, 0o755);
+      }
+      expect(readFileSync(join(home, '.claude', 'mcp-state.txt'), 'utf8')).toBe(mcpBefore);
+    },
+  );
+
   // Round 2 (install B8): any failure of `claude mcp remove` but ENOENT read as "not found or
   // already removed" while ~/.claude.json still registered the server.
   it('uninstall names a registration `claude mcp remove` failed to remove', () => {

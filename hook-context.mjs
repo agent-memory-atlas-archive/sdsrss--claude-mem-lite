@@ -935,10 +935,17 @@ export function buildSessionContextLines(
     obsLines.push('');
     obsLines.push('| ID | Time | T | Title |');
     obsLines.push('|----|------|---|-------|');
+    // A row from another day carries its date: under the "Recent (<today>)" heading a bare
+    // HH:MM read as today, and a 5-day-old row looked like this morning's (E2E 2026-10-16).
+    // Same UTC calendar as the heading.
+    const when = (iso) =>
+      typeof iso === 'string' && fmtTime(iso) && iso.slice(0, 10) !== today
+        ? `${iso.slice(5, 10)} ${fmtTime(iso)}`
+        : fmtTime(iso);
     for (const o of obsToShow) {
       const proj = o.project && o.project !== project ? ` (${o.project})` : '';
       obsLines.push(
-        `| #${o.id} | ${fmtTime(o.created_at)} | ${typeIcon(o.type)} | ${mdCell(truncate(o.title || '(untitled)', 60) + proj)} |`,
+        `| #${o.id} | ${when(o.created_at)} | ${typeIcon(o.type)} | ${mdCell(truncate(o.title || '(untitled)', 60) + proj)} |`,
       );
     }
   }

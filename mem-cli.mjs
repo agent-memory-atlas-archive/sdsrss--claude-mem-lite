@@ -2184,23 +2184,15 @@ function cmdExport(db, args) {
       return;
     }
   }
-  let exportFromEpoch = null;
-  let exportToEpoch = null;
-  if (flags.from) {
-    exportFromEpoch = new Date(flags.from).getTime();
-    if (isNaN(exportFromEpoch)) {
-      fail(`[mem] Invalid --from date: "${flags.from}". Use YYYY-MM-DD or ISO 8601.`);
-      return;
-    }
+  // A bare YYYY-MM-DD is the LOCAL calendar day, as on search (parseDateBounds); export read
+  // it as a UTC day, so the same date matched a row on search and dropped it here.
+  const exportBounds = parseDateBounds(flags.from, flags.to);
+  if (!exportBounds.ok) {
+    fail(`[mem] Invalid --${exportBounds.bad} date: "${exportBounds.value}". Use YYYY-MM-DD or ISO 8601.`);
+    return;
   }
-  if (flags.to) {
-    exportToEpoch = new Date(flags.to).getTime();
-    if (isNaN(exportToEpoch)) {
-      fail(`[mem] Invalid --to date: "${flags.to}". Use YYYY-MM-DD or ISO 8601.`);
-      return;
-    }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(flags.to)) exportToEpoch += DAY_MS - 1;
-  }
+  const exportFromEpoch = exportBounds.epochFrom;
+  const exportToEpoch = exportBounds.epochTo;
   // --include-compressed: include compressed observations (aligned with MCP mem_export).
   // Superseded rows are excluded either way; the flag only toggles the compressed half
   // of the live-row pair (backup/export of tombstones is opt-in, retractions are not).

@@ -1874,18 +1874,17 @@ async function runExport(db, args) {
   // with mem-cli.mjs cmdExport. This face THROWS where the CLI prints a usage message —
   // T3-P1-A: surface invalid dates instead of silently dropping the filter (mirrors
   // mem_search). A dropped filter can quietly expand the export blast radius.
-  let fromEpoch = null;
-  let toEpoch = null;
-  if (args.date_from) {
-    fromEpoch = new Date(args.date_from).getTime();
-    if (isNaN(fromEpoch))
-      throw new Error(`Invalid date_from: "${args.date_from}" (use ISO 8601 or YYYY-MM-DD)`);
+  //
+  // A bare YYYY-MM-DD is the user's LOCAL calendar day, through the same parseDateBounds that
+  // mem_search uses; export read it as a UTC day, so one date matched a row on search and
+  // dropped it from the export (E2E 2026-10-16).
+  const bounds = parseDateBounds(args.date_from, args.date_to);
+  if (!bounds.ok) {
+    const name = bounds.bad === 'from' ? 'date_from' : 'date_to';
+    throw new Error(`Invalid ${name}: "${bounds.value}" (use ISO 8601 or YYYY-MM-DD)`);
   }
-  if (args.date_to) {
-    const d = args.date_to.length === 10 ? args.date_to + 'T23:59:59.999Z' : args.date_to;
-    toEpoch = new Date(d).getTime();
-    if (isNaN(toEpoch)) throw new Error(`Invalid date_to: "${args.date_to}" (use ISO 8601 or YYYY-MM-DD)`);
-  }
+  const fromEpoch = bounds.epochFrom;
+  const toEpoch = bounds.epochTo;
   // Same policy as the two date checks: refuse rather than silently drop a filter.
   //
   // This replaces a `_resolveProjectShared(db, x) || x` fallback that could not do what

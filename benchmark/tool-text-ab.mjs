@@ -79,6 +79,9 @@ export const PROBES = {
       'Save this as a bugfix memory: the invoice export timed out for tenants with more than 50k rows because one query held a lock for 40 s. Lesson: page the export in 500-row chunks and stream each page.',
   },
   P10: { change: 'B5', prompt: 'Show the timeline around memory #5.' },
+  // Added 2026-10-17: the registered `prefix*` probe P2 replaced, in its registered wording.
+  P11: { change: 'B1', prompt: '找所有以 migr 开头的记忆' },
+  P12: { change: 'B1', prompt: '找所有以 migr 开头的记忆' },
 };
 
 // The seed store: eight observations, three deferred items, one stored prompt (P#1). The probes'
@@ -207,6 +210,17 @@ export const METRICS = {
     label: 'mem_timeline anchored on #5',
     higherIsBetter: true,
     hit: (r) => callsTo(r, 'mem_timeline').some((c) => [5, '5', '#5'].includes(c.input.anchor ?? c.input.id)),
+  },
+  P11: {
+    label: 'an operator in a mem_search query',
+    higherIsBetter: false,
+    hit: (r) => callsTo(r, 'mem_search').some((c) => hasOperator(c.input.query)),
+  },
+  P12: {
+    label: 'both migration rows reached',
+    higherIsBetter: true,
+    hit: (r) =>
+      allResults(r).includes('Migration 042') && allResults(r).includes('Migrated the settings table'),
   },
 };
 

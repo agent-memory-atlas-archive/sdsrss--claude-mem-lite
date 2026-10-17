@@ -98,6 +98,14 @@ describe('METRICS', () => {
       { toolCalls: [call('mem_timeline', { id: 5 })] },
       { toolCalls: [call('mem_timeline', { anchor: 6 })] },
     ],
+    P11: [
+      { toolCalls: [call('mem_search', { query: 'migr*' })] },
+      { toolCalls: [call('mem_search', { query: 'migration migrate' })] },
+    ],
+    P12: [
+      { toolResults: ['#4 Migration 042 dropped an index', '#5 Migrated the settings table'] },
+      { toolResults: ['#4 Migration 042 dropped an index'] },
+    ],
   };
   for (const [probe, [hit, miss]] of Object.entries(cases)) {
     it(`${probe} reads a hit as a hit and a miss as a miss`, () => {

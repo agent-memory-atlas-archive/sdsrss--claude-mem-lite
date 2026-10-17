@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// Release check (dev only, not shipped; no workflow or test runs it, the release runbook runs it by
-// hand before tagging): would an update from <old> to <new> that is killed between two renames
-// leave an entry point that cannot load?
+// Release check (dev only, not shipped; no workflow or test runs it, so it is run by hand before
+// tagging): would an update from <old> to <new> that is killed between two renames leave an entry
+// point that cannot load?
 //
 // hook-update.mjs swaps SOURCE_FILES into the code home one rename at a time in the NEW release's
 // order (an older updater reads the list from the new tarball), then scripts/, then node_modules/.
 // A kill after entry i leaves SOURCE_FILES[0..i] at <new> and everything else at <old>. For every
 // split point this walks the import graph (AST, not text) from each entry point, static imports
 // and import() calls with a literal path alike, and reports a module that is missing or a named
-// import its target does not export (for a dynamic import, the names it destructures). The two
+// import its target does not export (for a dynamic import, the names a `const { … } =` declaration
+// or an `(await …).name` read binds; any other shape, assignment destructuring included, is checked
+// for the module's existence only). The two
 // shapes it catches: a module swapped before something it imports (source-files.mjs states the
 // order rule), and an export removed that a not-yet-swapped module of <old> still imports. A
 // dynamic import fails only when its code path runs, so it is reported as such.
@@ -58,7 +60,8 @@ async function manifest(rev) {
 /**
  * Every import() call with a literal path in the module, with the names it destructures:
  * `const { a } = await import(...)` and `(await import(...)).a` name theirs; any other use (a
- * namespace binding, `.then`) checks only that the module exists.
+ * namespace binding, `.then`, assignment destructuring `({ a } = await import(...))`, an element of
+ * Promise.all) checks only that the module exists.
  */
 function dynamicImports(ast) {
   const out = [];

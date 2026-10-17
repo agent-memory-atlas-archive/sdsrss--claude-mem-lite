@@ -1251,7 +1251,7 @@ what is already stored — only whether new work runs.
 |----------|-------------|---------|
 | `CLAUDE_MEM_SKIP_SUMMARY` | Skip the background LLM session summary at **both** of its spawn sites — `Stop`, and the SessionStart `/clear`-handoff path. Until v5.3.0 only the `Stop` one honoured it. | _(runs)_ |
 | `CLAUDE_MEM_LEGACY_STOP_UNLINK` | Restore the pre-v5.4.0 behaviour where `Stop` deletes the session file. Documented revert path for the session-lifecycle change, not a supported configuration: it re-mints a mem session per turn and makes the `/clear` handoff unreachable again. Only reach for it on a host that fires `Stop` once per session rather than once per turn. | _(file kept)_ |
-| `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush. Only the rule-based pre-save runs, through the noise gate: an error-fixing episode with a low-signal title ("Error: …") is dropped, where a failed call would save it as an activity event; an edit-only one is usually dropped as noise. | _(runs)_ |
+| `CLAUDE_MEM_SKIP_EPISODE_LLM` | Skip LLM extraction on episode flush. Only the rule-based pre-save runs, through the noise gate: an error-fixing episode with a low-signal title ("Error: …") is dropped, where a failed call would save it as an activity event; an edit-only one is usually dropped as noise. It also turns off SessionStart's hand-off of a killed episode worker's flush file to a new worker. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_SAVE_ENRICH` | Skip the background Haiku call that backfills `lesson_learned` / search aliases after a save. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_COMPRESS` | Skip auto-compression of old observations. | _(runs)_ |
 | `CLAUDE_MEM_SKIP_MAINTAIN` | Skip the 24h auto-maintain pass (decay, purge, backup). | _(runs)_ |

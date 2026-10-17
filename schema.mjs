@@ -1294,8 +1294,13 @@ const OBS_DOC_SQL = OBS_FTS_COLUMNS.map((c) => `COALESCE(${c}, '')`).join(` || '
  * continue below theirs) and each row's text (rewritten meanwhile: segment the row again), so two
  * openers never append the same terms twice (CLI pre-tag review 2026-10-16 P3-1), and the append
  * is done in SQL so a concurrent rewrite is never replaced by a stale copy. Not liveness-filtered:
- * an index term on a hidden row is inert, and a row restored later is then already right. Returns
- * how many rows it appended to and whether the walk is finished.
+ * an index term on a hidden row is inert, and a row restored later is then already right. A row
+ * the update's repair would move into its narrative — a blank narrative (JS trim) and a `text`
+ * looksAlreadyDerived does not read as derived — is left alone, or the terms appended here would
+ * go with it into a visible field (pre-tag reviews 2026-10-17: R1 F3, a body imported before
+ * v3.69.0; round-2 P2-2, a hook-written blob whose file-name fallback terms that test misses,
+ * which an earlier draft here moved into the narrative itself). Returns how many rows it
+ * appended to and whether the walk is finished.
  *
  * @param {import('better-sqlite3').Database} db
  * @param {{ budgetMs?: number, batchSize?: number }} [opts]
@@ -1320,15 +1325,13 @@ export function backfillObservationIndexTerms(
     const pick = db.prepare(
       `SELECT id, ${OBS_DOC_SQL} AS doc FROM observations WHERE id < ? ORDER BY id DESC LIMIT ?`,
     );
-    const docOf = db.prepare(
-      `SELECT ${OBS_DOC_SQL} AS doc, COALESCE(TRIM(narrative), '') = '' AS blank FROM observations WHERE id = ?`,
+    const docOf = db.prepare(`SELECT narrative, ${OBS_DOC_SQL} AS doc FROM observations WHERE id = ?`);
+    const fieldsOf = db.prepare(
+      `SELECT title, subtitle, concepts, facts, lesson_learned, search_aliases, text FROM observations WHERE id = ?`,
     );
-    const legacyRow = db.prepare(
-      `SELECT title, subtitle, narrative, concepts, facts, lesson_learned, search_aliases, text FROM observations WHERE id = ?`,
-    );
-    const promote = db.prepare(
-      `UPDATE observations SET narrative = text WHERE id = ? AND COALESCE(TRIM(narrative), '') = ''`,
-    );
+    // The update repair's own condition (lib/observation-write.mjs rebuildObservationDerived).
+    const repairWouldMove = (id, narrative) =>
+      !String(narrative ?? '').trim() && !looksAlreadyDerived(fieldsOf.get(id));
     const append = db.prepare(`UPDATE observations SET text = COALESCE(text, '') || ? WHERE id = ?`);
     const write = db.transaction((rows, from, below) => {
       db.exec(
@@ -1338,12 +1341,8 @@ export function backfillObservationIndexTerms(
       let n = 0;
       for (const r of rows) {
         const now = docOf.get(r.id);
-        if (!now) continue; // deleted meanwhile
-        // A row whose body sits in `text` under a blank narrative (import-jsonl before v3.69.0) gets
-        // the body moved into the narrative first, the repair an update makes; appended after the
-        // body, the terms would be moved with it into the narrative by the next update (pre-tag
-        // review 2026-10-17 F3). A hook-written blob reads as derived and stays as it is.
-        if (now.blank && !looksAlreadyDerived(legacyRow.get(r.id))) promote.run(r.id);
+        // Decided here, under the write lock, on the row as it is now.
+        if (!now || repairWouldMove(r.id, now.narrative)) continue;
         const terms = now.doc === r.doc ? r.terms : missingCjkIndexTerms(now.doc);
         if (terms) n += append.run(` ${terms}`, r.id).changes;
       }

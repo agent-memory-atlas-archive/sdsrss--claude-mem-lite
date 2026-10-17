@@ -317,6 +317,21 @@ describe('rows changed between the read and the write', () => {
     expect(runCounts(db, ids)).toEqual({ once: 5, more: 0 });
   });
 
+  // Round-2 pre-tag review P2-2: the batch re-checks under the write lock whether the update's
+  // repair would now move the row's text into its narrative, and leaves such a row alone.
+  it('a row rewritten meanwhile into a body under a blank narrative is left alone', () => {
+    memStore();
+    const ids = insertMany(db, 5);
+    const body = '{"command":"npm test"} 测试失败：连接池泄漏导致超时';
+    race.at = 3; // after ids[3] was segmented (newest first), before the batch is written
+    race.hook = () =>
+      db.prepare(`UPDATE observations SET narrative = '', text = ? WHERE id = ?`).run(body, ids[3]);
+    runDeferredCleanups(db);
+    expect(race.hook, 'premise: the rewrite ran during the pass').toBeNull();
+    expect(textOf(db, ids[3])).toBe(body);
+    for (const i of [0, 1, 2, 4]) expect(countTok(textOf(db, ids[i]), `mod${i}`)).toBe(1);
+  });
+
   it('a row deleted meanwhile is skipped and the rest of its batch is written', () => {
     memStore();
     const ids = insertMany(db, 5);
@@ -365,30 +380,63 @@ describe('the pass and the rows it cannot see as derived', () => {
     expect(names).toContain('backfill-glued-ascii-runs');
   });
 
-  it("moves a legacy row's body into its blank narrative before appending, so an update copies no terms (F3)", async () => {
+  // R1 F3 / round-2 P2-2: appended after a body that sits in `text` under a blank narrative, the
+  // terms reached the narrative through the next update's repair; and a step that moved the body
+  // first mistook a hook-written blob (file-name fallback terms) for a body. Rows with a blank
+  // narrative are left as the writers stored them.
+  it.each([
+    [
+      'an import before v3.69.0 (body in text)',
+      'import-old',
+      'Bash: npm test',
+      '{"command":"npm test"}\n---\n测试失败：连接池泄漏导致超时',
+    ],
+    [
+      'a hook-written blob with file-name fallback terms',
+      'hook-old',
+      '修复连接池泄漏',
+      'pool 修复 复连 连接 接池 池泄 泄漏 hook-llm',
+    ],
+  ])('leaves %s alone, so an update moves no terms into the narrative', async (_, session, title, text) => {
     const { applyObsUpdate } = await import('../lib/observation-write.mjs');
     memStore();
-    const body = '{"command":"npm test"}\n---\n测试失败：连接池泄漏导致超时';
     db.prepare(
       `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
-       VALUES ('import-old', 'import-old', ?, ?, ?, 'completed')`,
-    ).run(P, new Date().toISOString(), Date.now());
-    // import-jsonl before v3.69.0: the body in `text` only, narrative ''.
+       VALUES (?, ?, ?, ?, ?, 'completed')`,
+    ).run(session, session, P, new Date().toISOString(), Date.now());
     const id = Number(
       db
         .prepare(
           `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, created_at, created_at_epoch, importance)
-           VALUES ('import-old', ?, ?, 'change', 'Bash: npm test', '', ?, ?, 1)`,
+           VALUES (?, ?, ?, 'change', ?, '', ?, ?, 1)`,
         )
-        .run(P, body, new Date().toISOString(), Date.now()).lastInsertRowid,
+        .run(session, P, text, title, new Date().toISOString(), Date.now()).lastInsertRowid,
     );
     db.prepare(`DELETE FROM migration_cleanups`).run();
     runDeferredCleanups(db);
-    expect(
-      db.prepare('SELECT text FROM observations WHERE id = ?').get(id).text,
-      'premise: terms were appended',
-    ).not.toBe(body);
+    expect(db.prepare('SELECT narrative, text FROM observations WHERE id = ?').get(id)).toEqual({
+      narrative: '',
+      text,
+    });
+    const before = db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id);
     applyObsUpdate(db, id, { importance: 3 });
-    expect(db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id).narrative).toBe(body);
+    const after = db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id).narrative;
+    // Whatever the update's repair does, it does on the text the writers stored.
+    expect(after === before.narrative || after === text).toBe(true);
+  });
+
+  it('treats a whitespace-only narrative as blank, as the update does (round-2 P3-7)', () => {
+    memStore();
+    const id = insertLegacy(db, { title: 'Bash: npm test', narrative: '\n\t' });
+    // A body in `text` the title does not account for: the update's repair would move it.
+    const text = '{"command":"npm test"} 测试失败：连接池泄漏导致超时';
+    db.prepare('UPDATE observations SET text = ?, lesson_learned = ? WHERE id = ?').run(
+      text,
+      '连接池泄漏的根因',
+      id,
+    );
+    db.prepare(`DELETE FROM migration_cleanups`).run();
+    runDeferredCleanups(db);
+    expect(db.prepare('SELECT text FROM observations WHERE id = ?').get(id).text).toBe(text);
   });
 });

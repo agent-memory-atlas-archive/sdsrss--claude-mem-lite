@@ -14,6 +14,47 @@ import { neutralizeContextDelimiters, neutralizeSkillDelimiters } from '../forma
 // ─── Argument Parsing ────────────────────────────────────────────────────────
 
 /**
+ * Flags that take no value: every reader tests them against true / 'true' (or for presence in
+ * argv), so the word after one is a positional. parseArgs read every `--key next` as key=value,
+ * and `save --type bugfix --title X --force 'text'` parsed `force: 'text'` and no content (the
+ * usage error) while the text-first spelling saved; the swallowed word did not even turn the
+ * flag on, so `search --or redis` lost its query and its --or (D#385, same in v6.27.0). An
+ * explicit `--json true` / `--force false` still parses as before.
+ * tests/cli-boolean-flag-parsing.test.mjs derives the boolean readers from the sources and
+ * fails on one missing here.
+ */
+export const BOOLEAN_CLI_FLAGS = new Set([
+  'all',
+  'apply',
+  'benchmark',
+  'confirm',
+  'deep',
+  'disable',
+  'dry-run',
+  'enable',
+  'execute',
+  'force',
+  'help',
+  'include-compressed',
+  'include-noise',
+  'json',
+  'metrics',
+  'no-deep',
+  'or',
+  'print-project',
+  'quality',
+  'rerank',
+  'retry',
+  'run',
+  'run-all',
+  'search-telemetry',
+  'session-audit',
+  'sidechain',
+  'status',
+  'verbose',
+]);
+
+/**
  * Parse argv-style array into { positional, flags }.
  * `--key value` → flags.key = value; `--flag` (no value) → flags.key = true.
  * `-h` → flags.help = true.
@@ -76,7 +117,11 @@ export function parseArgs(argv, { track = true } = {}) {
       }
       const key = body;
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--') && (!next.startsWith('-') || /^-\d/.test(next))) {
+      // A flag that takes no value leaves the next word alone, except an explicit true/false.
+      const takes = BOOLEAN_CLI_FLAGS.has(canonicalFlag(key))
+        ? next === 'true' || next === 'false'
+        : next !== undefined && !next.startsWith('--') && (!next.startsWith('-') || /^-\d/.test(next));
+      if (takes) {
         setFlag(key, next);
         i += 2;
       } else {

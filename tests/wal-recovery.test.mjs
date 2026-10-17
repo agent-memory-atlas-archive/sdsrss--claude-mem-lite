@@ -542,3 +542,27 @@ describe('a corruption error that does not repeat (D#427)', () => {
     }, 30000);
   }
 });
+
+// D#415. The FTS arm's raw connection had better-sqlite3's default 5000 ms busy wait, per
+// statement, four rebuild statements, inside a hook the host kills at 2 s or 5 s.
+describe('the FTS rebuild arm under a busy deadline (D#415)', () => {
+  it('waits for a writer no longer than the deadline', async () => {
+    const { dir, dbPath } = seedStore('fts-deadline');
+    const holder = startHolder(dbPath, { lock: true });
+    let r;
+    try {
+      await holder.until('ready');
+      r = openWithInjectedFault(dir, {
+        site: FAULT_SITES.pragma,
+        code: 'SQLITE_CORRUPT_VTAB',
+        deadlineMs: 1500,
+      });
+    } finally {
+      await holder.stop();
+    }
+    expect(r.thrown, 'the injected fault must have fired').toBe(1);
+    expect(r.msgs.join('\n')).toContain('FTS index corruption detected');
+    expect(r.msgs.join('\n'), 'the rebuild must have met the lock').toMatch(/FTS rebuild reported: .*locked/);
+    expect(r.ms).toBeLessThan(4000);
+  }, 90000);
+});

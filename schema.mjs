@@ -1786,6 +1786,9 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
       let raw = null;
       try {
         raw = new Database(DB_PATH);
+        // D#415: otherwise better-sqlite3's 5000 ms per statement, four rebuilds, in a hook
+        // the host kills at 2 s or 5 s.
+        if (busyDeadline !== null) capBusyWaits(raw);
         const { errors } = rebuildFTS(raw);
         if (errors.length) warn?.(`FTS rebuild reported: ${errors.join('; ')}`);
       } catch (rebuildErr) {

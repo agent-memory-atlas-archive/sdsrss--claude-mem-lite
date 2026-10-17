@@ -112,6 +112,27 @@ export function cjkIndexTerms(text) {
 }
 
 /**
+ * The terms of cjkIndexTerms(text) that `text` does not already carry as a standalone token:
+ * what a row written by an older writer still needs appended to its indexed text. A re-run on
+ * the appended result returns '', so appending it is idempotent. Each distinct token is segmented
+ * once: a row's indexed `text` repeats its title and narrative, and a CJK run never spans two
+ * tokens, so the terms are the same and the work about half (423 -> 212 µs per row, 3000 rows of
+ * a synthetic 250,000-observation store, the same term set for 3000 of 3000; 2026-10-17).
+ * @param {string} text
+ * @returns {string} space-separated terms, '' when none is missing
+ */
+export function missingCjkIndexTerms(text) {
+  const distinct = [...new Set(String(text).match(UNICODE61_TOKEN) || [])];
+  const terms = cjkIndexTerms(distinct.join(' '));
+  if (!terms) return '';
+  const standalone = new Set(distinct.map((t) => t.toLowerCase()));
+  return terms
+    .split(' ')
+    .filter((t) => !standalone.has(t.toLowerCase()))
+    .join(' ');
+}
+
+/**
  * The extra terms events_fts indexes for an event (its `search_terms` column): the index terms
  * of title + body, i.e. what observations append to their indexed `text`. Without it an event
  * matched a CJK query only when the query equalled a whole CJK run, because unicode61 stores a

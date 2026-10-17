@@ -7,7 +7,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
-import { eventSearchTerms, gluedAsciiRuns } from './nlp.mjs';
+import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
@@ -1249,33 +1249,112 @@ const DEFERRED_CLEANUPS = [
     },
   },
   {
-    // d366: the writers now append the ASCII runs glued to CJK (nlp.mjs gluedAsciiRuns —
-    // `修复了redis连接池泄漏` yields `redis`) next to the CJK bigrams, because unicode61 indexes
-    // the whole mixed run as one token and the row was unreachable by its Latin part. This
-    // fills the observations written before that: only the runs no column of the row already
-    // carries as a standalone token, appended in SQL so a concurrent rewrite of `text` is never
-    // overwritten with a stale copy; a re-run finds each appended run standing alone and adds
-    // nothing. Not liveness-filtered: an index term on a hidden row is inert, and a row restored
-    // later is then already right. Events are backfillEventSearchTerms's: every event written
-    // before d366 has NULL search_terms, and no release wrote them without the glued runs.
-    name: 'backfill-glued-ascii-runs',
-    run: (db) => {
-      const obsRows = db
-        .prepare(
-          `SELECT id, ${OBS_FTS_COLUMNS.map((c) => `COALESCE(${c}, '')`).join(` || ' ' || `)} AS doc
-             FROM observations`,
-        )
-        .all();
-      const appendObs = db.prepare(`UPDATE observations SET text = COALESCE(text, '') || ? WHERE id = ?`);
-      db.transaction(() => {
-        for (const r of obsRows) {
-          const runs = gluedAsciiRuns(r.doc);
-          if (runs) appendObs.run(` ${runs}`, r.id);
-        }
-      })();
-    },
+    // The observations written before the writers appended every CJK index term: d366 added the
+    // ASCII runs glued to CJK (`修复了redis连接池泄漏` yields `redis`; unicode61 indexes the mixed
+    // run as one token), and D#374 the CJK bigrams of lesson_learned / facts / concepts /
+    // search_aliases (the writers segmented title + narrative only). backfillObservationIndexTerms
+    // appends what each row lacks, a budget's worth per open; the marker is set once it reports
+    // done. It replaces `backfill-glued-ascii-runs`, which segmented every observation in one
+    // transaction on the first open (D#395) and could append twice under two openers (P3-1); a new
+    // name, so a store that finished that one runs this wider pass too. Events are
+    // backfillEventSearchTerms's.
+    name: 'backfill-cjk-index-terms',
+    run: (db) => backfillObservationIndexTerms(db).done,
   },
 ];
+
+/** Per-open budget of backfillObservationIndexTerms, checked after each row; the events fill's. */
+const OBS_TERMS_BUDGET_MS = 250;
+/** Rows read per batch; a batch is cut short where the budget runs out. */
+const OBS_TERMS_BATCH = 250;
+const OBS_TERMS_CURSOR = 'backfill-cjk-index-terms';
+const OBS_DOC_SQL = OBS_FTS_COLUMNS.map((c) => `COALESCE(${c}, '')`).join(` || ' ' || `);
+
+/**
+ * Append to each observation's `text` the CJK index terms (nlp.mjs missingCjkIndexTerms) that no
+ * column of the row carries as a standalone token yet, newest rows first. Rows are segmented one
+ * at a time outside any transaction until `budgetMs` has passed, and each batch is written in its
+ * own short IMMEDIATE transaction that does not wait for another writer: under a held lock this
+ * stops and leaves the rest to a later open, like backfillEventSearchTerms. Progress is a cursor
+ * (the id the walk continues below) in `migration_cursors`, created by the first batch, and
+ * written in the same transaction as the batch, so a killed process loses at most the batch it
+ * was segmenting and the next open resumes below the last one committed. The walk covers the rows
+ * that existed when it started; later rows come from the current writers. Inside the write
+ * transaction the batch re-checks the cursor (another opener wrote it meanwhile: skip it and
+ * continue below theirs) and each row's text (rewritten meanwhile: segment the row again), so two
+ * openers never append the same terms twice (CLI pre-tag review 2026-10-16 P3-1), and the append
+ * is done in SQL so a concurrent rewrite is never replaced by a stale copy. Not liveness-filtered:
+ * an index term on a hidden row is inert, and a row restored later is then already right. Returns
+ * how many rows it appended to and whether the walk is finished.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ budgetMs?: number, batchSize?: number }} [opts]
+ * @returns {{ appended: number, done: boolean }}
+ */
+export function backfillObservationIndexTerms(
+  db,
+  { budgetMs = OBS_TERMS_BUDGET_MS, batchSize = OBS_TERMS_BATCH } = {},
+) {
+  const start = performance.now();
+  const prior = db.pragma('busy_timeout', { simple: true });
+  db.pragma('busy_timeout = 0');
+  try {
+    const cursorNow = () => {
+      const table = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration_cursors'`)
+        .get();
+      const row =
+        table && db.prepare(`SELECT below_id FROM migration_cursors WHERE name = ?`).get(OBS_TERMS_CURSOR);
+      return row ? row.below_id : Number.MAX_SAFE_INTEGER;
+    };
+    const pick = db.prepare(
+      `SELECT id, ${OBS_DOC_SQL} AS doc FROM observations WHERE id < ? ORDER BY id DESC LIMIT ?`,
+    );
+    const docOf = db.prepare(`SELECT ${OBS_DOC_SQL} AS doc FROM observations WHERE id = ?`);
+    const append = db.prepare(`UPDATE observations SET text = COALESCE(text, '') || ? WHERE id = ?`);
+    const write = db.transaction((rows, from, below) => {
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS migration_cursors (name TEXT PRIMARY KEY, below_id INTEGER NOT NULL)`,
+      );
+      if (cursorNow() !== from) return 0;
+      let n = 0;
+      for (const r of rows) {
+        const now = docOf.get(r.id);
+        if (!now) continue; // deleted meanwhile
+        const terms = now.doc === r.doc ? r.terms : missingCjkIndexTerms(now.doc);
+        if (terms) n += append.run(` ${terms}`, r.id).changes;
+      }
+      db.prepare(
+        `INSERT INTO migration_cursors (name, below_id) VALUES (?, ?)
+           ON CONFLICT(name) DO UPDATE SET below_id = excluded.below_id`,
+      ).run(OBS_TERMS_CURSOR, below);
+      return n;
+    });
+    let appended = 0;
+    for (;;) {
+      const from = cursorNow();
+      const batch = pick.all(from, batchSize);
+      if (batch.length === 0) return { appended, done: true };
+      const rows = [];
+      let below = from;
+      for (const r of batch) {
+        const terms = missingCjkIndexTerms(r.doc);
+        if (terms) rows.push({ id: r.id, doc: r.doc, terms });
+        below = r.id;
+        if (performance.now() - start >= budgetMs) break;
+      }
+      try {
+        appended += write.immediate(rows, from, below);
+      } catch (e) {
+        if (isDbBusyError(e)) return { appended, done: false };
+        throw e;
+      }
+      if (performance.now() - start >= budgetMs) return { appended, done: false };
+    }
+  } finally {
+    db.pragma(`busy_timeout = ${Number.isInteger(prior) ? prior : DB_BUSY_TIMEOUT_MS}`);
+  }
+}
 
 /**
  * How long backfillEventSearchTerms runs per open, checked after each row it segments (its reads,
@@ -1382,7 +1461,8 @@ export function runDeferredCleanups(db) {
   for (const { name, run } of DEFERRED_CLEANUPS) {
     if (done.has(name)) continue;
     try {
-      run(db);
+      // A cleanup that works across opens returns false until it has finished.
+      if (run(db) === false) continue;
       mark.run(name, Date.now());
     } catch (e) {
       // Leave the marker unset → retried next open. Surface for observability.

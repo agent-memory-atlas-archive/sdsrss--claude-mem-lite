@@ -1521,8 +1521,9 @@ export function setBusyDeadline(epochMs) {
   busyDeadline = epochMs;
 }
 
-/** The time left until busyDeadline, in whole ms, never below 0. */
+/** The time left until busyDeadline, in whole ms, never below 0; no deadline leaves no limit. */
 function busyLeftMs() {
+  if (busyDeadline === null) return Infinity;
   return Math.max(0, Math.floor(busyDeadline - (performance.timeOrigin + performance.now())));
 }
 
@@ -1533,6 +1534,10 @@ function busyLeftMs() {
  * connection: prepare's run/get/all/iterate, exec, pragma and transaction (whose BEGIN
  * IMMEDIATE is prepared out of reach of prepare). A busy_timeout the code sets (0 to stop
  * waiting, a prior value put back) is kept as the ceiling, so the cap only ever lowers it.
+ * iterate is capped when it is called, not at each step: better-sqlite3 refuses any other
+ * statement, the PRAGMA included, while an iterator is open. A write through iterate takes its
+ * lock at the first step and may wait out the value set at the call (review 2026-10-17 F5); every
+ * iterate in this codebase reads, and a WAL reader does not wait for a writer.
  *
  * @param {import('better-sqlite3').Database} db
  */

@@ -113,6 +113,19 @@ describe('a hook deadline bounds every statement of the connection (D#394)', () 
       (db) =>
         db.transaction(() => db.prepare(`INSERT INTO busy_probe (k) VALUES ('second')`).run()).immediate(),
     ],
+    [
+      'an EXCLUSIVE transaction',
+      (db) =>
+        db.transaction(() => db.prepare(`INSERT INTO busy_probe (k) VALUES ('second')`).run()).exclusive(),
+    ],
+    [
+      'a pragma that waits (wal_checkpoint TRUNCATE)',
+      (db) => {
+        // It returns busy = 1 instead of throwing once its wait runs out.
+        if (db.pragma('wal_checkpoint(TRUNCATE)')[0].busy)
+          throw Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' });
+      },
+    ],
   ])('%s meeting a second lock after a first statement waited gets only the time left', async (_, second) => {
     store();
     const lock = locker({ firstMs: 500, againMs: 5000 });
@@ -138,6 +151,21 @@ describe('a hook deadline bounds every statement of the connection (D#394)', () 
       expect(total, `total ${Math.round(total)} ms against a ${budget} ms deadline`).toBeLessThan(
         budget + 250,
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  // Review 2026-10-17 F7: lifting the deadline left a connection opened under it at 0 wait.
+  it('lifting the deadline gives an open connection its own wait back', () => {
+    store();
+    setHookDbDeadline(now() + 60_000);
+    const db = openDb();
+    try {
+      expect(db.pragma('busy_timeout', { simple: true })).toBe(DB_BUSY_TIMEOUT_MS);
+      setHookDbDeadline(null);
+      db.prepare('SELECT 1').get();
+      expect(db.pragma('busy_timeout', { simple: true })).toBe(DB_BUSY_TIMEOUT_MS);
     } finally {
       db.close();
     }

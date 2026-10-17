@@ -3903,6 +3903,19 @@ const MUTATING_FILTER_READS = {
   'activity promote': { writes: ({ flags }) => isTrue(flags.execute), reads: ['project', 'min-importance'] },
   'activity delete': { writes: ({ flags }) => isTrue(flags.confirm), reads: [], byId: true },
 };
+// The writes that do not read --dry-run (restore and adopt do), and how each previews, if it can.
+// Since a flag that takes no value stopped swallowing the next word (D#385), `maintain --dry-run
+// execute` ran the hard delete it was a usage error before, and `import-jsonl --dry-run <file>`
+// imported (pre-tag review 2026-10-17 P2-1); `maintain execute --dry-run` already did.
+const DRY_RUN_UNREAD = {
+  compress: 'compress without --execute',
+  maintain: 'maintain scan',
+  optimize: 'optimize without --run',
+  delete: null,
+  'activity promote': 'activity promote without --execute',
+  'activity delete': null,
+  'import-jsonl': null,
+};
 // Every flag adopt-cli.mjs reads (hasFlag) for the two commands that write into a repository.
 const WRITER_COMMAND_FLAGS = {
   adopt: ['--dry-run', '--all', '--status', '--disable', '--enable', '--force'],
@@ -4014,6 +4027,19 @@ async function runDispatch(argv) {
         );
         return;
       }
+    }
+  }
+
+  if (Object.hasOwn(DRY_RUN_UNREAD, mutatingKey)) {
+    const parsed = parseArgs(cmdArgs, { track: false });
+    const writes = mutating ? mutating.writes(parsed) : true;
+    if (writes && isTrue(parsed.flags['dry-run'])) {
+      const preview = DRY_RUN_UNREAD[mutatingKey];
+      fail(
+        `[mem] ${mutatingKey} does not read --dry-run — nothing was changed, since the run would have ` +
+          `written. ${preview ? `Preview with: claude-mem-lite ${preview}.` : 'It has no preview.'}`,
+      );
+      return;
     }
   }
 

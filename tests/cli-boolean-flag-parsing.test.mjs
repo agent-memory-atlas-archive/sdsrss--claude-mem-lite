@@ -11,7 +11,7 @@
 // command adds later is held to the same rule without anyone remembering this file.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync, readdirSync, mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -185,6 +185,61 @@ describe('the CLI with a boolean flag before its positional (D#385)', () => {
     const n = db.prepare('SELECT COUNT(*) AS n FROM observations').get().n;
     db.close();
     expect(n).toBe(0);
+  });
+
+  // Pre-tag review 2026-10-17 P2-1: once --dry-run stopped swallowing the next word,
+  // `maintain --dry-run execute` (a usage error before) ran the hard delete, and
+  // `import-jsonl --dry-run <file>` imported. A writer that does not read --dry-run refuses it,
+  // in either position, before it writes.
+  const rows = () => {
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
+    const n = db.prepare('SELECT COUNT(*) AS n FROM observations').get().n;
+    db.close();
+    return n;
+  };
+  it.each([
+    [['maintain', '--dry-run', 'execute']],
+    [['maintain', 'execute', '--dry-run']],
+    [['compress', '--dry-run', '--execute']],
+  ])('%j refuses --dry-run and changes nothing', (args) => {
+    expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
+    const before = rows();
+    const r = run(...args);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--dry-run/);
+    expect(rows()).toBe(before);
+  });
+
+  it('import-jsonl --dry-run <file> refuses --dry-run and imports nothing', () => {
+    const file = join(root, 't.jsonl');
+    writeFileSync(
+      file,
+      [
+        '{"type":"assistant","sessionId":"imp-1","timestamp":"2026-10-16T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"/p/total.mjs"}}]}}',
+        '{"type":"user","sessionId":"imp-1","timestamp":"2026-10-16T10:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"rounding happens per line"}]}}',
+      ].join('\n') + '\n',
+    );
+    const r = run('import-jsonl', '--dry-run', file);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--dry-run/);
+    expect(rows()).toBe(0);
+  });
+
+  it('restore still reads --dry-run', () => {
+    const file = join(root, 'export.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'discovery',
+        title: 'restored row',
+        narrative: 'x',
+        created_at_epoch: 1760000000000,
+      }) + '\n',
+    );
+    const r = run('restore', '--dry-run', file);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/dry-run/);
+    expect(rows()).toBe(0);
   });
 
   it('recent --json 5 prints JSON', () => {

@@ -1795,8 +1795,45 @@ export function ensureFTS(db, ftsName, tableName, columns) {
 // addition would leave a stale narrow index whose (wider) triggers throw "no column" and
 // silently drop event writes. Idempotent: a no-op once the column set matches.
 // search_terms (d366) is LAST so the existing columns keep their bm25() weight positions.
+//
+// The work runs inside a savepoint. A 'rebuild' that throws (NOMEM, a damaged events row) rolls
+// back to the index and triggers it found and the pass goes on: the 5-column index is the
+// version fast path's sentinel (LATEST_MIGRATION_COLUMNS), so committing it empty, as this did
+// until the CLI pre-tag review of 2026-10-16 (P3-10), meant no open ever retried, and an
+// external-content index does not repopulate old rows on a later write. Left as it was, the next
+// open runs the migration pass and this rebuild again. A DDL error rolls back the same way and is
+// thrown, as before. If SQLite rolled the enclosing transaction back itself (SQLITE_NOMEM, IOERR
+// and FULL may), nothing of the pass is left to commit, so the error is thrown.
 const EVENTS_FTS_COLUMNS = ['title', 'body', 'event_type', 'project', 'search_terms']; // full set (drift check)
 export function ensureEventsFTS(db) {
+  db.exec('SAVEPOINT events_fts_heal');
+  const undo = () => {
+    db.exec('ROLLBACK TO events_fts_heal');
+    db.exec('RELEASE events_fts_heal');
+  };
+  let recreated;
+  try {
+    recreated = recreateEventsFTS(db);
+  } catch (e) {
+    if (db.inTransaction) undo();
+    throw e;
+  }
+  if (recreated) {
+    try {
+      const cnt = db.prepare(`SELECT COUNT(*) AS c FROM events`).get();
+      if (cnt.c > 0) db.exec(`INSERT INTO events_fts(events_fts) VALUES('rebuild')`);
+    } catch (e) {
+      if (!db.inTransaction) throw e;
+      undo();
+      debugCatch(e, 'events-fts-rebuild');
+      return;
+    }
+  }
+  db.exec('RELEASE events_fts_heal');
+}
+
+/** ensureEventsFTS's DDL: (re)creates the index and its triggers; returns whether it recreated it. */
+function recreateEventsFTS(db) {
   const ftsRow = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts'`).get();
   let recreated = false;
   if (ftsRow) {
@@ -1853,12 +1890,5 @@ export function ensureEventsFTS(db) {
               COALESCE(new.search_terms,''));
     END;
   `);
-  if (recreated) {
-    try {
-      const cnt = db.prepare(`SELECT COUNT(*) AS c FROM events`).get();
-      if (cnt.c > 0) db.exec(`INSERT INTO events_fts(events_fts) VALUES('rebuild')`);
-    } catch {
-      /* non-critical — index repopulates lazily on next write */
-    }
-  }
+  return recreated;
 }

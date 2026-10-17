@@ -98,7 +98,11 @@ async function main() {
 
   // Heavy deps loaded ONLY on the enabled Agent-dispatch path, so the default-off
   // hot path never pays the schema.mjs + better-sqlite3 native load on every dispatch.
-  const { ensureDb } = await import('../schema.mjs');
+  const { ensureDb, setBusyDeadline } = await import('../schema.mjs');
+  const { HOOK_DB_DEADLINE_MS } = await import('../lib/time-constants.mjs');
+  // A 5 s hook like the others: its waits, ensureDb's first-open migration included, end by the
+  // deadline instead of at DB_BUSY_TIMEOUT_MS, past the host's kill (D#398 (2) / D#394).
+  setBusyDeadline(performance.timeOrigin + HOOK_DB_DEADLINE_MS);
   const { inferProject } = await import('../utils.mjs');
   const { buildSubagentInjection } = await import('../hook-memory.mjs');
   // D#154: single envelope writer. Deferred to this line, not hoisted to a static

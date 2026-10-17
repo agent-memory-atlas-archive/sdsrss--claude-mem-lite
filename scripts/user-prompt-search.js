@@ -3,7 +3,7 @@
 // Runs as UserPromptSubmit hook — injects relevant memories before Claude sees the prompt
 // Lightweight: only imports schema.mjs and utils.mjs, no MCP SDK
 
-import { ensureDb, DB_DIR } from '../schema.mjs';
+import { ensureDb, setBusyDeadline, DB_DIR } from '../schema.mjs';
 import {
   relaxFtsQueryToOr,
   truncate,
@@ -47,7 +47,7 @@ import { getDeferredByIds } from '../lib/deferred-work.mjs';
 import { recordHookError } from '../lib/hook-telemetry.mjs';
 import { isSchemaSkewError, schemaSkewFromError, shouldRecordSkew } from '../lib/schema-skew.mjs';
 
-import { DAY_MS, UPS_DB_BUSY_TIMEOUT_MS } from '../lib/time-constants.mjs';
+import { DAY_MS, UPS_DB_BUSY_TIMEOUT_MS, UPS_DB_DEADLINE_MS } from '../lib/time-constants.mjs';
 import { isDbBusyError } from '../lib/db-busy.mjs';
 import { envNumber } from '../lib/env-number.mjs';
 import { writePlainHookText, resetPlainHookText, idsShownWhole } from '../lib/hook-text-cap.mjs';
@@ -726,6 +726,8 @@ async function main() {
   resetPlainHookText();
   // Prevent recursion from background claude -p calls
   if (process.env.CLAUDE_MEM_HOOK_RUNNING) return;
+  // Every DB wait from here on, ensureDb's own included, ends by this deadline (UPS_DB_DEADLINE_MS).
+  setBusyDeadline(performance.timeOrigin + UPS_DB_DEADLINE_MS);
 
   // Both swallows below record first. They were this file's only silent ones, and
   // they sit on the *entry* of the face: past MAX_UPS_PROMPT_BYTES the read hands

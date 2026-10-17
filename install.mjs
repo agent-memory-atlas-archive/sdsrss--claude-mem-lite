@@ -1694,6 +1694,21 @@ function projectPluginOverride(userSettings) {
 function refuseUnwritableConfigHome(label) {
   let dir = claudeConfigDir();
   let denied = dirAccessError(dir);
+  if (!denied && !existsSync(dir)) {
+    // Absent: the first write creates it under its nearest existing ancestor. ENOENT reads as
+    // usable, so a CLAUDE_CONFIG_DIR under a read-only parent got the half install and the raw
+    // EACCES stack back (v6.28.0 pre-tag review, install P3-2).
+    let parent = dirname(dir);
+    while (!existsSync(parent) && dirname(parent) !== parent) parent = dirname(parent);
+    const parentDenied = dirAccessError(parent, fsConstants.W_OK | fsConstants.X_OK);
+    if (parentDenied) {
+      console.error(
+        `[${label}] ${parent} is not writable (${parentDenied}), so ${dir} cannot be created — nothing was done. Fix: ${dataDirRemedy(parentDenied, parent)}`,
+      );
+      process.exitCode = 1;
+      return true;
+    }
+  }
   if (!denied) {
     // settings.json may be a symlink (dotfiles, Nix home-manager), and the atomic write puts its
     // temp file beside the TARGET: a read-only target directory got the same half-done run and
@@ -4622,7 +4637,8 @@ async function runLockedInstall() {
   }
   // Claude Code's config home gets settings.json and the MCP registration. A root-owned one (a
   // `sudo claude` run) let install copy files, run npm and register MCP, then die on the
-  // settings.json write with a raw EACCES stack: half installed (E2E 2026-10-16). Absent is fine.
+  // settings.json write with a raw EACCES stack: half installed (E2E 2026-10-16). Absent is fine
+  // when its nearest existing ancestor can be written.
   if (refuseUnwritableConfigHome('install')) return;
   const { release, error: blocked } = takeLock(INSTALL_LOCK_PATH);
   if (!release) {

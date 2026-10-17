@@ -696,6 +696,38 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     }
   });
 
+  // v6.28.0 pre-tag review, install P3-2: an ABSENT config home passed the precheck (ENOENT reads
+  // as usable), so with its parent read-only install copied files, linked the CLI, tried MCP, then
+  // died creating the directory with a raw EACCES stack.
+  it.skipIf(process.getuid?.() === 0)(
+    'install refuses an absent config home whose parent it cannot write, before doing anything',
+    () => {
+      const ro = join(home, 'ro');
+      mkdirSync(ro, { recursive: true });
+      chmodSync(ro, 0o555);
+      try {
+        let out = '';
+        let status = 0;
+        try {
+          out = runInstall('install', home, ['--dev', '--skip-repos'], {
+            PATH: `${binDir}:${process.env.PATH}`,
+            CLAUDE_CONFIG_DIR: join(ro, 'claude'),
+          });
+        } catch (e) {
+          status = e.status;
+          out = `${e.stdout || ''}${e.stderr || ''}`;
+        }
+        expect(status, out).toBe(1);
+        expect(out).toMatch(/ro is not writable .*ro\/claude cannot be created .* nothing was done/);
+        expect(out).not.toMatch(/\n\s+at /); // no stack
+        expect(existsSync(join(home, '.claude-mem-lite', 'server.mjs'))).toBe(false);
+        expect(existsSync(join(home, '.local', 'bin', 'claude-mem-lite'))).toBe(false);
+      } finally {
+        chmodSync(ro, 0o755);
+      }
+    },
+  );
+
   // Round 2 (install B7): the precheck covered install only. uninstall removed the MCP server and
   // the CLI link, then died on the settings.json write with a raw EACCES stack — every hook still
   // registered and firing; cleanup-hooks printed the stack straight away.

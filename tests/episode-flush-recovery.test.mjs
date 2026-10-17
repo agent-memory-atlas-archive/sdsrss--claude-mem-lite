@@ -22,7 +22,12 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import * as hookLlm from '../hook-llm.mjs';
-import { recoverOrphanEpisodeFlushes, episodeWorkerMaxMs, RECOVERED_FLUSH_SUFFIX } from '../hook-llm.mjs';
+import {
+  recoverOrphanEpisodeFlushes,
+  episodeWorkerMaxMs,
+  unclaimedFlushMinAgeMs,
+  RECOVERED_FLUSH_SUFFIX,
+} from '../hook-llm.mjs';
 import { sweepOrphanEpisodeFiles, ORPHAN_EPISODE_AGE_MS } from '../hook-shared.mjs';
 import { makeFixtureTracker } from './test-helpers.mjs';
 
@@ -60,8 +65,20 @@ describe('recoverOrphanEpisodeFlushes', () => {
     expect(existsSync(live)).toBe(true);
   });
 
+  // Pre-tag review 2026-10-16 P3-4: a worker of v6.27.0 or older never claims its file, and can run
+  // longer than episodeWorkerMaxMs() (its keyed-provider fallback restarted the CLI's full
+  // timeout). During the update from such a version, handing its file on at 275 s let a second
+  // worker save the episode it was still saving.
+  it('leaves an unclaimed file that a pre-claim worker may still be saving', () => {
+    const unclaimed = flushFile(dir, 'ep-flush-2-preclaim.json', episodeWorkerMaxMs() + MIN);
+    expect(unclaimedFlushMinAgeMs()).toBeGreaterThan(episodeWorkerMaxMs() + MIN);
+    expect(recover()).toEqual([]);
+    expect(spawned).toEqual([]);
+    expect(existsSync(unclaimed)).toBe(true);
+  });
+
   it('hands an orphaned file to a new worker under a name it is never handed on from', () => {
-    flushFile(dir, 'ep-flush-2-dead.json', episodeWorkerMaxMs() + MIN);
+    flushFile(dir, 'ep-flush-2-dead.json', unclaimedFlushMinAgeMs() + MIN);
     const to = join(dir, `ep-flush-2-dead${RECOVERED_FLUSH_SUFFIX}`);
     expect(recover()).toEqual([to]);
     expect(spawned).toEqual([to]);
@@ -123,8 +140,8 @@ describe('recoverOrphanEpisodeFlushes', () => {
   });
 
   it('keeps the 1 h sweep as the backstop for a recovered file', () => {
-    flushFile(dir, 'ep-flush-6.json', episodeWorkerMaxMs() + MIN);
-    recover();
+    flushFile(dir, 'ep-flush-6.json', unclaimedFlushMinAgeMs() + MIN);
+    expect(recover(), 'premise: the file was handed on').toHaveLength(1);
     // The rename keeps the mtime, so the sweep's clock still runs from the original flush.
     expect(sweepOrphanEpisodeFiles(dir, { now: NOW + ORPHAN_EPISODE_AGE_MS })).toBe(1);
     expect(readdirSync(dir)).toEqual([]);

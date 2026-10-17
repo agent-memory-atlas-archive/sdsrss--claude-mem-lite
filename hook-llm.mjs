@@ -1039,6 +1039,22 @@ export function episodeWorkerMaxMs() {
   return EPISODE_DELAY_MAX_MS + 2 * (LLM_SEM_TIMEOUT + BG_LLM_TIMEOUT_MS) + EPISODE_WORKER_SLACK_MS;
 }
 
+/**
+ * episodeWorkerMaxMs() for a worker of v6.27.0 or older, which never claims its flush file
+ * (claimFlushFile is v6.28.0's) and whose keyed-provider fallback gave the CLI a fresh full
+ * timeout, so each of its two calls could take 2 x BG_LLM_TIMEOUT_MS: 365 s today. The age an
+ * unclaimed file must reach before recoverOrphanEpisodeFlushes hands it on (pre-tag review
+ * 2026-10-16 P3-4): during the update from such a version its worker can still be saving the
+ * episode at 275 s, and a second worker saved it again. A worker of this version claims its file
+ * before its delay, so an unclaimed file is otherwise one whose worker never started, and it is
+ * handed on 90 s later than a claimed one.
+ *
+ * @returns {number} ms
+ */
+export function unclaimedFlushMinAgeMs() {
+  return EPISODE_DELAY_MAX_MS + 2 * (LLM_SEM_TIMEOUT + 2 * BG_LLM_TIMEOUT_MS) + EPISODE_WORKER_SLACK_MS;
+}
+
 /** The ending a flush file takes when it is handed to a second worker. It is never handed on again. */
 export const RECOVERED_FLUSH_SUFFIX = '.recovered.json';
 // Per SessionStart: LLM_SEM_MAX workers can call the model at once, and a backlog after a reboot
@@ -1084,7 +1100,9 @@ export function claimFlushFile(path, pid = process.pid) {
  *     worker paused past that bound by a suspended machine finishes and saves once the machine
  *     wakes, so handing its file on too stored the episode twice (D#383: events have no
  *     duplicate check). A pid reused by an unrelated process reads as alive, and that file is
- *     left to the 1 h sweep, as every flush file was before this hand-off existed.
+ *     left to the 1 h sweep, as every flush file was before this hand-off existed. An unclaimed
+ *     file waits for unclaimedFlushMinAgeMs() instead: it can be a pre-claim worker's, whose
+ *     bound is longer.
  *   - One taker: the file is renamed before the spawn, and of two SessionStarts only one rename
  *     succeeds; of a SessionStart and a worker claiming the same file, likewise.
  *   - No loop: the new name carries `.recovered`, which this never hands on, claimed or not. If
@@ -1112,6 +1130,7 @@ export function recoverOrphanEpisodeFlushes(
     return [];
   }
   const minAge = episodeWorkerMaxMs();
+  const unclaimedMinAge = unclaimedFlushMinAgeMs();
   const candidates = [];
   for (const f of names) {
     const m = FLUSH_NAME_RE.exec(f);
@@ -1123,7 +1142,8 @@ export function recoverOrphanEpisodeFlushes(
       continue; // its worker finished meanwhile
     }
     const age = now - mtimeMs;
-    if (age > minAge && age < ORPHAN_EPISODE_AGE_MS) candidates.push({ f, mtimeMs });
+    if (age > (m[3] ? minAge : unclaimedMinAge) && age < ORPHAN_EPISODE_AGE_MS)
+      candidates.push({ f, mtimeMs });
   }
   candidates.sort((a, b) => a.mtimeMs - b.mtimeMs || (a.f < b.f ? -1 : 1));
   const handed = [];

@@ -349,3 +349,46 @@ describe("under another writer's lock", () => {
     expect(runCounts(db, ids)).toEqual({ once: 0, more: 0 });
   });
 });
+
+// Pre-tag review 2026-10-17.
+describe('the pass and the rows it cannot see as derived', () => {
+  it('marks the 6.28.x glued-runs pass done, so an older opener does not run it again (F1)', () => {
+    memStore();
+    insertLegacy(db, { title: '修复了redis连接池泄漏' });
+    db.prepare(`DELETE FROM migration_cleanups`).run();
+    runDeferredCleanups(db);
+    const names = db
+      .prepare('SELECT name FROM migration_cleanups')
+      .all()
+      .map((r) => r.name);
+    expect(names).toContain(CLEANUP);
+    expect(names).toContain('backfill-glued-ascii-runs');
+  });
+
+  it("moves a legacy row's body into its blank narrative before appending, so an update copies no terms (F3)", async () => {
+    const { applyObsUpdate } = await import('../lib/observation-write.mjs');
+    memStore();
+    const body = '{"command":"npm test"}\n---\n测试失败：连接池泄漏导致超时';
+    db.prepare(
+      `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+       VALUES ('import-old', 'import-old', ?, ?, ?, 'completed')`,
+    ).run(P, new Date().toISOString(), Date.now());
+    // import-jsonl before v3.69.0: the body in `text` only, narrative ''.
+    const id = Number(
+      db
+        .prepare(
+          `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, created_at, created_at_epoch, importance)
+           VALUES ('import-old', ?, ?, 'change', 'Bash: npm test', '', ?, ?, 1)`,
+        )
+        .run(P, body, new Date().toISOString(), Date.now()).lastInsertRowid,
+    );
+    db.prepare(`DELETE FROM migration_cleanups`).run();
+    runDeferredCleanups(db);
+    expect(
+      db.prepare('SELECT text FROM observations WHERE id = ?').get(id).text,
+      'premise: terms were appended',
+    ).not.toBe(body);
+    applyObsUpdate(db, id, { importance: 3 });
+    expect(db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id).narrative).toBe(body);
+  });
+});

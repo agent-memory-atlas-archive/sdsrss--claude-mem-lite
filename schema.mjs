@@ -25,6 +25,7 @@ import { DB_DIR, DB_PATH, CODE_DIR } from './lib/data-paths.mjs';
 import { DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
 import { isDbBusyError } from './lib/db-busy.mjs';
 import { workerDirGone } from './lib/worker-data-dir.mjs';
+import { looksAlreadyDerived } from './lib/observation-write.mjs';
 export { DB_DIR, DB_PATH, CODE_DIR };
 
 // Increment when schema changes (tables, columns, indexes, FTS, migrations)
@@ -1259,7 +1260,16 @@ const DEFERRED_CLEANUPS = [
     // name, so a store that finished that one runs this wider pass too. Events are
     // backfillEventSearchTerms's.
     name: 'backfill-cjk-index-terms',
-    run: (db) => backfillObservationIndexTerms(db).done,
+    run: (db) => {
+      // The old pass is marked done too: a 6.28.x opener of the same store (a global CLI beside
+      // the plugin, or the previous release's files mid-swap) would otherwise run it, unguarded,
+      // and append the glued runs a second time to rows this pass already filled (pre-tag review
+      // 2026-10-17 F1: 450 of 37,500 rows doubled).
+      db.prepare(
+        `INSERT OR IGNORE INTO migration_cleanups (name, done_at_epoch) VALUES ('backfill-glued-ascii-runs', ?)`,
+      ).run(Date.now());
+      return backfillObservationIndexTerms(db).done;
+    },
   },
 ];
 
@@ -1310,7 +1320,15 @@ export function backfillObservationIndexTerms(
     const pick = db.prepare(
       `SELECT id, ${OBS_DOC_SQL} AS doc FROM observations WHERE id < ? ORDER BY id DESC LIMIT ?`,
     );
-    const docOf = db.prepare(`SELECT ${OBS_DOC_SQL} AS doc FROM observations WHERE id = ?`);
+    const docOf = db.prepare(
+      `SELECT ${OBS_DOC_SQL} AS doc, COALESCE(TRIM(narrative), '') = '' AS blank FROM observations WHERE id = ?`,
+    );
+    const legacyRow = db.prepare(
+      `SELECT title, subtitle, narrative, concepts, facts, lesson_learned, search_aliases, text FROM observations WHERE id = ?`,
+    );
+    const promote = db.prepare(
+      `UPDATE observations SET narrative = text WHERE id = ? AND COALESCE(TRIM(narrative), '') = ''`,
+    );
     const append = db.prepare(`UPDATE observations SET text = COALESCE(text, '') || ? WHERE id = ?`);
     const write = db.transaction((rows, from, below) => {
       db.exec(
@@ -1321,6 +1339,11 @@ export function backfillObservationIndexTerms(
       for (const r of rows) {
         const now = docOf.get(r.id);
         if (!now) continue; // deleted meanwhile
+        // A row whose body sits in `text` under a blank narrative (import-jsonl before v3.69.0) gets
+        // the body moved into the narrative first, the repair an update makes; appended after the
+        // body, the terms would be moved with it into the narrative by the next update (pre-tag
+        // review 2026-10-17 F3). A hook-written blob reads as derived and stays as it is.
+        if (now.blank && !looksAlreadyDerived(legacyRow.get(r.id))) promote.run(r.id);
         const terms = now.doc === r.doc ? r.terms : missingCjkIndexTerms(now.doc);
         if (terms) n += append.run(` ${terms}`, r.id).changes;
       }

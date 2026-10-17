@@ -77,16 +77,43 @@ function walk(n, fn) {
  * one it expects may be missing, so it is not checked. Any other use (`.then`, a namespace passed
  * on) checks only that the module exists.
  */
-function dynamicImports(ast) {
+/** Each node's parent. */
+function parents(ast) {
   const parent = new Map();
-  const found = [];
   walk(ast, (n) => {
     for (const k of Object.keys(n))
       for (const c of [n[k]].flat()) if (c && typeof c.type === 'string') parent.set(c, n);
+  });
+  return parent;
+}
+
+function dynamicImports(ast, parent) {
+  const found = [];
+  walk(ast, (n) => {
     if (n.type === 'ImportExpression' && n.source.type === 'Literal' && typeof n.source.value === 'string')
       found.push(n);
   });
   return found.map((n) => ({ spec: n.source.value, names: boundNames(n, parent), dynamic: true }));
+}
+
+/**
+ * The names a static `import * as ns` reads: `ns.x` anywhere in the module (minus the probed
+ * ones) and `const { x } = ns` (pre-tag review 2026-10-17 P3-1: install.mjs's
+ * `const { lockHeld } = procLock` went unchecked).
+ */
+function namespaceReads(name, ast, parent) {
+  const names = new Set(memberReads(name, ast, parent));
+  walk(ast, (n) => {
+    if (
+      n.type === 'VariableDeclarator' &&
+      n.init?.type === 'Identifier' &&
+      n.init.name === name &&
+      n.id.type === 'ObjectPattern'
+    )
+      for (const q of n.id.properties)
+        if (q.type === 'Property' && !q.computed) names.add(q.key.name ?? q.key.value);
+  });
+  return [...names];
 }
 
 const isPromiseAll = (c) =>
@@ -165,13 +192,18 @@ function parse(rev, file) {
     const imports = [];
     const exports = new Set();
     const star = [];
+    const parent = parents(ast);
     for (const n of ast.body) {
       if (n.type === 'ImportDeclaration')
         imports.push({
           spec: n.source.value,
-          names: n.specifiers
-            .filter((s) => s.type === 'ImportSpecifier')
-            .map((s) => s.imported.name ?? s.imported.value),
+          names: n.specifiers.flatMap((s) =>
+            s.type === 'ImportSpecifier'
+              ? [s.imported.name ?? s.imported.value]
+              : s.type === 'ImportNamespaceSpecifier'
+                ? namespaceReads(s.local.name, ast, parent)
+                : [],
+          ),
         });
       if (n.type === 'ExportNamedDeclaration') {
         const d = n.declaration;
@@ -190,7 +222,7 @@ function parse(rev, file) {
       }
       if (n.type === 'ExportDefaultDeclaration') exports.add('default');
     }
-    for (const d of dynamicImports(ast)) imports.push(d);
+    for (const d of dynamicImports(ast, parent)) imports.push(d);
     info = { imports, exports, star };
   } else if (show(rev, file) !== null) {
     info = { imports: [], exports: new Set(), star: [] }; // a non-JS file: present, imports nothing

@@ -125,3 +125,56 @@ describe('swap-mixed-tree names the export a dynamic import reads, in every shap
     expect(r.stdout).toMatch(/old -> old: every entry point loads at every split point/);
   });
 });
+
+// Pre-tag review 2026-10-17 P3-1: a STATIC `import * as ns` was checked for the module only, so a
+// name read as `ns.x` or `const { x } = ns` (install.mjs's `const { lockHeld } = procLock`) could
+// be unexported with every split point reported loadable.
+describe('swap-mixed-tree names the exports a static namespace import reads', () => {
+  const NS_SOURCE_FILES = SOURCE_FILES.replace("'lib/y.mjs',", "'lib/ns.mjs',");
+  const NS_OLD = {
+    'source-files.mjs': NS_SOURCE_FILES,
+    'lib/x.mjs': 'export const a = () => 1;\nexport const b = () => 2;\nexport const c = () => 3;\n',
+    'lib/ns.mjs':
+      "import * as xs from './x.mjs';\nconst { b } = xs;\nexport const viaNs = () => [xs.a(), b(), xs.c()];\n",
+    'install.mjs': "import { viaNs } from './lib/ns.mjs';\nexport { viaNs };\n",
+    'hook.mjs': 'export const h = 1;\n',
+    'mem-cli.mjs': 'export const m = 1;\n',
+    'server.mjs': 'export const s = 1;\n',
+    'cli.mjs': 'export const k = 1;\n',
+  };
+  const NS_NEW = {
+    ...NS_OLD,
+    'lib/x.mjs': 'export const a = () => 1;\n',
+    'lib/ns.mjs': "import * as xs from './x.mjs';\nexport const viaNs = () => xs.a();\n",
+  };
+  let nsFixture;
+  beforeAll(() => {
+    const saved = fixture;
+    nsFixture = mkdtempSync(join(tmpdir(), 'cml-swap-ns-'));
+    fixture = nsFixture;
+    git('init', '-q');
+    commit(NS_OLD, 'old');
+    commit(NS_NEW, 'new');
+    mkdirSync(join(nsFixture, 'scripts'));
+    copyFileSync(
+      join(REPO, 'scripts', 'swap-mixed-tree.mjs'),
+      join(nsFixture, 'scripts', 'swap-mixed-tree.mjs'),
+    );
+    symlinkSync(join(REPO, 'node_modules'), join(nsFixture, 'node_modules'));
+    fixture = saved;
+  });
+  afterAll(() => {
+    if (nsFixture) rmSync(nsFixture, { recursive: true, force: true });
+  });
+
+  it('fails on a member read and a destructured read the new module lacks', () => {
+    const r = spawnSync(process.execPath, [join(nsFixture, 'scripts', 'swap-mixed-tree.mjs'), 'old', 'new'], {
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^install\.mjs: FAILS at /m);
+    expect(r.stdout).toMatch(/lib\/ns\.mjs@old imports \{[^}]*\bb\b[^}]*\} that lib\/x\.mjs@new lacks/);
+    expect(r.stdout).toMatch(/lib\/ns\.mjs@old imports \{[^}]*\bc\b[^}]*\} that lib\/x\.mjs@new lacks/);
+  });
+});

@@ -42,7 +42,7 @@ vi.mock('../nlp.mjs', async (importOriginal) => {
   // The segmentation each tree's pass calls per row: gluedAsciiRuns before, missingCjkIndexTerms now.
   return {
     ...real,
-    gluedAsciiRuns: wrap(real.gluedAsciiRuns),
+    ...(real.gluedAsciiRuns ? { gluedAsciiRuns: wrap(real.gluedAsciiRuns) } : {}),
     ...(real.missingCjkIndexTerms ? { missingCjkIndexTerms: wrap(real.missingCjkIndexTerms) } : {}),
   };
 });

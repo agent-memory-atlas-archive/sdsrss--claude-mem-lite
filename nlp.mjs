@@ -84,7 +84,7 @@ const ASCII_RUN = /[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?/g;
  * @param {string} text
  * @returns {string} space-separated runs, '' when there are none
  */
-export function gluedAsciiRuns(text) {
+function gluedAsciiRuns(text) {
   if (!text || !HAN_CHAR.test(text)) return '';
   const tokens = String(text).match(UNICODE61_TOKEN) || [];
   const standalone = new Set(tokens.filter((t) => !HAN_CHAR.test(t)).map((t) => t.toLowerCase()));

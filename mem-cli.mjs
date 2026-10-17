@@ -2472,7 +2472,7 @@ function cmdRestore(db, argv) {
     fail(`[mem] ${projectCheck.message}`);
     return;
   }
-  const dryRun = flags['dry-run'] === true || flags['dry-run'] === 'true';
+  const dryRun = asksDryRun(flags['dry-run']);
   const num = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
 
   const dupCheck = db.prepare(
@@ -3907,15 +3907,23 @@ const MUTATING_FILTER_READS = {
 // Since a flag that takes no value stopped swallowing the next word (D#385), `maintain --dry-run
 // execute` ran the hard delete it was a usage error before, and `import-jsonl --dry-run <file>`
 // imported (pre-tag review 2026-10-17 P2-1); `maintain execute --dry-run` already did.
+// A command not in MUTATING_FILTER_READS names here when its run writes (round-2 pre-tag review
+// P3-2: defer drop and fts-check rebuild ignored --dry-run silently; verify-apply --apply is left
+// to its digest, since --apply is verify-apply's own flag and the dispatcher may not read it).
 const DRY_RUN_UNREAD = {
-  compress: 'compress without --execute',
-  maintain: 'maintain scan',
-  optimize: 'optimize without --run',
-  delete: null,
-  'activity promote': 'activity promote without --execute',
-  'activity delete': null,
-  'import-jsonl': null,
+  compress: { preview: 'compress without --execute' },
+  maintain: { preview: 'maintain scan' },
+  optimize: { preview: 'optimize without --run' },
+  delete: { preview: null },
+  'activity promote': { preview: 'activity promote without --execute' },
+  'activity delete': { preview: null },
+  'import-jsonl': { preview: null, writes: () => true },
+  'defer drop': { preview: null, writes: () => true },
+  'fts-check': { preview: 'fts-check check', writes: ({ positional }) => positional[0] === 'rebuild' },
 };
+// Whether a --dry-run value asks for a dry run: any spelling of yes (`--dry-run`, `=1`, `=yes`,
+// `=TRUE`), not an explicit false (round-2 pre-tag review P3-2: only true / 'true' counted).
+const asksDryRun = (v) => v !== undefined && v !== false && !/^(false|0|no|off)$/i.test(String(v));
 // Every flag adopt-cli.mjs reads (hasFlag) for the two commands that write into a repository.
 const WRITER_COMMAND_FLAGS = {
   adopt: ['--dry-run', '--all', '--status', '--disable', '--enable', '--force'],
@@ -4006,7 +4014,7 @@ async function runDispatch(argv) {
   // --type change` had compressed every type, `maintain execute --type change` had decayed and
   // hidden every type, and optimize (argv-parsed) said nothing (E2E 2026-10-16). A preview
   // writes nothing and keeps the notice.
-  const mutatingKey = cmd === 'activity' ? `activity ${cmdArgs[0]}` : cmd;
+  const mutatingKey = cmd === 'activity' || cmd === 'defer' ? `${cmd} ${cmdArgs[0]}` : cmd;
   const mutating = MUTATING_FILTER_READS[mutatingKey];
   if (mutating) {
     const parsed = parseArgs(cmdArgs);
@@ -4032,9 +4040,8 @@ async function runDispatch(argv) {
 
   if (Object.hasOwn(DRY_RUN_UNREAD, mutatingKey)) {
     const parsed = parseArgs(cmdArgs, { track: false });
-    const writes = mutating ? mutating.writes(parsed) : true;
-    if (writes && isTrue(parsed.flags['dry-run'])) {
-      const preview = DRY_RUN_UNREAD[mutatingKey];
+    const { preview, writes } = DRY_RUN_UNREAD[mutatingKey];
+    if ((mutating ? mutating.writes(parsed) : writes(parsed)) && asksDryRun(parsed.flags['dry-run'])) {
       fail(
         `[mem] ${mutatingKey} does not read --dry-run — nothing was changed, since the run would have ` +
           `written. ${preview ? `Preview with: claude-mem-lite ${preview}.` : 'It has no preview.'}`,

@@ -210,6 +210,52 @@ describe('the CLI with a boolean flag before its positional (D#385)', () => {
     expect(rows()).toBe(before);
   });
 
+  // Round-2 pre-tag review P3-2: other spellings of a yes still ran the write, and three more writers
+  // ignored --dry-run silently.
+  it.each([
+    [['maintain', 'execute', '--dry-run=1']],
+    [['maintain', 'execute', '--dry-run=yes']],
+    [['maintain', 'execute', '--dry-run=TRUE']],
+    [['fts-check', 'rebuild', '--dry-run']],
+  ])('%j refuses --dry-run', (args) => {
+    expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
+    const r = run(...args);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/does not read --dry-run/);
+  });
+
+  it('defer drop --dry-run refuses and leaves the item open', () => {
+    expect(run('defer', 'add', '--title', 'keep me').status).toBe(0);
+    const r = run('defer', 'drop', '1', '--dry-run', '--reason', 'x');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/does not read --dry-run/);
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
+    const status = db.prepare('SELECT status FROM deferred_work WHERE id = 1').get().status;
+    db.close();
+    expect(status).toBe('open');
+  });
+
+  it('--dry-run false still runs the write, as it always parsed', () => {
+    expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
+    expect(run('maintain', 'execute', '--dry-run=false').status).toBe(0);
+  });
+
+  it('restore takes --dry-run=1 as a dry run', () => {
+    const file = join(root, 'export.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'discovery',
+        title: 'restored row',
+        narrative: 'x',
+        created_at_epoch: 1760000000000,
+      }) + '\n',
+    );
+    const r = run('restore', file, '--dry-run=1');
+    expect(r.status).toBe(0);
+    expect(rows()).toBe(0);
+  });
+
   it('import-jsonl --dry-run <file> refuses --dry-run and imports nothing', () => {
     const file = join(root, 't.jsonl');
     writeFileSync(

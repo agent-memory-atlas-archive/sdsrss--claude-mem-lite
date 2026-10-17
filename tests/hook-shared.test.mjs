@@ -133,7 +133,7 @@ describe('hook-shared callLLM — provider routing', () => {
 // lost under any lock), backward up to DB_BUSY_TIMEOUT_MS (the host's kill at 5 s).
 describe('hook-shared openDb — the hook deadline', () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.useRealTimers();
     setHookDbDeadline(null);
   });
   it.each([
@@ -142,8 +142,9 @@ describe('hook-shared openDb — the hook deadline', () => {
   ])('a wall-clock step %s does not move the wait', (_, step) => {
     ensureDbWithWalRecovery.mockReturnValue(new Database(':memory:'));
     setHookDbDeadline(performance.timeOrigin + performance.now() + 2000);
-    const wall = Date.now();
-    vi.spyOn(Date, 'now').mockReturnValue(wall + step);
+    // Every wall-clock reader steps (Date.now and new Date alike; round-3 review: a spy on
+    // Date.now alone stayed green with new Date().getTime() in its place).
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + step });
     const db = openDb();
     const wait = db.pragma('busy_timeout', { simple: true });
     db.close();

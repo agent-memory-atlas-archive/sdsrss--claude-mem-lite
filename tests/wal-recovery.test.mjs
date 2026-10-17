@@ -20,6 +20,8 @@ import { spawn, execFileSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { createRequire } from 'module';
+import { fileURLToPath, pathToFileURL } from 'url';
 import Database from 'better-sqlite3';
 
 const SERVER_PATH = resolve(import.meta.dirname, '../server.mjs');
@@ -391,4 +393,152 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
     // every subsequent hook fire hit the same corruption until MCP restarted.
     expect(r.walSize).toBeLessThan(100);
   }, 30000);
+});
+
+// ─── 5. Faults injected into a real open, against a second live process ──────────
+// The fault is injected, not planted: in the child, one better-sqlite3 prototype method is
+// patched to throw once, on the first statement matching `match`, then pass through. Two sites,
+// on either side of ensureDb's try: the `journal_mode = WAL` pragma throws before the handle is
+// closed; the core-schema exec of a store one version behind (a first open after an update)
+// throws inside it. Not a statement of the fast path: initSchema swallows every error there but
+// the forward-version guard and falls through to that slow path. The holder is a real second
+// process, the shape of the MCP server, which keeps one connection open for the whole session.
+
+const BSQ_URL = pathToFileURL(createRequire(import.meta.url).resolve('better-sqlite3')).href;
+const SCHEMA_URL = pathToFileURL(resolve(import.meta.dirname, '../schema.mjs')).href;
+
+/** A second process on the store: 100 committed rows in `_holder`, left in the WAL; `lock` also
+ *  holds the write lock. Commands on stdin: `more` (100 more rows), `exit`. */
+function startHolder(dbPath, { lock = false } = {}) {
+  const src = `
+    const Database = require(${JSON.stringify(fileURLToPath(BSQ_URL))});
+    const db = new Database(${JSON.stringify(dbPath)});
+    db.pragma('journal_mode = WAL');
+    db.pragma('wal_autocheckpoint = 0');
+    db.exec('CREATE TABLE IF NOT EXISTS _holder(x TEXT)');
+    const ins = db.prepare('INSERT INTO _holder(x) VALUES (?)');
+    const add = (n) => { for (let i = 0; i < n; i++) ins.run('h'.repeat(100)); };
+    add(100);
+    if (${lock}) db.exec('BEGIN IMMEDIATE');
+    process.stdout.write('ready\\n');
+    let buf = '';
+    process.stdin.on('data', (d) => {
+      buf += d;
+      for (let i; (i = buf.indexOf('\\n')) >= 0; ) {
+        const cmd = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        if (cmd === 'more') { add(100); process.stdout.write('more-done\\n'); }
+        if (cmd === 'exit') { if (db.inTransaction) db.exec('COMMIT'); db.close(); process.exit(0); }
+      }
+    });`;
+  const child = spawn(process.execPath, ['-e', src], { stdio: ['pipe', 'pipe', 'inherit'] });
+  let out = '';
+  child.stdout.on('data', (d) => {
+    out += d;
+  });
+  const exited = new Promise((r) => child.on('exit', r));
+  const until = (word, ms = 15000) =>
+    new Promise((res, rej) => {
+      const t0 = Date.now();
+      const tick = () =>
+        out.includes(word)
+          ? res()
+          : Date.now() - t0 > ms
+            ? rej(new Error(`holder never said ${word}: ${out}`))
+            : setTimeout(tick, 20);
+      tick();
+    });
+  const stop = async () => {
+    if (child.exitCode === null) child.stdin.write('exit\n');
+    await exited;
+  };
+  return { until, send: (cmd) => child.stdin.write(cmd + '\n'), stop };
+}
+
+const FAULT_SITES = {
+  pragma: { at: 'pragma', match: String.raw`^\s*journal_mode\s*=\s*WAL`, behind: false },
+  migration: { at: 'exec', match: String.raw`CREATE TABLE IF NOT EXISTS sdk_sessions`, behind: true },
+};
+
+/** A store whose bytes are the pristine baseline; `behind` makes it one schema version old. */
+function seedStore(tag, { behind = false } = {}) {
+  const dir = fixtureDir(tag);
+  const dbPath = join(dir, DB_NAME);
+  writeFileSync(dbPath, PRISTINE_DB);
+  if (behind) {
+    const d = new Database(dbPath);
+    d.prepare('UPDATE schema_version SET version = ?').run(CURRENT_SCHEMA_VERSION - 1);
+    d.close();
+  }
+  return { dir, dbPath };
+}
+
+/** ensureDbWithWalRecovery in a child where the first `site.at` call matching `site.match`
+ *  throws `code` once. */
+function openWithInjectedFault(dir, { site, code, deadlineMs = null }) {
+  const src = `
+    Promise.all([import(${JSON.stringify(BSQ_URL)}), import(${JSON.stringify(SCHEMA_URL)})]).then(([{ default: Database }, m]) => {
+      let thrown = 0;
+      const re = new RegExp(${JSON.stringify(site.match)}, 'i');
+      const orig = Database.prototype[${JSON.stringify(site.at)}];
+      Database.prototype[${JSON.stringify(site.at)}] = function (sql, ...rest) {
+        if (thrown === 0 && re.test(sql)) {
+          thrown++;
+          throw new Database.SqliteError('database disk image is malformed', ${JSON.stringify(code)});
+        }
+        return orig.call(this, sql, ...rest);
+      };
+      if (${deadlineMs} !== null) m.setBusyDeadline(Date.now() + ${deadlineMs});
+      const msgs = [];
+      const t0 = Date.now();
+      const r = { opened: false, seen: null, error: null };
+      try {
+        const db = m.ensureDbWithWalRecovery({ warn: (x) => msgs.push(x), info: (x) => msgs.push(x) });
+        r.opened = true;
+        try { r.seen = db.prepare('SELECT count(*) AS n FROM _holder').get().n; } catch (e) { r.seen = e.message; }
+        db.close();
+      } catch (e) { r.error = e.code || e.message; }
+      console.log(JSON.stringify({ ...r, thrown, msgs, ms: Date.now() - t0 }));
+    });`;
+  const out = execFileSync(process.execPath, ['-e', src], {
+    env: { ...process.env, CLAUDE_MEM_DIR: dir },
+    encoding: 'utf8',
+    timeout: 60000,
+  });
+  return JSON.parse(out.trim().split('\n').pop());
+}
+
+// D#427. The WAL-delete arm is for a frame that stays corrupt. On 2026-10-17, 3 of 43 first opens
+// of intact store copies on one host threw a plain SQLITE_CORRUPT that a second open did not
+// (D#424). Deleting -wal/-shm there, with another connection open, discards every transaction that
+// connection committed since its last checkpoint and everything it commits after, until it
+// closes, and integrity_check still reads ok (2026-10-17 probe: 3 of 3 runs, 2200 of 2200 of the
+// holder's rows gone). So the open is retried once with the files untouched first.
+describe('a corruption error that does not repeat (D#427)', () => {
+  for (const [name, site] of Object.entries(FAULT_SITES)) {
+    it(`keeps a live connection's committed rows when the ${name} throws once`, async () => {
+      const { dir, dbPath } = seedStore(`transient-${name}`, site);
+      const holder = startHolder(dbPath);
+      try {
+        await holder.until('ready');
+        const r = openWithInjectedFault(dir, { site, code: 'SQLITE_CORRUPT' });
+        expect(r.thrown, 'the injected fault must have fired').toBe(1);
+        expect(r.msgs.join('\n'), 'and reached the recovery function').toContain('DB corruption');
+        expect(r.opened, JSON.stringify(r)).toBe(true);
+        expect(r.seen, "the holder's committed rows, seen by the recovered open").toBe(100);
+        expect(r.msgs.join('\n')).not.toContain('attempting WAL recovery');
+        holder.send('more');
+        await holder.until('more-done');
+      } finally {
+        await holder.stop();
+      }
+      const v = new Database(dbPath);
+      expect(
+        v.prepare('SELECT count(*) AS n FROM _holder').get().n,
+        'what the holder committed after it',
+      ).toBe(200);
+      expect(v.pragma('integrity_check', { simple: true })).toBe('ok');
+      v.close();
+    }, 30000);
+  }
 });

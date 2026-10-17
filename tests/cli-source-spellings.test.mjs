@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
@@ -335,5 +335,36 @@ describe('a bare -- ends the options', () => {
     expect(r.stdout).toMatch(/Saved #\d+/);
     expect(r.stderr).not.toMatch(/Unknown flag/);
     expect(cli('search', 'deploy.sh').stdout).toContain('--dry-run is ignored by deploy.sh');
+  });
+});
+
+// Pre-tag claims review 2026-10-16 S4c: d963eb0a fixed the MCP face only. With the rewrite failed
+// (no LLM here), `search '***' --deep` printed "its deep rewrites found nothing" right under the
+// stderr line saying the rewrite returned no usable variants.
+describe('a deep search whose rewrite failed does not claim it ran', () => {
+  it('search "***" --deep says the rewrite was unavailable', () => {
+    const r = cli('search', '***', '--deep');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/no usable variants/);
+    expect(r.stdout).not.toMatch(/deep rewrites found nothing/);
+    expect(r.stdout).toMatch(/has no searchable terms, and deep search could not rewrite it/);
+  });
+  it('control: a rewrite that ran and found nothing still says its rewrites found nothing', () => {
+    // A stand-in `claude` that answers every prompt with two variants nothing in the store matches.
+    const fake = join(root, 'fake-claude.mjs');
+    writeFileSync(
+      fake,
+      '#!/usr/bin/env node\nprocess.stdin.resume();\nprocess.stdin.on("end", () => ' +
+        'process.stdout.write(JSON.stringify({ variants: ["qqzzx wvvuy", "xxkqz pwwqv"] })));\n',
+    );
+    chmodSync(fake, 0o755);
+    const r = spawnSync(process.execPath, [CLI, 'search', '***', '--deep'], {
+      env: { ...env, CLAUDE_CODE_PATH: fake },
+      encoding: 'utf8',
+      cwd: join(root, 'w', 'p'),
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/rewrote into 3 query variants/);
+    expect(r.stdout).toMatch(/has no searchable terms, and its deep rewrites found nothing/);
   });
 });

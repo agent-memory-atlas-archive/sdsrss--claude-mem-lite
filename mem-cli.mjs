@@ -508,11 +508,16 @@ async function cmdSearch(db, args, { llm } = {}) {
         }),
       );
     } else {
+      // Deep search on operators or punctuation: the query itself was never searched. Whether a
+      // rewrite ran decides the rest, as on the MCP face (d963eb0a): a failed rewrite searched
+      // nothing at all (pre-tag claims review 2026-10-16 S4c).
+      const rewriteRan = (deepVariants?.length ?? 0) > 1;
       out(
         ftsQuery
           ? `[mem] No results for "${queryLabel(query)}"`
-          : // Deep search on operators or punctuation: the query itself was never searched.
-            `[mem] No results for "${queryLabel(query)}" — it has no searchable terms, and its deep rewrites found nothing`,
+          : rewriteRan
+            ? `[mem] No results for "${queryLabel(query)}" — it has no searchable terms, and its deep rewrites found nothing`
+            : `[mem] No results for "${queryLabel(query)}" — it has no searchable terms, and deep search could not rewrite it (the LLM call failed or returned no usable variants)`,
       );
       emitRecallHint(db, query);
       // The zero-result path is where the trailer earns its keep — the D#92

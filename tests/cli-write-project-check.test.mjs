@@ -152,3 +152,40 @@ describe('import-jsonl checks the project it writes to', () => {
     expect(projects()).toEqual(['work--invoice-app', 'zebra-billing']);
   });
 });
+
+// Same class (fix-cli report, 2026-10-17): restore resolved --project in read mode and had no
+// write check, so a typo landed in whatever the fuzzy match picked or made a stray project.
+describe('restore checks the project it writes to', () => {
+  function exportFile() {
+    const file = join(root, 'export.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'discovery',
+        title: 'restored row',
+        narrative: 'per-line rounding',
+        created_at_epoch: 1760000000000,
+      }) + '\n',
+    );
+    return file;
+  }
+
+  it('a near miss of an existing project is refused and restores nothing', () => {
+    expect(cli('save', 'invoice rounding is per line', '--title', 'rounding').status).toBe(0);
+    const r = cli('restore', exportFile(), '--project', 'invoice-ap');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/did you mean "work--invoice-app"/);
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
+    const n = db.prepare("SELECT COUNT(*) AS n FROM observations WHERE title = 'restored row'").get().n;
+    db.close();
+    expect(n).toBe(0);
+  });
+
+  it('a new name nothing resembles is restored, and says it is a new project', () => {
+    expect(cli('save', 'invoice rounding is per line', '--title', 'rounding').status).toBe(0);
+    const r = cli('restore', exportFile(), '--project', 'zebra-billing');
+    expect(r.status).toBe(0);
+    expect(r.stdout + r.stderr).toMatch(/new project "zebra-billing"/);
+    expect(projects()).toContain('zebra-billing');
+  });
+});

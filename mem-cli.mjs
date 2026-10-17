@@ -112,6 +112,7 @@ import {
   resolvePositionalAlias,
   suggestUnknownFlags,
   KNOWN_CLI_FLAGS,
+  BOOLEAN_CLI_FLAGS,
   resetFlagTracking,
   inertFilterFlags,
   inertFilterFlagNotice,
@@ -2464,7 +2465,13 @@ function cmdRestore(db, argv) {
     return;
   }
 
-  const projOverride = flags.project ? resolveProject(db, flags.project) : null;
+  const projOverride = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : null;
+  // The check `save` and `import-jsonl` make: a near miss is refused before anything is restored.
+  const projectCheck = projOverride ? checkWriteProject(db, projOverride) : { ok: true, note: '' };
+  if (!projectCheck.ok) {
+    fail(`[mem] ${projectCheck.message}`);
+    return;
+  }
   const dryRun = flags['dry-run'] === true || flags['dry-run'] === 'true';
   const num = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
 
@@ -2606,7 +2613,7 @@ function cmdRestore(db, argv) {
   out(
     `[mem] Restore${dryRun ? ' (dry-run)' : ''}: ${restored} ${dryRun ? 'would be restored (at most)' : 'restored'}` +
       `, ${skipped} duplicate(s) ${dryRun ? 'would be skipped' : 'skipped'}${tombstoneNote}` +
-      `, ${totalMalformed} malformed/failed from ${totalLines} row(s).`,
+      `, ${totalMalformed} malformed/failed from ${totalLines} row(s)${projectCheck.note}.`,
   );
   // Nothing restorable, and not because it was all already here: the same verdict the
   // all-lines-unparseable JSONL case gives. A JSON array of malformed rows exited 0, so
@@ -3870,7 +3877,14 @@ const CONTENT_WRITER_FLAGS = {
   'activity save': ['type', 'title', 'body', 'files', 'file', 'project', 'importance', 'json'],
 };
 // Commands whose --project names where rows are WRITTEN (a new project is theirs to create).
-const PROJECT_WRITE_CMDS = new Set(['save', 'defer add', 'activity save', 'import-jsonl', 'verify-apply']);
+const PROJECT_WRITE_CMDS = new Set([
+  'save',
+  'defer add',
+  'activity save',
+  'import-jsonl',
+  'verify-apply',
+  'restore',
+]);
 // Commands whose first argument is free text, so a bare `--word` there may be text, not a flag.
 const TEXT_COMMANDS = new Set(['save', 'search', 'defer add']);
 // The mutating runs of the maintenance commands and the filter flags each actually reads.
@@ -4038,7 +4052,13 @@ async function runDispatch(argv) {
       const prev = at > 0 ? cmdArgs[at - 1] : '';
       const prevKey = prev.startsWith('--') && !prev.includes('=') ? prev.slice(2) : null;
       const asFlag = suggestion ? ` As a flag, did you mean --${suggestion}?` : ' As a flag it is unknown.';
-      if (prevKey && KNOWN_CLI_FLAGS.has(prevKey) && parsedForTypos.flags[prevKey] === true) {
+      // Not after a flag that takes no value (D#385): it has no value to misread.
+      if (
+        prevKey &&
+        KNOWN_CLI_FLAGS.has(prevKey) &&
+        !BOOLEAN_CLI_FLAGS.has(prevKey) &&
+        parsedForTypos.flags[prevKey] === true
+      ) {
         valueLike.add(flag);
         process.stderr.write(
           `[mem] "--${flag}" right after --${prevKey} was read as a flag, not as its value. A value ` +

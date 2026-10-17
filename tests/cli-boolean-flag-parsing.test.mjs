@@ -174,6 +174,19 @@ describe('the CLI with a boolean flag before its positional (D#385)', () => {
     expect(r.status).toBe(0);
   });
 
+  // A flag that takes no value has no value to misread, so an unknown flag after it is refused
+  // like any other the writer does not take, not passed as "maybe --force's value".
+  it('save "text" --force --draft refuses --draft and saves nothing', () => {
+    const r = run('save', 'pool leak fixed by closing the client', '--force', '--draft');
+    expect(r.stderr).not.toMatch(/right after --force/);
+    expect(r.stderr).toMatch(/--draft/);
+    expect(r.status).toBe(1);
+    const db = new Database(join(dataDir, 'claude-mem-lite.db'), { readonly: true });
+    const n = db.prepare('SELECT COUNT(*) AS n FROM observations').get().n;
+    db.close();
+    expect(n).toBe(0);
+  });
+
   it('recent --json 5 prints JSON', () => {
     expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
     const r = run('recent', '--json', '5');

@@ -14,7 +14,9 @@
 // "file is not a database".
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -177,4 +179,106 @@ describe('an unopenable database is logged once, not once per hook fire', () => 
     expect(first).toBe(1);
     expect(second).toBe(2);
   });
+});
+
+// Review r1 P2-2. Since D#430 the files stay when another process holds the store (or when that
+// cannot be checked), and this notice then printed the set-aside command, `rm -f …-wal …-shm &&
+// mv …`, which does the very delete that was refused, with the holder still alive.
+describe('SessionStart and the CLI when the WAL was kept (review r1 P2-2, P3-4)', () => {
+  const BSQ = createRequire(import.meta.url).resolve('better-sqlite3');
+
+  /** A real store, a second process holding it with 100 committed rows, and a preload that makes
+   *  every `journal_mode = WAL` pragma throw SQLITE_CORRUPT (a corruption error that repeats). */
+  async function heldStoreWithFault() {
+    const dir = mkdtempSync(join(tmpdir(), 'dbkept-'));
+    fixtures.push(dir);
+    const dbPath = join(dir, 'claude-mem-lite.db');
+    const { initSchema } = await import('../schema.mjs');
+    const seed = new Database(dbPath);
+    seed.pragma('journal_mode = WAL');
+    initSchema(seed);
+    seed.close();
+    const patch = join(dir, 'fault.mjs');
+    writeFileSync(
+      patch,
+      [
+        `import Database from ${JSON.stringify(pathToFileURL(BSQ).href)};`,
+        `const orig = Database.prototype.pragma;`,
+        `Database.prototype.pragma = function (sql, ...rest) {`,
+        `  if (/^\\s*journal_mode\\s*=\\s*WAL/i.test(sql)) throw new Database.SqliteError('database disk image is malformed', 'SQLITE_CORRUPT');`,
+        `  return orig.call(this, sql, ...rest);`,
+        `};`,
+      ].join('\n'),
+    );
+    const holder = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const D = require(${JSON.stringify(BSQ)}); const db = new D(${JSON.stringify(dbPath)});
+         db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0');
+         db.exec('CREATE TABLE IF NOT EXISTS _holder(x TEXT)');
+         for (let i = 0; i < 100; i++) db.prepare('INSERT INTO _holder(x) VALUES (?)').run('h');
+         process.stdout.write('ready\\n'); process.stdin.on('data', () => { db.close(); process.exit(0); });`,
+      ],
+      { stdio: ['pipe', 'pipe', 'inherit'] },
+    );
+    await new Promise((res) => holder.stdout.once('data', res));
+    const stop = () =>
+      new Promise((res) => {
+        if (holder.exitCode !== null) return res();
+        holder.on('exit', res);
+        holder.stdin.write('x\n');
+      });
+    return { dir, dbPath, preload: ['--import', pathToFileURL(patch).href], stop };
+  }
+
+  it.runIf(existsSync('/proc/locks'))(
+    'SessionStart says why, and hands nobody the delete',
+    async () => {
+      const { dir, dbPath, preload, stop } = await heldStoreWithFault();
+      let r;
+      let walThere;
+      try {
+        r = run([...preload, join(REPO, 'hook.mjs'), 'session-start'], dir);
+        // Checked while the holder is alive: its own close, the last one, removes the WAL itself.
+        walThere = existsSync(`${dbPath}-wal`);
+      } finally {
+        await stop();
+      }
+      const envelope = JSON.parse(
+        r.stdout
+          .split('\n')
+          .filter((l) => l.trim().startsWith('{'))
+          .pop(),
+      );
+      expect(envelope.systemMessage, 'premise: memory is off').toMatch(/Memory is OFF/);
+      expect(envelope.systemMessage).toMatch(/another process has it open/);
+      expect(envelope.systemMessage, 'no delete while it is held').not.toMatch(/rm -f|\bmv\b/);
+      expect(envelope.hookSpecificOutput?.additionalContext ?? '').not.toMatch(/rm -f|\bmv\b/);
+      expect(walThere, 'the files really were kept').toBe(true);
+      const v = new Database(dbPath);
+      expect(v.prepare('SELECT count(*) AS n FROM _holder').get().n).toBe(100);
+      v.close();
+      expect(r.status).toBe(0);
+    },
+    60000,
+  );
+
+  it.runIf(existsSync('/proc/locks'))(
+    'the CLI says why too',
+    async () => {
+      const { dir, preload, stop } = await heldStoreWithFault();
+      let r;
+      try {
+        r = run([...preload, join(REPO, 'cli.mjs'), 'recent'], dir);
+      } finally {
+        await stop();
+      }
+      expect(r.status).not.toBe(0);
+      // Beside its "Cannot open database" line, which the CLI writes to stdout.
+      expect(r.stdout).toMatch(/another process has it open/);
+      expect(r.stdout + r.stderr).not.toMatch(/rm -f/);
+    },
+    60000,
+  );
 });

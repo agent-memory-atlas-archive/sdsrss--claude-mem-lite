@@ -5,7 +5,7 @@
 import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
-import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY, formatDbWalKeptNotice } from './lib/db-unusable.mjs';
 import {
   truncate,
   queryLabel,
@@ -4256,6 +4256,10 @@ async function runDispatch(argv) {
       return;
     }
     out(`[mem] Error: Cannot open database: ${e.message}`);
+    // ensureDbWithWalRecovery kept -wal/-shm: say why, and give no delete while one may be in use.
+    if (e.walKept === 'in-use' || e.walKept === 'unknown') {
+      out(formatDbWalKeptNotice({ dbPath: DB_PATH, walKept: e.walKept }));
+    }
     out(`[mem] DB path: ${DB_PATH}`);
     process.exitCode = 1;
     return;

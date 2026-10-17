@@ -597,6 +597,9 @@ export function lastSchemaSkew() {
 // boolean rather than the error, because the only thing SessionStart needs is "which notice",
 // and keeping an Error alive here would tempt a caller into rendering a stack trace at a user.
 let lastUnusable = false;
+// The open's `err.walKept` when it was unusable because the -wal/-shm files were kept (another
+// process has the store open, or that could not be checked); null otherwise.
+let lastWalKept = null;
 
 /**
  * True when the most recent openDb() returned null because the database file is not a usable
@@ -606,6 +609,16 @@ let lastUnusable = false;
  */
 export function lastDbUnusable() {
   return lastUnusable;
+}
+
+/**
+ * When lastDbUnusable() is true because the open kept the -wal/-shm files: 'in-use' or 'unknown'
+ * (schema.mjs ensureDbWithWalRecovery). Null for every other unusable file.
+ *
+ * @returns {'in-use'|'unknown'|null}
+ */
+export function lastDbWalKept() {
+  return lastWalKept;
 }
 
 // The epoch (ms) until which a connection openDb() hands out in this process may wait for another
@@ -644,6 +657,7 @@ export function openDb() {
     }
     lastSkew = null;
     lastUnusable = false;
+    lastWalKept = null;
     return db;
   } catch (e) {
     // Forward-incompat is its own family: it cannot be healed by anything this process can
@@ -661,6 +675,7 @@ export function openDb() {
     if (isSchemaSkewError(e)) {
       lastSkew = schemaSkewFromError(e) || { dbVersion: null, binaryVersion: null };
       lastUnusable = false;
+      lastWalKept = null;
       // Guarded even though inferProject() reads env and cwd: "the only statement in this
       // catch cannot throw" was true of the original one-line body and stopped being true
       // the moment anything was added. An unscoped marker is a worse dedup, not a crash.
@@ -687,6 +702,8 @@ export function openDb() {
     if (isDbUnusableError(e)) {
       lastUnusable = true;
       lastSkew = null; // the two flags are a set: whichever family fired last is the true one
+      // Total: a property read, and an error without one reads as undefined.
+      lastWalKept = e?.walKept === 'in-use' || e?.walKept === 'unknown' ? e.walKept : null;
       let project = '';
       try {
         project = inferProject();

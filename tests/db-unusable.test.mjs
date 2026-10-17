@@ -298,3 +298,23 @@ describe('shouldRecordOnce', () => {
     expect(JSON.parse(written).key).toBe('k');
   });
 });
+
+describe('formatDbWalKeptNotice (review r1 P2-2)', () => {
+  it('in use: close the other sessions, and no command', async () => {
+    const { formatDbWalKeptNotice } = await import('../lib/db-unusable.mjs');
+    const t = formatDbWalKeptNotice({ dbPath: '/d/claude-mem-lite.db', walKept: 'in-use' });
+    expect(t).toMatch(/Memory is OFF/);
+    expect(t).toMatch(/another process has it open/);
+    expect(t).toMatch(/Close the other Claude Code sessions/);
+    expect(t).not.toMatch(/rm -f|\bmv\b/);
+  });
+
+  it('unknown: the WAL-only delete, behind closing every other session', async () => {
+    const { formatDbWalKeptNotice } = await import('../lib/db-unusable.mjs');
+    const t = formatDbWalKeptNotice({ dbPath: '/d/claude-mem-lite.db', walKept: 'unknown' });
+    expect(t).toMatch(/cannot tell whether another process has it open/);
+    expect(t).toMatch(/every other Claude Code session closed/);
+    expect(t).toContain('rm -f /d/claude-mem-lite.db-wal /d/claude-mem-lite.db-shm');
+    expect(t, 'the main file is not set aside').not.toMatch(/\bmv\b/);
+  });
+});

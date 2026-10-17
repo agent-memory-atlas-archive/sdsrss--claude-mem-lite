@@ -131,8 +131,11 @@ jobs:
       # and users updating from the release before it are checked too.
       - name: Every entry point loads at every split point of a killed update from recent releases
         run: |
+          TAGS="$(git tag --list 'v*' --sort=-v:refname --merged HEAD^ | head -n 3)"
+          # No tag listed means the checkout fetched none: a pass then would check nothing.
+          if [ -z "${TAGS}" ]; then echo "::error::no v* tag before HEAD; is fetch-depth 0 still set?"; exit 1; fi
           status=0
-          for PREV in $(git tag --list 'v*' --sort=-v:refname --merged HEAD^ | head -n 3); do
+          for PREV in ${TAGS}; do
             echo "From ${PREV} to $(git rev-parse --short HEAD)"
             node scripts/swap-mixed-tree.mjs "${PREV}" HEAD || status=1
           done

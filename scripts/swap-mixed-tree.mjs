@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Release check (dev only, not shipped; no workflow or test runs it, so it is run by hand before
-// tagging): would an update from <old> to <new> that is killed between two renames leave an entry
-// point that cannot load?
+// Release check (dev only, not shipped; ci.yml's swap-mixed-tree job runs it from the last release
+// tag on every push to main, and it is run by hand before tagging): would an update from <old> to
+// <new> that is killed between two renames leave an entry point that cannot load?
 //
 // hook-update.mjs swaps SOURCE_FILES into the code home one rename at a time in the NEW release's
 // order (an older updater reads the list from the new tarball), then scripts/, then node_modules/.

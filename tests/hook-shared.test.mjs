@@ -12,6 +12,7 @@ vi.mock('child_process', () => ({
 vi.mock('../schema.mjs', () => ({
   ensureDb: vi.fn(),
   ensureDbWithWalRecovery: vi.fn(),
+  setBusyDeadline: vi.fn(),
   DB_DIR: '/tmp/hook-shared-test',
 }));
 

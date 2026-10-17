@@ -1471,10 +1471,85 @@ export function runDeferredCleanups(db) {
   }
 }
 
+// The epoch (ms, on this process's own timeline: performance.timeOrigin + performance.now()) until
+// which a statement on a connection ensureDb opens may wait for another writer, or null: each
+// statement waits up to its connection's busy_timeout (DB_BUSY_TIMEOUT_MS unless set otherwise).
+// Set by hook-shared's setHookDbDeadline, for the hooks the host kills at a fixed timeout.
+let busyDeadline = null;
+
+/**
+ * Bound every busy wait of the connections ensureDb opens from now on in this process by one
+ * deadline (null lifts it). D#394: a hook's deadline used to be applied once, as each connection
+ * was handed out, so ensureDb's own statements (a first open's migration, a pending one-shot
+ * cleanup) waited DB_BUSY_TIMEOUT_MS before it, and busy_timeout applies per statement, so a
+ * statement meeting a lock after another one had waited could wait the whole handed-out value
+ * again (demo: +6888 ms against a 3500 ms deadline in a hook the host kills at 5 s).
+ *
+ * @param {number|null} epochMs
+ */
+export function setBusyDeadline(epochMs) {
+  busyDeadline = epochMs;
+}
+
+/** The time left until busyDeadline, in whole ms, never below 0. */
+function busyLeftMs() {
+  return Math.max(0, Math.floor(busyDeadline - (performance.timeOrigin + performance.now())));
+}
+
+/**
+ * Cap each statement's busy wait on `db` at the time left until busyDeadline, set just before the
+ * statement runs; SQLite has one busy_timeout per connection and no deadline of its own, and
+ * better-sqlite3 exposes no busy handler. Every way a statement runs is wrapped on this
+ * connection: prepare's run/get/all/iterate, exec, pragma and transaction (whose BEGIN
+ * IMMEDIATE is prepared out of reach of prepare). A busy_timeout the code sets (0 to stop
+ * waiting, a prior value put back) is kept as the ceiling, so the cap only ever lowers it.
+ *
+ * @param {import('better-sqlite3').Database} db
+ */
+function capBusyWaits(db) {
+  const { exec, prepare, pragma, transaction } = Database.prototype;
+  let ceiling = pragma.call(db, 'busy_timeout', { simple: true });
+  let applied = ceiling;
+  const cap = () => {
+    const want = Math.min(ceiling, busyLeftMs());
+    if (want !== applied) {
+      pragma.call(db, `busy_timeout = ${want}`);
+      applied = want;
+    }
+  };
+  const capped = (fn) =>
+    function (...args) {
+      cap();
+      return fn.apply(this, args);
+    };
+  db.pragma = function (source, options) {
+    const set = /^\s*busy_timeout\s*=\s*(\d+)\s*$/i.exec(source);
+    if (!set) return capped(pragma).call(this, source, options);
+    ceiling = Number(set[1]);
+    applied = Math.min(ceiling, busyLeftMs());
+    return pragma.call(this, `busy_timeout = ${applied}`, options);
+  };
+  db.exec = capped(exec);
+  db.prepare = function (sql) {
+    const stmt = prepare.call(this, sql);
+    for (const name of ['run', 'get', 'all', 'iterate']) stmt[name] = capped(stmt[name]);
+    return stmt;
+  };
+  db.transaction = function (fn) {
+    const txn = transaction.call(this, fn);
+    const out = capped(txn);
+    for (const kind of ['deferred', 'immediate', 'exclusive']) out[kind] = capped(txn[kind]);
+    out.default = out;
+    out.database = this;
+    return out;
+  };
+}
+
 /**
  * Ensure DB directory, database file, and all tables exist.
  * Safe to call from any process (hook or server). Idempotent.
- * Returns an opened Database instance with WAL + busy_timeout configured.
+ * Returns an opened Database instance with WAL + busy_timeout configured; under a busy deadline
+ * (setBusyDeadline) every statement on it waits at most the time left.
  */
 export function ensureDb() {
   // A background worker outliving its data dir must not re-create it (D#265): whoever removed
@@ -1513,6 +1588,7 @@ export function ensureDb() {
   }
 
   const db = new Database(DB_PATH);
+  if (busyDeadline !== null) capBusyWaits(db);
   try {
     chmodSync(DB_PATH, 0o600);
   } catch {}

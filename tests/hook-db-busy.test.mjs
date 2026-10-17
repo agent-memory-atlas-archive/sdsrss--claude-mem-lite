@@ -196,6 +196,27 @@ describe('a hook under a write lock held past its host timeout', () => {
     expect(r.ms).toBeLessThan(HOOK_DB_DEADLINE_MS + 1000);
   });
 
+  // D#394: ensureDb's own statements ran before openDb applied the deadline, so a one-shot cleanup
+  // still pending (the first open after an update, or one a lock made fail before) waited
+  // DB_BUSY_TIMEOUT_MS for the lock: the host killed the hook at 5 s with nothing on stdout.
+  it('UserPromptSubmit with a one-shot cleanup pending exits inside its deadline and still injects', async () => {
+    const unmark = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const D = require('better-sqlite3'); const db = new D(${JSON.stringify(dbPath)});
+         process.stdout.write(String(db.prepare("DELETE FROM migration_cleanups WHERE name = 'orphan-observation-files'").run().changes));`,
+      ],
+      { cwd: REPO, encoding: 'utf8' },
+    );
+    expect(unmark.stdout, 'premise: the cleanup is pending again').toBe('1');
+    const r = await underLock(() => hook('user-prompt', { session_id: 'cc-pending', prompt: PROMPT }));
+    expect(r.signal, `killed at the host timeout after ${r.ms} ms`).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('Default invoice lines to an empty array');
+    expect(r.ms).toBeLessThan(HOOK_DB_DEADLINE_MS + 1000);
+  });
+
   it('the 2 s prompt search exits inside its timeout and still injects', async () => {
     // Premise first, without a lock: this session's prompt finds the lessons on this face too.
     const free = hook('ups', { session_id: 'cc-ups-premise', prompt: PROMPT }, UPS_TIMEOUT_MS);

@@ -17,7 +17,7 @@ import {
 } from 'fs';
 import { inferProject, debugCatch } from './utils.mjs';
 import { CITE_RECALL_FILE_PREFIX } from './lib/cite-recall-path.mjs';
-import { ensureDbWithWalRecovery, DB_DIR } from './schema.mjs';
+import { ensureDbWithWalRecovery, setBusyDeadline, DB_DIR } from './schema.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 // Pure-`node:`/local module (it imports only binding-probe + native-binding-hint, and
 // neither imports this file) — no cycle.
@@ -614,15 +614,13 @@ export function lastDbUnusable() {
 let hookDbDeadline = null;
 
 /**
- * Bound the busy wait of each connection this process opens through openDb() by one deadline:
- * each connection's busy_timeout is set, as it is handed out, to the time left until `epochMs`
- * (never more than DB_BUSY_TIMEOUT_MS, 0 once it has passed). E2E 2026-10-16 F9 and its pre-tag
- * review: a 5 s wait in a hook the host kills at 5 s never fails inside the hook, and one fixed
- * shorter wait per connection both lost writes a shorter lock only delayed and added up across
- * Stop's several connections. Two waits stay outside it (round-2 review): busy_timeout applies per
- * statement, so a statement that meets a lock after another one on the same connection has waited
- * can wait the connection's value again; and ensureDb's own statements, a first open's migration
- * among them, wait DB_BUSY_TIMEOUT_MS before openDb sets it.
+ * Bound the busy wait of every statement on the connections this process opens by one deadline:
+ * each statement waits at most the time left until `epochMs` (never more than
+ * DB_BUSY_TIMEOUT_MS, 0 once it has passed), ensureDb's own statements included (schema.mjs
+ * setBusyDeadline, D#394); openDb also sets that as each connection's busy_timeout when it hands
+ * it out. E2E 2026-10-16 F9 and its pre-tag review: a 5 s wait in a hook the host kills at 5 s
+ * never fails inside the hook, and one fixed shorter wait per connection both lost writes a
+ * shorter lock only delayed and added up across Stop's several connections.
  *
  * The time left is read on this process's own timeline (performance.timeOrigin +
  * performance.now()), which a step of the system clock does not move (round-2 review).
@@ -631,6 +629,7 @@ let hookDbDeadline = null;
  */
 export function setHookDbDeadline(epochMs) {
   hookDbDeadline = epochMs;
+  setBusyDeadline(epochMs);
 }
 
 export function openDb() {

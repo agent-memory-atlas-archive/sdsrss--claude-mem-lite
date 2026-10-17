@@ -364,7 +364,9 @@ let idleCleanupRan = false;
  * The schemas declare both spellings (see tool-schemas.mjs); this is where the alias
  * actually takes effect. Canonical wins when both are present — an explicit canonical
  * value is the more specific intent, and silently letting an alias override it would
- * reintroduce the same class of surprise the aliases exist to remove.
+ * reintroduce the same class of surprise the aliases exist to remove. A blank canonical string
+ * is not a value: `mem_save(lesson_learned: "", lesson: "X")` dropped X and saved no lesson
+ * (pre-tag review 2026-10-16 P3-8), so a non-blank alias fills it.
  *
  * @param {object} args Raw validated tool arguments.
  * @param {Record<string,string>} pairs alias → canonical field name.
@@ -372,9 +374,11 @@ let idleCleanupRan = false;
  */
 function applyArgAliases(args, pairs) {
   if (!args || typeof args !== 'object') return args;
+  const blank = (v) => typeof v === 'string' && v.trim() === '';
   let next = args;
   for (const [alias, canonical] of Object.entries(pairs)) {
-    if (next[alias] !== undefined && next[canonical] === undefined) {
+    const canonicalAbsent = next[canonical] === undefined || (blank(next[canonical]) && !blank(next[alias]));
+    if (next[alias] !== undefined && canonicalAbsent) {
       if (next === args) next = { ...args };
       next[canonical] = next[alias];
     }

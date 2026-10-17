@@ -122,6 +122,26 @@ describe('argument aliases the descriptions invite (P2-6)', () => {
     }
   });
 
+  // Pre-tag review 2026-10-16 P3-8: an empty lesson_learned counted as given, so the alias was
+  // dropped and the row saved with no lesson.
+  it('mem_save takes `lesson` when lesson_learned is empty', () => {
+    const out = callTool('mem_save', {
+      content: 'Retry storm on the payments webhook after a deploy',
+      type: 'bugfix',
+      lesson_learned: '',
+      lesson: 'Add jitter to webhook retries',
+    });
+    expect(out).toMatch(/Saved/);
+    const db = new Database(join(dir, 'claude-mem-lite.db'), { readonly: true });
+    try {
+      expect(db.prepare('SELECT lesson_learned FROM observations').get().lesson_learned).toBe(
+        'Add jitter to webhook retries',
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it('mem_timeline anchors on `id` as on `anchor`', () => {
     expect(Object.keys(memTimelineSchema)).toContain('id');
     for (const n of [1, 2, 3, 4, 5]) {

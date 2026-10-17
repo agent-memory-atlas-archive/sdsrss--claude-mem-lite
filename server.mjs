@@ -190,8 +190,20 @@ function openDbAtStartup() {
         info: (m) => debugLog('INFO', 'server', m),
       });
     } catch (err) {
-      if (!isDbBusyError(err) || Date.now() - start >= SERVER_OPEN_BUSY_RETRY_MS) throw err;
-      debugLog('WARN', 'server', `database busy at startup, waiting for the other writer: ${err.message}`);
+      // A corruption error that repeats while another process holds the store is waited out the
+      // same way: the holder can be this session's own SessionStart hook or a background worker,
+      // gone a moment later, and the open repairs it once nobody holds it (pre-tag review
+      // 2026-10-17, P3-3). Such a try takes milliseconds, so a quarter second between them.
+      const held = err?.walKept === 'in-use';
+      if (!(isDbBusyError(err) || held) || Date.now() - start >= SERVER_OPEN_BUSY_RETRY_MS) throw err;
+      debugLog(
+        'WARN',
+        'server',
+        held
+          ? `database reports corruption and another process holds it, waiting: ${err.message}`
+          : `database busy at startup, waiting for the other writer: ${err.message}`,
+      );
+      if (held) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
   }
 }

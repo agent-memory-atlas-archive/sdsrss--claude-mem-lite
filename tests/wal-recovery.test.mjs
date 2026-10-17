@@ -476,14 +476,24 @@ function seedStore(tag, { behind = false } = {}) {
 /** ensureDbWithWalRecovery in a child where the `site.at` calls matching `site.match` throw
  *  `code`, the first `times` of them (-1: every one, a corruption that repeats);
  *  `locksUnreadable` makes the child's /proc/locks read fail. */
-function openWithInjectedFault(dir, { site, code, deadlineMs = null, times = 1, locksUnreadable = false }) {
+function openWithInjectedFault(
+  dir,
+  { site, code, deadlineMs = null, times = 1, locksUnreadable = false, foreignPidNs = false, wrap = [] },
+) {
   const src = `
-    if (${locksUnreadable}) {
+    if (${locksUnreadable} || ${foreignPidNs}) {
       const fs = require('node:fs');
       const read = fs.readFileSync;
+      const link = fs.readlinkSync;
       fs.readFileSync = function (p, ...rest) {
-        if (p === '/proc/locks') throw Object.assign(new Error('EACCES: /proc/locks'), { code: 'EACCES' });
+        if (p === '/proc/locks' && ${locksUnreadable}) throw Object.assign(new Error('EACCES: /proc/locks'), { code: 'EACCES' });
+        // In a PID namespace of its own, the kernel lists only the locks of processes it can see.
+        if (p === '/proc/locks') return '';
         return read.call(this, p, ...rest);
+      };
+      fs.readlinkSync = function (p, ...rest) {
+        if (p === '/proc/self/ns/pid' && ${foreignPidNs}) return 'pid:[4026532792]';
+        return link.call(this, p, ...rest);
       };
       require('node:module').syncBuiltinESMExports();
     }
@@ -514,7 +524,8 @@ function openWithInjectedFault(dir, { site, code, deadlineMs = null, times = 1, 
       }
       console.log(JSON.stringify({ ...r, thrown, msgs, ms: Date.now() - t0 }));
     });`;
-  const out = execFileSync(process.execPath, ['-e', src], {
+  const [cmd, ...pre] = wrap.length ? wrap : [process.execPath];
+  const out = execFileSync(cmd, [...pre, ...(wrap.length ? [process.execPath] : []), '-e', src], {
     env: { ...process.env, CLAUDE_MEM_DIR: dir },
     encoding: 'utf8',
     timeout: 60000,
@@ -660,6 +671,104 @@ describe('a corruption error that repeats, with the store held or the lock table
       expect(res.stderr).not.toContain('not a corruption error');
     },
     30000,
+  );
+});
+
+// Review r1 P2-1: in a PID namespace of its own (Claude Code's bubblewrap sandbox, a container
+// with its own /proc) the kernel leaves out of /proc/locks every lock whose holder it cannot see,
+// so the table reads "nobody" while the MCP server outside holds the store. Reproduced by the
+// reviewer with bwrap: the delete ran and 200 of 200 holder rows were gone.
+describe('a lock table from inside another PID namespace (review r1 P2-1)', () => {
+  it('keeps the WAL when this process is not in the initial PID namespace', () => {
+    const { dir } = seedStore('foreign-ns');
+    const r = openWithInjectedFault(dir, {
+      site: FAULT_SITES.pragma,
+      code: 'SQLITE_CORRUPT',
+      times: -1,
+      foreignPidNs: true,
+    });
+    expect(r.thrown).toBeGreaterThanOrEqual(2);
+    expect(r.walKept, JSON.stringify(r)).toBe('unknown');
+    expect(r.walRecoveryAttempted).toBe(false);
+  }, 30000);
+
+  const bwrap = (() => {
+    try {
+      execFileSync('bwrap', ['--unshare-pid', '--dev-bind', '/', '/', '--proc', '/proc', 'true'], {
+        stdio: 'ignore',
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  it.runIf(bwrap)(
+    'keeps a holder outside a bwrap sandbox safe from an opener inside it',
+    async () => {
+      const { dir, dbPath } = seedStore('bwrap');
+      const holder = startHolder(dbPath);
+      let r;
+      try {
+        await holder.until('ready');
+        r = openWithInjectedFault(dir, {
+          site: FAULT_SITES.pragma,
+          code: 'SQLITE_CORRUPT',
+          times: -1,
+          wrap: ['bwrap', '--unshare-pid', '--dev-bind', '/', '/', '--proc', '/proc'],
+        });
+        holder.send('more');
+        await holder.until('more-done');
+      } finally {
+        await holder.stop();
+      }
+      expect(r.walKept, JSON.stringify(r)).toBe('unknown');
+      const v = new Database(dbPath);
+      expect(v.prepare('SELECT count(*) AS n FROM _holder').get().n).toBe(200);
+      v.close();
+    },
+    30000,
+  );
+});
+
+// Review r1 P3-3: the holder can be this session's own SessionStart hook or a background worker,
+// gone a moment later; the server waited out busy errors but stopped at 'in-use' for the session.
+describe('the server at startup, a corruption error that repeats while the store is held (review r1 P3-3)', () => {
+  it.runIf(existsSync('/proc/locks'))(
+    'waits for the holder to leave, then opens',
+    async () => {
+      const { dir, dbPath } = seedStore('server-wait');
+      const marker = join(dir, 'fault-on');
+      writeFileSync(marker, '');
+      const patch = join(dir, 'fault.mjs');
+      writeFileSync(
+        patch,
+        [
+          `import Database from ${JSON.stringify(BSQ_URL)};`,
+          `import { existsSync } from 'node:fs';`,
+          `const orig = Database.prototype.pragma;`,
+          `Database.prototype.pragma = function (sql, ...rest) {`,
+          `  if (existsSync(${JSON.stringify(marker)}) && /^\\s*journal_mode\\s*=\\s*WAL/i.test(sql)) throw new Database.SqliteError('database disk image is malformed', 'SQLITE_CORRUPT');`,
+          `  return orig.call(this, sql, ...rest);`,
+          `};`,
+        ].join('\n'),
+      );
+      const holder = startHolder(dbPath);
+      await holder.until('ready');
+      // The holder leaves, and the fault with it, two seconds into the server's start.
+      const leave = setTimeout(async () => {
+        await holder.stop();
+        rmSync(marker, { force: true });
+      }, 2000);
+      let res;
+      try {
+        res = await runServer(dir, { execArgv: ['--import', pathToFileURL(patch).href], timeoutMs: 25000 });
+      } finally {
+        clearTimeout(leave);
+        await holder.stop();
+      }
+      expect(res.served, res.stderr.slice(-600)).toBe(true);
+    },
+    40000,
   );
 });
 

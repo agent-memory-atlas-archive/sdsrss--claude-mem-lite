@@ -10,6 +10,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   rmSync,
   statSync,
@@ -1822,17 +1823,24 @@ export { isFtsCorruptionError };
  * on byte 128 of the -shm file for as long as it is open (2026-10-17: a better-sqlite3 holder
  * showed both, with its pid, and neither once it closed). Matched by inode alone, so a lock on a
  * file with the same inode number on another device reads as held: the answer errs towards held.
- * A path that does not exist is skipped (a store without a -shm file).
+ * A path that does not exist is skipped (a store without a -shm file). Only from the initial PID
+ * namespace: the kernel leaves out of /proc/locks every lock whose holder the reader's PID
+ * namespace cannot see, so inside Claude Code's bubblewrap sandbox or a container with its own
+ * /proc the table can read empty while the MCP server outside holds the store (pre-tag review
+ * 2026-10-17: the delete ran under bwrap --unshare-pid and 200 of 200 holder rows were gone).
  *
  * @param {string[]} paths
  * @param {{ locksText?: string, pid?: number }} [opts] the lock table's text and this process's
  *   pid, for tests
- * @returns {boolean|null} null: could not look (no /proc/locks, or a path that does not stat)
+ * @returns {boolean|null} null: could not look (no /proc/locks, not the initial PID namespace, or a
+ *   path that does not stat)
  */
 export function dbHeldByOtherProcess(paths, { locksText, pid = process.pid } = {}) {
   let text = locksText;
   if (text === undefined) {
     try {
+      // PROC_PID_INIT_INO, the initial PID namespace's fixed inode (include/linux/proc_ns.h).
+      if (readlinkSync('/proc/self/ns/pid') !== 'pid:[4026531836]') return null;
       text = readFileSync('/proc/locks', 'utf8');
     } catch {
       return null;

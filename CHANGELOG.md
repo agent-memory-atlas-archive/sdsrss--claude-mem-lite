@@ -2,6 +2,60 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.29.1 — a corruption error on open is retried before the WAL is deleted, the index terms older builds leave out are filled for a week, the model no longer lifts an automatic episode to importance 3
+
+**Upgrade note: nothing to run; the schema version stays 49.** One default changes: the model's
+own score no longer lifts an automatic episode to importance 3. Going back is pinning
+`claude-mem-lite@6.29.0`: it reads `migration_cleanups` and `migration_cursors` only by the names
+it knows, so the rows this release adds there are ignored.
+
+- **A corruption error on open is retried before the WAL is deleted** (D#427). On the first plain
+  `SQLITE_CORRUPT` while opening the database, `-wal` and `-shm` were deleted at once. With another
+  connection open (the MCP server keeps one for the whole session) that can discard what it
+  committed since its last checkpoint, and until it closes the two connections overwrite each
+  other's pages, while `integrity_check` still reads ok. In a probe with a second process holding
+  the store (2026-10-17, SQLite's default auto-checkpoint, 3 runs), it lost all 2,200 rows it
+  committed in two runs, and in the third 1,300 of them while the deleting connection lost 900 of
+  its 2,000. The error need not come from the file: 3 of 43 first opens by 6.28.1 of fresh copies
+  of one intact store threw one on the machine described below; the other 40 did not. The open is
+  now retried once with the files untouched, and only an error that repeats reaches the delete,
+  which is unchanged.
+- **The FTS index rebuild on open waits no longer than a hook's deadline** (D#415). An open that
+  met a damaged FTS index (`SQLITE_CORRUPT_VTAB`) rebuilt it on a connection with
+  better-sqlite3's default 5 s wait per statement, four statements, inside a hook the host kills
+  at 2 s or 5 s. With another process holding the write lock and a 1.5 s deadline: 20.1 s before,
+  1.6 s now.
+- **The CJK index terms an older build leaves out are filled by the daily maintenance, for 7
+  days** (D#413). 6.29.0's fill of the observations' index terms is marked done once, but a build
+  from before it can go on writing the same store for as long as a session started before the
+  update lives, and it writes rows without the terms of their lessons, facts and aliases, or
+  rewrites a filled row's text without them (a 6.28.x `mem_update`). On the store of the machine
+  this release was built on, 8 of the 36 rows its 6.27.0 code wrote after the fill lacked them,
+  and no later open would have added them. The daily maintenance worker now walks the store again,
+  once a day for 7 days from its first run, up to 30 s per run, appending only terms a row lacks.
+  The 7 days: that machine's sessions from 2026-09-05 to 2026-10-17, start to last activity, p50
+  0.65 h, p99 39 h, 4 of 540 past 7 days.
+- **The model's score no longer lifts an automatic episode to importance 3** (D#414). The episode
+  worker stored the model's own score, so it could reach 3, Key Context's top tier, while the
+  window it judges carries tool output: text whoever controls a file or a command's output wrote.
+  Re-enrich was capped at 2 for the same reason in 6.29.0 (D#376). Measured before the change, by
+  a rule set before the run (cap if at most 1 reply scores 3): 72 of the 2,204 sub-episodes from
+  14 days of that machine's transcripts, at even intervals in their time order, through the
+  shipped prompt with `claude -p` and the `haiku` alias (Claude Code 2.1.302), scored 1 ×42,
+  2 ×30, 3 ×0. A rule-based row, saved before the model call or when it fails, can still be 3
+  after a failing test or build command, and saves you make are unchanged.
+- **Dependencies.** zod 4.6.5 → 4.6.7. Development: acorn 8.19.0, eslint 10.12.0, knip 6.41.0,
+  prettier 3.9.10. CI: actions/setup-node 7.1.0, actions/upload-artifact 7.0.2.
+- **The FTS errors in 6.29.0's notes point at that machine** (D#424). 6.29.0 said their cause was
+  not settled. A C program linked with the SQLite that better-sqlite3 ships, with fixed inputs,
+  its random generator seeded, one thread and address randomisation off, gave 50 different wrong
+  results in 513 runs there. Every GCC `-O3` build of SQLite 3.53.x tried failed the same way
+  (better-sqlite3 13.0.3 as published and rebuilt, 12.11.1), except the one built with
+  AddressSanitizer (0 of 323); `node:sqlite` and the system SQLite did not fail. With the bursts in
+  time and crashes of unrelated programs there, the evidence points at that machine (its CPU, the
+  hypervisor or the kernel), not at claude-mem-lite, better-sqlite3 or SQLite; the runs have not
+  been repeated on another machine. Details: `docs/audits/20261017-v6.29.0-pretag-measurements.md`.
+
 ## v6.29.0 — CJK in lessons and facts is searchable, the first open after an update stays inside a hook's timeout, model-written lessons on explicit saves are marked
 
 **Upgrade note: the first database opens after the update fill the observations' index terms in

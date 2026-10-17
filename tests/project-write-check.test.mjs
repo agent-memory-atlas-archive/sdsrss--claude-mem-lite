@@ -60,4 +60,20 @@ describe('checkWriteProject', () => {
     insertObs(db, { project: 'x--app', title: 'a' });
     expect(checkWriteProject(db, 'api').ok).toBe(true);
   });
+  // Pre-tag review 2026-10-16 P3-6: ids containing "--" skipped the near-name check, so
+  // `save --project Dev--Claude-Mem-Lite` beside `dev--claude-mem-lite` was written as a new
+  // project the lower-case reads never find.
+  it('a full id that differs from an existing one only in case is refused, naming it', () => {
+    const r = checkWriteProject(db, 'Work--Other-Api');
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/did you mean "work--other-api"/);
+    expect(r.message).toMatch(/Nothing was saved/);
+    expect(r.message).toMatch(/only in case/);
+  });
+  it('a case variant of a project known only from another table is refused too', () => {
+    db.prepare(
+      "INSERT INTO deferred_work (project, title, priority, status, created_at_epoch) VALUES ('ops--deploy', 't', 2, 'open', ?)",
+    ).run(Date.now());
+    expect(checkWriteProject(db, 'OPS--Deploy').ok).toBe(false);
+  });
 });

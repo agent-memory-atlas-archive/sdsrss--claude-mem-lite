@@ -236,6 +236,26 @@ function projectHasRows(db, project) {
     .get({ p: project });
 }
 
+/** Every project id a table that carries one holds, except `name` itself. */
+function otherProjectIds(db, name) {
+  return db
+    .prepare(
+      `SELECT project FROM observations UNION SELECT project FROM sdk_sessions
+       UNION SELECT project FROM deferred_work UNION SELECT project FROM events`,
+    )
+    .all()
+    .map((r) => r.project)
+    .filter((p) => typeof p === 'string' && p && p !== name);
+}
+
+/** Existing project ids equal to `id` except for case. */
+function caseVariants(db, id) {
+  const want = id.toLowerCase();
+  return otherProjectIds(db, id)
+    .filter((p) => p.toLowerCase() === want)
+    .sort();
+}
+
 /**
  * Up to three existing project ids a caller who typed `name` may have meant: the whole id or its
  * last "--" segment within a small edit distance, case-insensitive. Short names need a closer
@@ -244,14 +264,7 @@ function projectHasRows(db, project) {
 function similarProjects(db, name) {
   const want = String(name).toLowerCase();
   const max = want.length <= 3 ? 0 : want.length < 8 ? 1 : 2;
-  const ids = db
-    .prepare(
-      `SELECT project FROM observations UNION SELECT project FROM sdk_sessions
-       UNION SELECT project FROM deferred_work UNION SELECT project FROM events`,
-    )
-    .all()
-    .map((r) => r.project)
-    .filter((p) => typeof p === 'string' && p && p !== name);
+  const ids = otherProjectIds(db, name);
   const scored = [];
   for (const id of ids) {
     const lower = id.toLowerCase();
@@ -270,19 +283,24 @@ function similarProjects(db, name) {
  * answered. A short name that matches no project but sits one or two edits from one is a typo,
  * and the write would have created a stray project the caller never finds again: refused, with
  * the near names. A new name nothing resembles, or a full "<parent>--<name>" id, is a deliberate
- * new project: written, with a note saying so (E2E 2026-10-16, cli F14).
+ * new project: written, with a note saying so (E2E 2026-10-16, cli F14). A full id that differs
+ * from an existing one only in case is refused like a near name: it was written as a new project
+ * the existing id's reads never find (pre-tag review 2026-10-16 P3-6).
  *
  * @returns {{ok: true, note: string} | {ok: false, message: string}}
  */
 export function checkWriteProject(db, project) {
   if (!project || projectHasRows(db, project)) return { ok: true, note: '' };
-  const near = project.includes('--') ? [] : similarProjects(db, project);
+  const fullId = project.includes('--');
+  const near = fullId ? caseVariants(db, project) : similarProjects(db, project);
   if (near.length > 0) {
     return {
       ok: false,
       message:
         `No project "${project}" — did you mean ${near.map((p) => `"${p}"`).join(', ')}? Nothing was saved. ` +
-        `To start a new project under this name, pass its full id ("<parent>--${project}") or save from inside its directory.`,
+        (fullId
+          ? `Project ids are case-sensitive, and "${project}" differs from ${near.length > 1 ? 'them' : 'it'} only in case.`
+          : `To start a new project under this name, pass its full id ("<parent>--${project}") or save from inside its directory.`),
     };
   }
   return { ok: true, note: ` (new project "${project}")` };

@@ -111,15 +111,11 @@ function managedPathRe(plugin) {
 }
 
 export function hasInstallManagedHooks(opts) {
-  const plugin = opts?.plugin || DEFAULT_PLUGIN;
-  const settingsPath = join(claudeConfigDirFor(opts?.home), 'settings.json');
-  if (!existsSync(settingsPath)) return false;
-  try {
-    const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    return managedPathRe(plugin).test(JSON.stringify(s.hooks || {}));
-  } catch {
-    return false;
-  }
+  const managedPath = managedPathRe(opts?.plugin || DEFAULT_PLUGIN);
+  // Each command as written, never the serialised block: JSON writes a quote as \", which the
+  // rule's trailing [/\\] took for a separator, so `cd "/x/claude-mem-lite" && …` counted as
+  // ours and the self-heal emptied a plugin-only user's manifest (pre-tag review 2026-10-17 P1-1).
+  return settingsHookCommands(opts?.home).some((c) => managedPath.test(c));
 }
 
 /**

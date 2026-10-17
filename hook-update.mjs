@@ -1628,9 +1628,9 @@ function copyReleaseIntoStaging(
 
 // Mirror of plugin-cache-guard.hasInstallManagedHooks, inlined for the reason above.
 // Kept identical in its match rule (`.claude-mem-lite/` or `/claude-mem-lite/`, either
-// separator, appearing in a serialized hooks block; Windows paths carry backslashes, v6.28.0
-// pre-tag review install P3-6) so the two cannot disagree about whether settings.json owns
-// the hooks.
+// separator, in a hook command as written; Windows paths carry backslashes, v6.28.0 pre-tag
+// review install P3-6) so the two cannot disagree about whether settings.json owns the hooks.
+// Never over the serialised block, where a quote is \" (pre-tag review 2026-10-17 P1-1).
 const MANAGED_PATH_RE = /[./\\]claude-mem-lite[/\\]/;
 const ABSOLUTE_PATH_RE = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
 function hasInstallManagedSettingsHooks() {
@@ -1642,7 +1642,16 @@ function hasInstallManagedSettingsHooks() {
   } catch {
     return false;
   }
-  if (!MANAGED_PATH_RE.test(JSON.stringify(s.hooks || {}))) return false;
+  const commands = [];
+  for (const matchers of Object.values(s?.hooks || {})) {
+    if (!Array.isArray(matchers)) continue;
+    for (const m of matchers) {
+      for (const h of Array.isArray(m?.hooks) ? m.hooks : []) {
+        if (typeof h?.command === 'string') commands.push(h.command);
+      }
+    }
+  }
+  if (!commands.some((c) => MANAGED_PATH_RE.test(c))) return false;
   // Liveness, mirroring plugin-cache-guard.hasLiveInstallManagedHooks (see its docblock).
   // The string test alone says settings.json MENTIONS a path of ours, not that the path
   // still exists — and a stale entry left by a removed global install fires nothing while
@@ -1650,19 +1659,13 @@ function hasInstallManagedSettingsHooks() {
   // construction: only a command we parsed a path out of, ALL of whose paths are gone,
   // flips the answer; an unfamiliar shape yields no path and keeps the old result.
   let checked = 0;
-  for (const matchers of Object.values(s?.hooks || {})) {
-    if (!Array.isArray(matchers)) continue;
-    for (const m of matchers) {
-      for (const h of Array.isArray(m?.hooks) ? m.hooks : []) {
-        const c = typeof h?.command === 'string' ? h.command : '';
-        if (!MANAGED_PATH_RE.test(c)) continue;
-        let paths = [...c.matchAll(/"([^"]+)"/g)].map((x) => x[1]).filter((p) => ABSOLUTE_PATH_RE.test(p));
-        if (paths.length === 0) paths = c.split(/\s+/).filter((t) => ABSOLUTE_PATH_RE.test(t));
-        for (const p of paths) {
-          checked++;
-          if (existsSync(p)) return true;
-        }
-      }
+  for (const c of commands) {
+    if (!MANAGED_PATH_RE.test(c)) continue;
+    let paths = [...c.matchAll(/"([^"]+)"/g)].map((x) => x[1]).filter((p) => ABSOLUTE_PATH_RE.test(p));
+    if (paths.length === 0) paths = c.split(/\s+/).filter((t) => ABSOLUTE_PATH_RE.test(t));
+    for (const p of paths) {
+      checked++;
+      if (existsSync(p)) return true;
     }
   }
   return checked === 0;

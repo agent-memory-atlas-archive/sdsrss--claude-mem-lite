@@ -1078,6 +1078,20 @@ describe('cache hook residue clearing', () => {
     }
   }
 
+  // Pre-tag review 2026-10-17 P1-1, the mirror: the rule ran over the serialised hooks.
+  it.each([
+    ['cd "/home/u/src/claude-mem-lite" && npm run lint', 'mem-cache-residue-quoted-1'],
+    ['rsync -a "$HOME/.claude-mem-lite" /backup/', 'mem-cache-residue-quoted-2'],
+  ])(
+    'leaves the manifest for a user command quoting a path that ends in the plugin name: %s',
+    async (command, name) => {
+      const { home, manifest } = residueHome(name, command);
+      const original = readFileSync(manifest, 'utf8');
+      expect(await residueCleared(home)).toBe(0);
+      expect(readFileSync(manifest, 'utf8')).toBe(original);
+    },
+  );
+
   it('clears for a backslash-separated install path that exists', async () => {
     // A Windows path cannot exist on this machine; a file whose NAME carries the backslashes
     // stands in for one, so the separator rule meets an existing path.

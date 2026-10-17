@@ -307,6 +307,24 @@ describe('plugin-cache-guard', () => {
       }
     });
 
+    // Pre-tag review 2026-10-17 P1-1: the rule ran over the SERIALISED hooks, where a quote is
+    // written \", so a user command quoting a path that ends in the plugin name passed the
+    // trailing [/\\] test, no path of it was "ours" to check, and the self-heal emptied a
+    // plugin-only user's manifest.
+    it.each([
+      'cd "/home/u/src/claude-mem-lite" && npm run lint',
+      'rsync -a "$HOME/.claude-mem-lite" /backup/',
+    ])('says NO for a user command quoting a path that ends in the plugin name: %s', (command) => {
+      const home = makeHome();
+      try {
+        writeSettings(home, command);
+        expect(hasInstallManagedHooks({ home })).toBe(false);
+        expect(hasLiveInstallManagedHooks({ home })).toBe(false);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     it('stays false on a plugin-only install (nothing of ours in settings.json)', () => {
       const home = makeHome();
       try {

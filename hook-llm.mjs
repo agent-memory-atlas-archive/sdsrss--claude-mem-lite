@@ -246,7 +246,13 @@ function buildFtsTextField(obs) {
   const conceptsText = Array.isArray(obs.concepts) ? obs.concepts.join(' ') : '';
   const factsText = Array.isArray(obs.facts) ? obs.facts.join(' ') : '';
   const aliasesText = obs.searchAliases || '';
-  const bigramText = cjkIndexTerms((obs.title || '') + ' ' + (obs.narrative || ''));
+  // Every field the row is searched by, not title + narrative alone: unicode61 keeps a CJK run as
+  // one token, so CJK in a lesson, fact, concept or alias was unreachable without these (D#374).
+  const bigramText = cjkIndexTerms(
+    [obs.title, obs.narrative, conceptsText, factsText, aliasesText, obs.lessonLearned]
+      .filter(Boolean)
+      .join(' '),
+  );
 
   // Degraded fallback: when LLM enrichment is missing, extract lightweight keywords
   // from title + narrative so degraded observations remain FTS-searchable

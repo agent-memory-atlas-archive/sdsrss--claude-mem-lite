@@ -623,7 +623,10 @@ Type: ${cand.type || 'change'}`;
       // 0 keeps the stored value in the MAX below (an explicit save's own, see `type` above).
       const modelImportance = manualSave ? 0 : Math.min(clampImportance(parsed.importance), 2);
 
-      const bigramText = cjkIndexTerms((title || '') + ' ' + (narrative || ''));
+      // The side fields' CJK too (D#374; hook-llm buildFtsTextField says why).
+      const bigramText = cjkIndexTerms(
+        [title, narrative, conceptsText, factsText, lessonLearned, searchAliases].filter(Boolean).join(' '),
+      );
       const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');
       const minhashSig = computeMinHash((title || '') + ' ' + (narrative || ''));
 
@@ -1348,7 +1351,10 @@ ${obsDescriptions}`;
       lessonLearned = scrubSecrets(parsed.merged_lesson).slice(0, 500);
     }
 
-    const bigramText = cjkIndexTerms((title || '') + ' ' + (narrative || ''));
+    // The side fields' CJK too (D#374; hook-llm buildFtsTextField says why).
+    const bigramText = cjkIndexTerms(
+      [title, narrative, conceptsText, factsText, lessonLearned].filter(Boolean).join(' '),
+    );
     const textField = [conceptsText, factsText, bigramText].filter(Boolean).join(' ');
     const minhashSig = computeMinHash((title || '') + ' ' + (narrative || ''));
     // An importance a person set on the keeper stays (D10); the UPDATE decides that on the row as
@@ -1660,7 +1666,10 @@ export async function executeSmartCompressCluster(db, observations, project) {
       ? parsed.search_aliases.slice(0, 6).join(' ')
       : null;
 
-    const bigramText = cjkIndexTerms((title || '') + ' ' + (narrative || ''));
+    // The side fields' CJK too (D#374; hook-llm buildFtsTextField says why).
+    const bigramText = cjkIndexTerms(
+      [title, narrative, conceptsText, factsText, lessonLearned, searchAliases].filter(Boolean).join(' '),
+    );
     const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');
 
     const epochs = observations.map((o) => o.created_at_epoch).sort((a, b) => a - b);

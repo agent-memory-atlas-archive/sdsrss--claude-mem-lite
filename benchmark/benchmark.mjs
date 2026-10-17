@@ -56,7 +56,7 @@ export function seedDatabase(db, data) {
       // pure-Latin text, so English fixtures are byte-identical.
       const baseText = obs.text || '';
       const bigrams = cjkIndexTerms(
-        [obs.title, obs.narrative, baseText, obs.concepts].filter(Boolean).join(' '),
+        [obs.title, obs.narrative, baseText, obs.concepts, obs.facts].filter(Boolean).join(' '),
       );
       const ftsText = bigrams ? `${baseText} ${bigrams}` : baseText;
       insertObs.run(

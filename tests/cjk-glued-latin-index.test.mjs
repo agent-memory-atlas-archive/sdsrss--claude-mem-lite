@@ -149,7 +149,9 @@ describe('rows written before the change are backfilled once', () => {
     expect(once.split(' ').filter((t) => t === 'redis')).toHaveLength(1);
   });
 
-  it('an event written with bigram-only search_terms is refilled', () => {
+  // Events are filled by backfill-event-search-terms, from NULL (every event a pre-d366 build
+  // wrote); no release wrote bigram-only search_terms, so nothing recomputes a filled row.
+  it('an event a pre-d366 build wrote (no search_terms) is found by its glued run after the backfill', () => {
     db = createTestDb();
     const id = saveEvent(db, {
       project: P,
@@ -157,7 +159,7 @@ describe('rows written before the change are backfilled once', () => {
       title: '估算token用量的方法',
       body: null,
     });
-    db.prepare(`UPDATE events SET search_terms = ? WHERE id = ?`).run(cjkBigrams('估算token用量的方法 '), id);
+    db.prepare(`UPDATE events SET search_terms = NULL WHERE id = ?`).run(id);
     db.prepare(`DELETE FROM migration_cleanups`).run();
     expect(searchEvents(db, 'token', { project: P })).toEqual([]);
 

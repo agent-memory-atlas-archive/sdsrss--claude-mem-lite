@@ -23,6 +23,7 @@ import { isFtsCorruptionError } from './lib/db-unusable.mjs';
 // See lib/data-paths.mjs and tests/repair-path-no-native-dep.test.mjs.
 import { DB_DIR, DB_PATH, CODE_DIR } from './lib/data-paths.mjs';
 import { DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
+import { isDbBusyError } from './lib/db-busy.mjs';
 import { workerDirGone } from './lib/worker-data-dir.mjs';
 export { DB_DIR, DB_PATH, CODE_DIR };
 
@@ -847,25 +848,23 @@ export function initSchema(db) {
 
   // d366: events.search_terms — the CJK segmentation (nlp.mjs eventSearchTerms) events_fts
   // indexes as its fifth column, so a CJK substring or title query can match an event. The
-  // CREATE above carries it for a fresh DB; an existing one gets the ALTER and a backfill of every
-  // row written before it. Backfilled BEFORE ensureEventsFTS below: the old triggers fire only on
-  // title/body, so these UPDATEs touch no index, and the drifted (4-column) events_fts is then
-  // recreated and rebuilt from the filled column in one pass. '' marks "computed, nothing to add"
-  // so the IS NULL scan is a one-time cost. Rows a pre-d366 build writes later carry NULL and keep
-  // it: this pass reruns only while a LATEST_MIGRATION_COLUMNS column is missing, and the
-  // events_fts rebuild below adds the one it keys on (D#384). Additive + nullable, no CURRENT_SCHEMA_VERSION bump — an older build opening
-  // this DB keeps writing events (the triggers index '' for its missing value).
-  // Not wrapped in a swallowing catch, unlike the ALTERs above: ensureEventsFTS installs triggers
-  // that read new.search_terms, so carrying on without the column would fail every event write.
-  // A throw here rolls the whole pass back and the next open retries it.
+  // CREATE above carries it for a fresh DB; an existing one gets the ALTER here, and
+  // ensureEventsFTS below recreates the drifted (4-column) index with it. The rows written before
+  // it keep NULL (indexed as nothing, so found as 6.27.0 found them) until the deferred cleanup
+  // backfill-event-search-terms fills them in short batches: filled here, inside this one
+  // transaction, the pass took 12.6–25.3 s on a CJK-heavy 200,000-event store, a 5 s hook opening
+  // it first was killed with nothing committed, every time, and any process opening it meanwhile
+  // got SQLITE_BUSY (round-3 pre-tag review, 2026-10-17). Additive + nullable, no
+  // CURRENT_SCHEMA_VERSION bump — an older build opening this DB keeps writing events (the
+  // triggers index '' for its missing value). Not wrapped in a swallowing catch, unlike the ALTERs
+  // above: ensureEventsFTS installs triggers that read new.search_terms, so carrying on without
+  // the column would fail every event write. A throw here rolls the whole pass back and the next
+  // open retries it.
   const eventCols = db
     .prepare(`PRAGMA table_info(events)`)
     .all()
     .map((c) => c.name);
   if (!eventCols.includes('search_terms')) db.exec(`ALTER TABLE events ADD COLUMN search_terms TEXT`);
-  const pendingTerms = db.prepare(`SELECT id, title, body FROM events WHERE search_terms IS NULL`).all();
-  const fillTerms = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ?`);
-  for (const e of pendingTerms) fillTerms.run(eventSearchTerms(e.title, e.body), e.id);
 
   // v42: column-aware self-heal for events_fts (the one FTS table the generic ensureFTS can't
   // manage — UNINDEXED cols + custom tokenizer + events_fts_* triggers). Creates events_fts and its
@@ -1252,12 +1251,12 @@ const DEFERRED_CLEANUPS = [
     // d366: the writers now append the ASCII runs glued to CJK (nlp.mjs gluedAsciiRuns —
     // `修复了redis连接池泄漏` yields `redis`) next to the CJK bigrams, because unicode61 indexes
     // the whole mixed run as one token and the row was unreachable by its Latin part. This
-    // fills the rows written before that. Observations get only the runs no column of the row
-    // already carries as a standalone token, appended in SQL so a concurrent rewrite of `text`
-    // is never overwritten with a stale copy; a re-run finds each appended run standing alone
-    // and adds nothing. Events get search_terms recomputed where it differs, which also fills
-    // rows a pre-d366 build wrote with NULL. Not liveness-filtered: an index term on a hidden
-    // row is inert, and a row restored later is then already right.
+    // fills the observations written before that: only the runs no column of the row already
+    // carries as a standalone token, appended in SQL so a concurrent rewrite of `text` is never
+    // overwritten with a stale copy; a re-run finds each appended run standing alone and adds
+    // nothing. Not liveness-filtered: an index term on a hidden row is inert, and a row restored
+    // later is then already right. Events are backfill-event-search-terms's: every event written
+    // before d366 has NULL search_terms, and no release wrote them without the glued runs.
     name: 'backfill-glued-ascii-runs',
     run: (db) => {
       const obsRows = db
@@ -1267,29 +1266,90 @@ const DEFERRED_CLEANUPS = [
         )
         .all();
       const appendObs = db.prepare(`UPDATE observations SET text = COALESCE(text, '') || ? WHERE id = ?`);
-      const eventRows = db.prepare(`SELECT id, title, body, search_terms FROM events`).all();
-      const setTerms = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ?`);
       db.transaction(() => {
         for (const r of obsRows) {
           const runs = gluedAsciiRuns(r.doc);
           if (runs) appendObs.run(` ${runs}`, r.id);
         }
-        for (const e of eventRows) {
-          const terms = eventSearchTerms(e.title, e.body);
-          if (terms !== (e.search_terms ?? '')) setTerms.run(terms, e.id);
-        }
       })();
     },
   },
+  {
+    // d366: the events written before search_terms existed, filled a time budget at a time
+    // (backfillEventSearchTerms). Not done until no NULL row is left, so an open that runs out of
+    // budget, or is killed, leaves the marker unset and the next one continues.
+    name: 'backfill-event-search-terms',
+    run: (db, opts) => backfillEventSearchTerms(db, opts).done,
+  },
 ];
+
+/** Per-open budget of backfillEventSearchTerms: scripts/user-prompt-search.js opens under a 2 s host timeout. */
+const EVENT_TERMS_BUDGET_MS = 250;
+/** Rows per batch: one batch's write lock is held for its UPDATEs only. */
+const EVENT_TERMS_BATCH = 250;
+
+/**
+ * Fill events.search_terms for the rows that have none, newest first (the most likely to be
+ * searched), batch by batch until `budgetMs` has passed. A batch is read and segmented outside any
+ * transaction and written in its own short IMMEDIATE one that does not wait for another writer:
+ * if one holds the lock, this stops and leaves the rest to a later open, so a hook under a long
+ * lock is not held here (a fresh store with nothing to fill takes no lock at all). The UPDATE
+ * re-checks NULL, so two processes filling the same batch write the same terms once each at most,
+ * and the index trigger re-indexes each filled row. Returns how many rows it filled and whether
+ * none is left.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ budgetMs?: number, batchSize?: number }} [opts]
+ * @returns {{ filled: number, done: boolean }}
+ */
+export function backfillEventSearchTerms(
+  db,
+  { budgetMs = EVENT_TERMS_BUDGET_MS, batchSize = EVENT_TERMS_BATCH } = {},
+) {
+  const start = performance.now();
+  const pick = db.prepare(
+    `SELECT id, title, body FROM events WHERE search_terms IS NULL AND id < ? ORDER BY id DESC LIMIT ?`,
+  );
+  const fill = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ? AND search_terms IS NULL`);
+  const write = db.transaction((rows) => {
+    for (const r of rows) fill.run(r.terms, r.id);
+  });
+  let filled = 0;
+  let cursor = Number.MAX_SAFE_INTEGER;
+  const prior = db.pragma('busy_timeout', { simple: true });
+  db.pragma('busy_timeout = 0');
+  try {
+    for (;;) {
+      const batch = pick.all(cursor, batchSize);
+      if (batch.length === 0) return { filled, done: true };
+      const rows = batch.map((e) => ({ id: e.id, terms: eventSearchTerms(e.title, e.body) }));
+      try {
+        write.immediate(rows);
+      } catch (e) {
+        if (isDbBusyError(e)) return { filled, done: false };
+        throw e;
+      }
+      filled += rows.length;
+      cursor = batch.at(-1).id;
+      if (performance.now() - start >= budgetMs) return { filled, done: false };
+    }
+  } finally {
+    db.pragma(`busy_timeout = ${Number.isInteger(prior) ? prior : DB_BUSY_TIMEOUT_MS}`);
+  }
+}
 
 /**
  * Run registered one-shot data cleanups that haven't completed yet. Each is
  * gated by a row in migration_cleanups, so a transient failure retries on the
  * next open instead of being silently lost behind the schema-version fast-path
- * (audit P1-5). Best-effort: never throws — callers open the DB regardless.
+ * (audit P1-5). A cleanup whose run returns false is not finished and runs again
+ * on the next open; `opts` reaches every run (backfillEventSearchTerms reads its
+ * budget from it). Best-effort: never throws — callers open the DB regardless.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ budgetMs?: number, batchSize?: number }} [opts]
  */
-export function runDeferredCleanups(db) {
+export function runDeferredCleanups(db, opts = {}) {
   let done;
   try {
     done = new Set(
@@ -1305,7 +1365,8 @@ export function runDeferredCleanups(db) {
   for (const { name, run } of DEFERRED_CLEANUPS) {
     if (done.has(name)) continue;
     try {
-      run(db);
+      // A cleanup that does its work over several opens returns false until it has finished.
+      if (run(db, opts) === false) continue;
       mark.run(name, Date.now());
     } catch (e) {
       // Leave the marker unset → retried next open. Surface for observability.

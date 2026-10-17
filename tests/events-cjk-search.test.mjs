@@ -8,7 +8,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
-import { initSchema } from '../schema.mjs';
+import { initSchema, runDeferredCleanups } from '../schema.mjs';
 import { saveEvent, searchEvents } from '../lib/activity.mjs';
 import { coreRunSearchPipeline, buildSearchFtsQuery } from '../lib/search-core.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
@@ -136,7 +136,10 @@ describe('events CJK search (d366 gap 1)', () => {
     ).run(P, '修复连接池泄漏问题', '连接池在高并发下耗尽', Date.now());
     expect(searchEvents(db, '连接池', { project: P })).toEqual([]); // the gap, on the legacy shape
 
-    initSchema(db); // the next open
+    // The next open, as ensureDb runs it: the pass adds the column and the index, and the
+    // deferred cleanup fills the terms.
+    initSchema(db);
+    runDeferredCleanups(db);
 
     expect(titles(searchEvents(db, '连接池', { project: P }))).toEqual(['修复连接池泄漏问题']);
     expect(titles(searchEvents(db, '高并发', { project: P }))).toEqual(['修复连接池泄漏问题']);

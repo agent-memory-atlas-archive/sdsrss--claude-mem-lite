@@ -637,7 +637,8 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     const out = runInstall('uninstall', home, [], { PATH: `${nodeOnly}:/usr/bin:/bin` });
     expect(out).not.toMatch(/not found or already removed/);
     expect(out).toMatch(/could not run `claude`/);
-    expect(out).toMatch(/claude mcp remove -s user mem-lite/);
+    // Nothing is registered in this home, so there is no removal command to give (pre-tag review
+    // 2026-10-17 P3-4); the registered case below asserts it.
   });
 
   // E2E 2026-10-16 round 2 (install B8): with no `claude` on PATH install printed "✗ MCP
@@ -926,9 +927,45 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
       out = e.stdout || '';
     }
     expect(out).toMatch(/could not run `claude`/);
+    expect(out).toMatch(/claude mcp remove -s user mem-lite/);
     expect(status).toBe(3);
     expect(out).not.toMatch(/Done!/);
     expect(out.trim().split('\n').pop()).toMatch(/MCP server is still registered/);
+  });
+
+  // Pre-tag review 2026-10-17 P3-4: two uninstall states printed lines that contradict each other.
+  it('uninstall with no `claude` and nothing registered gives no removal command to run', () => {
+    const nodeOnly = join(home, 'node-only-bin-2');
+    mkdirSync(nodeOnly, { recursive: true });
+    symlinkSync(process.execPath, join(nodeOnly, 'node'));
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: {} }));
+    const out = runInstall('uninstall', home, [], { PATH: `${nodeOnly}:/usr/bin:/bin` });
+    expect(out).not.toMatch(/claude mcp remove -s user/);
+    expect(out).not.toMatch(/was not removed/);
+    expect(out).toMatch(/could not run `claude`/);
+    expect(out).toMatch(/Done!/);
+  });
+
+  it('uninstall does not report a removal `claude` exited 0 on while the entry stayed', () => {
+    const liarBin = join(home, 'liarbin');
+    mkdirSync(liarBin, { recursive: true });
+    writeFileSync(join(liarBin, 'claude'), '#!/usr/bin/env bash\nexit 0\n');
+    chmodSync(join(liarBin, 'claude'), 0o755);
+    writeFileSync(
+      join(home, '.claude.json'),
+      JSON.stringify({ mcpServers: { 'mem-lite': { command: 'node', args: ['/x/server.mjs'] } } }),
+    );
+    let out;
+    let status = 0;
+    try {
+      out = runInstall('uninstall', home, [], { PATH: `${liarBin}:${process.env.PATH}` });
+    } catch (e) {
+      status = e.status;
+      out = e.stdout || '';
+    }
+    expect(out).not.toMatch(/MCP server removed: mem-lite/);
+    expect(out).toMatch(/still registered/);
+    expect(status).toBe(3);
   });
 
   // Round 2 (install B15): install printed "✓ CLI: ~/.local/bin/claude-mem-lite → …" with that

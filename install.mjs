@@ -1753,11 +1753,11 @@ async function uninstall() {
   // with no `claude` on PATH the ENOENT was swallowed and uninstall said "not found" while the
   // registration stayed, pointing at a server --purge was about to delete).
   let claudeMissing = false;
+  const removed = [];
   for (const name of owned.names) {
     try {
       execFileSync('claude', ['mcp', 'remove', '-s', 'user', name], { stdio: 'pipe' });
-      ok(`MCP server removed: ${name}`);
-      removedAny = true;
+      removed.push(name);
     } catch (e) {
       if (e?.code === 'ENOENT') {
         claudeMissing = true;
@@ -1768,12 +1768,22 @@ async function uninstall() {
   // A failed `claude mcp remove` is "not registered" only when ~/.claude.json agrees: any other
   // failure read as "not found or already removed" with the server still registered (E2E
   // 2026-10-16 round 2). Asked when `claude` could not run too: it decides the exit code below.
+  // A removal is reported only when ~/.claude.json agrees too: `claude` exiting 0 with the entry
+  // still there printed "✓ removed" above "still registered" (pre-tag review 2026-10-17 P3-4).
   const stillRegistered = owned.names.filter((name) => userMcpRegistered(name));
-  if (claudeMissing) {
+  for (const name of removed) {
+    if (stillRegistered.includes(name)) continue;
+    ok(`MCP server removed: ${name}`);
+    removedAny = true;
+  }
+  if (claudeMissing && stillRegistered.length === 0) {
+    // Nothing to remove: a command to run here contradicted the "Done!" below (same review).
+    warn('MCP server: could not run `claude` (not on PATH); ~/.claude.json registers none of ours.');
+  } else if (claudeMissing) {
     warn('MCP server: could not run `claude` (not on PATH), so its registration was not removed. Run:');
-    for (const name of owned.names) log(`    claude mcp remove -s user ${name}`);
+    for (const name of stillRegistered) log(`    claude mcp remove -s user ${name}`);
   } else if (stillRegistered.length > 0) {
-    warn('MCP server: `claude mcp remove` failed, and it is still registered in ~/.claude.json. Run:');
+    warn('MCP server: still registered in ~/.claude.json after `claude mcp remove`. Run:');
     for (const name of stillRegistered) log(`    claude mcp remove -s user ${name}`);
   } else if (!removedAny) warn('MCP server not found or already removed');
 

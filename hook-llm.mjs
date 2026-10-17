@@ -1429,8 +1429,8 @@ export async function handleLLMEpisode() {
         // returns 3 for any entry touching schema./migration/prisma/.env/.key paths; via the
         // Math.max below that force-promoted ordinary has-lesson episodes to "critical" imp=3
         // even when Haiku judged them 1-2 (audit: auto imp=3 = 34.8%, e.g. a thin-lesson edit
-        // to schema.mjs). Haiku's OWN importance can still reach 3 (genuine judgment); only the
-        // path heuristic is capped. The isLessonLowSignal branch still floors no-lesson
+        // to schema.mjs). Only the path heuristic was capped then; D#414 below caps the model's own
+        // score too. The isLessonLowSignal branch still floors no-lesson
         // non-decision autos at ≤1; manual mem_save uses a different path and is unaffected.
         // D#69: `!lessonLearned` is the old `isLessonLowSignal && !retryRecovered` (the
         // two are equal with grounding off). A lesson the grounding check dropped caps
@@ -1440,10 +1440,16 @@ export async function handleLLMEpisode() {
         // carries text whoever controls that output wrote — reproduced on real Haiku,
         // 3 of 6 hostile windows stored the directive at importance 2. The row and
         // lesson stay searchable; only the automatic injection faces lose them.
+        // D#414: the model's own score is capped at 2 as well, as re-enrich's is (D#376). The window
+        // carries tool output, text whoever controls a file or a command's output wrote, and 3 is
+        // Key Context's top tier; benign episodes did not use it: 72 real sub-episodes from this
+        // machine's transcripts through this prompt (claude -p haiku, 2026-10-17) scored 1 x42,
+        // 2 x30, 3 x0. (The row buildImmediateObservation saves before the call, which stays when
+        // the call fails, still takes the path heuristic's 3: that is no model output.)
         importance:
           (!lessonLearned && (groundingDropped || parsed.type !== 'decision')) || quotesToolOutput
             ? Math.min(ruleImportance, 1)
-            : Math.max(Math.min(ruleImportance, 2), clampImportance(parsed.importance)),
+            : Math.min(Math.max(ruleImportance, clampImportance(parsed.importance)), 2),
         lessonLearned,
         searchAliases,
         // P3 (D#78): lesson applicability scope — whitelist-validated, invalid → null.

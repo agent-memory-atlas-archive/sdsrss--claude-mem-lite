@@ -748,6 +748,42 @@ describe('handleLLMEpisode', () => {
     expect(obs[0].importance).toBe(2); // rule 3 capped to 2; max(2, Haiku 1) = 2 (was 3 pre-fix)
   });
 
+  it.each([
+    ['change', 'observations'],
+    ['bugfix', 'events'],
+  ])("D#414: the model's own 3 is stored as 2 (%s, in %s)", async (type, table) => {
+    // The episode prompt carries tool output, text whoever controls a file or a command's output
+    // wrote, and 3 is Key Context's top tier. D#376 capped re-enrich at 2; benign episodes do not
+    // need 3 either: 72 real sub-episodes from this machine's transcripts through the shipped
+    // prompt (claude -p haiku, 2026-10-17) scored 1 x42, 2 x30, 3 x0. A schema.mjs edit also makes
+    // the rule's own score 3, so neither side reaches it.
+    callLLM.mockReturnValueOnce(
+      JSON.stringify({
+        type,
+        title: 'Fixed the pool leak on the retry path',
+        narrative: 'the retry path never released the client; release in finally',
+        concepts: ['connection-pool'],
+        facts: [],
+        importance: 3,
+        lesson_learned: 'a column default change still needs a backfill plan for existing rows',
+      }),
+    );
+    const episode = {
+      sessionId: 'ep-sess',
+      project: 'test-proj',
+      files: ['schema.mjs'],
+      filesRead: [],
+      entries: [{ tool: 'Edit', desc: 'edit schema default', isError: false, files: ['schema.mjs'] }],
+    };
+    writeFileSync(tmpFile, JSON.stringify(episode));
+
+    await handleLLMEpisode();
+
+    const rows = db.prepare(`SELECT importance FROM ${table} WHERE project = ?`).all('test-proj');
+    expect(rows.length, `premise: the reply landed in ${table}`).toBe(1);
+    expect(rows[0].importance).toBe(2);
+  });
+
   it('does not crash and cleans up tmp file when episode.files is missing', async () => {
     // Regression: episode.files.map() / .join() threw on a malformed tmp file
     // lacking the `files` field, BEFORE any cleanup — leaking the tmp file,

@@ -237,10 +237,35 @@ describe('re-enrich', () => {
   it('control: a machine-written row still takes the model type and a raised importance', async () => {
     const { executeReenrich } = await import('../hook-optimize.mjs');
     insertObs(db, { type: 'discovery', importance: 1, title: 'Modified cache.js', narrative: 'x' });
-    callModelJSONAsync.mockResolvedValue({ ...narrowReply, type: 'decision', importance: 3 });
+    callModelJSONAsync.mockResolvedValue({ ...narrowReply, type: 'decision', importance: 2 });
     expect((await executeReenrich(db, 10)).processed).toBe(1);
     const obs = db.prepare('SELECT type, importance FROM observations LIMIT 1').get();
-    expect(obs).toEqual({ type: 'decision', importance: 3 });
+    expect(obs).toEqual({ type: 'decision', importance: 2 });
+  });
+
+  // D#376: stored text can talk the model into "importance 3" (2/12 replies before the prompt
+  // guard), and 3 is the top tier of Key Context. Benign re-enrich replies never said 3 (0/40), so
+  // the unattended pass stops at 2; a stored 3 is still kept by the floor.
+  it.each(['narrow', 'wide'])('%s re-enrich raises a machine-written row to 2 at most', async (scope) => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, {
+      type: 'bugfix',
+      importance: 1,
+      title: 'Cache evicts on write instead of on read',
+      narrative:
+        'The cache layer now evicts entries on write instead of on read, which removed the stale reads the checkout page showed after a price change during the load test.',
+    });
+    callModelJSONAsync.mockResolvedValue({ ...narrowReply, type: 'bugfix', importance: 3 });
+    expect((await executeReenrich(db, 10, { scope })).processed).toBe(1);
+    expect(db.prepare('SELECT importance FROM observations LIMIT 1').get().importance).toBe(2);
+  });
+
+  it('re-enrich keeps a machine-written row already at 3', async () => {
+    const { executeReenrich } = await import('../hook-optimize.mjs');
+    insertObs(db, { type: 'discovery', importance: 3, title: 'Modified cache.js', narrative: 'x' });
+    callModelJSONAsync.mockResolvedValue({ ...narrowReply, importance: 3 });
+    expect((await executeReenrich(db, 10)).processed).toBe(1);
+    expect(db.prepare('SELECT importance FROM observations LIMIT 1').get().importance).toBe(3);
   });
 
   it("narrow re-enrich still rewrites a machine-written row's title", async () => {

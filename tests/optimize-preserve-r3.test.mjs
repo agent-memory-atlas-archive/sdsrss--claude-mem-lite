@@ -63,14 +63,14 @@ describe('re-enrich must not downgrade importance/type (R3 L-H1)', () => {
     const id = db.prepare('SELECT id FROM observations LIMIT 1').get().id;
     callModelJSONAsync.mockResolvedValue({
       type: 'feature',
-      importance: 3,
+      importance: 2,
       title: 'Streaming CSV export for large reports',
       narrative: 'Paginated streaming exporter avoids OOM.',
       lesson_learned: 'Stream large exports; never build the whole CSV in memory',
     });
     await executeReenrich(db, 10, { scope: 'wide' });
     const obs = db.prepare('SELECT importance FROM observations WHERE id = ?').get(id);
-    expect(obs.importance, 'LLM upgrade 1→3 must be honored').toBe(3);
+    expect(obs.importance, 'LLM upgrade 1→2 must be honored (3 is capped, D#376)').toBe(2);
   });
 });
 

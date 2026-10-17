@@ -613,12 +613,15 @@ Type: ${cand.type || 'change'}`;
           : cand.narrative || '';
       // Floor at the stored importance: re-enrich adds a lesson, it must never silently downgrade
       // a user-set/promoted importance (the UPDATE also sets optimized_at → the loss is permanent).
-      // Upgrades are still honored — except over an importance a person set (D10), which stays.
+      // Upgrades are still honored, up to 2 — except over an importance a person set (D10), which
+      // stays. Never to 3 (D#376): stored text can talk the model into it (2/12 replies to a hostile
+      // row before MEMORY_INPUT_GUARD), 3 is Key Context's top tier, and benign rows never got it
+      // (0/40 replies; their raises were all to 2). A stored 3 survives through the floor.
       // Decided in the UPDATE itself, on the row as it is then: the candidate's importance was read
       // before the model call, and writing it back undid a person's change made during the call
       // (D#206).
       // 0 keeps the stored value in the MAX below (an explicit save's own, see `type` above).
-      const modelImportance = manualSave ? 0 : clampImportance(parsed.importance);
+      const modelImportance = manualSave ? 0 : Math.min(clampImportance(parsed.importance), 2);
 
       const bigramText = cjkIndexTerms((title || '') + ' ' + (narrative || ''));
       const textField = [conceptsText, factsText, searchAliases || '', bigramText].filter(Boolean).join(' ');

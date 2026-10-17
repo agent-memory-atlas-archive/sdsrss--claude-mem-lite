@@ -176,8 +176,10 @@ import {
 
 // Corruption-gated WAL recovery lives in schema.mjs (shared with hooks/CLI since the D#8-adjacent
 // P3 fix); the server keeps only its exit semantics. A busy open is retried for
-// SERVER_OPEN_BUSY_RETRY_MS first: another process's long write (a maintain, a store's first open
-// migrating it) is waited out rather than costing the session its memory tools.
+// SERVER_OPEN_BUSY_RETRY_MS first. Only an open that has to write (a migration, a pending
+// one-shot cleanup) waits for the lock, so this is the first open after an update meeting another
+// writer (another process migrating the store, a long maintain): waited out rather than costing
+// the session its memory tools.
 function openDbAtStartup() {
   const start = Date.now();
   for (;;) {

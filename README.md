@@ -239,26 +239,33 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 
 ## Upgrading to 6.28.0
 
-**After the update, events are re-indexed so CJK text in them is searchable.** No schema-version
-change: 6.27.0 still opens, searches and writes the database after this release has (an event it
-writes after the re-index has finished is not re-indexed when you update again).
+**After the update, events are re-indexed so Chinese text in them is searchable** (Han characters;
+kana and Hangul are not segmented). No schema-version change: 6.27.0 still opens, searches and
+writes the database after this release has, and an event it writes is filled the next time this
+release opens the database.
 
-- **What it costs.** The first open adds a column and rebuilds the events index; existing events
-  are then filled newest first, at most 250 ms of work per database open, each batch committed, so
-  a killed open keeps its progress. On the maintainer's store (6962 events) the first open took
-  294–317 ms and the second 81–110 ms; on a CJK-heavy store of 200,000 events the first open takes
-  956 ms and the fill about 90 opens. Until an event is filled, a CJK query misses it as before.
+- **What it costs.** The first open adds a column, rebuilds the events index and adds the Latin
+  identifiers glued to Chinese text to existing observations' index text. Existing events are
+  then filled newest first, about 250 ms of segmentation per database open, each batch committed,
+  so a killed open keeps its progress; with nothing left an open takes 3–4 ms. On the maintainer's
+  store (6962 events) the first three opens took 303–323, 84–108 and 4 ms, and the file grew from
+  14 to 15 MB; on a CJK-heavy synthetic store of 200,000 events the first open takes 981 ms, the
+  fill 79 opens, and the file grows from 93 to 273 MB. Until an event is filled, a Chinese query
+  misses it as before.
 - **The MCP server waits out another writer's lock at startup** (up to 15 s of retries) instead of
   exiting with "database is locked".
 - **Exit codes.** Some commands that exited 0 now exit 1, among them `save`, `update`, `defer add`
   and `activity save` given a flag they do not take, `save` and `defer add` given a mistyped
   project, `delete` given an id list with a malformed part (`1,abc`), `self-update` when it checked
-  nothing, and `import-jsonl`
-  on input none of whose lines is a transcript event; CHANGELOG.md lists the rest. `install` exits
-  3 when only the MCP registration failed. A script that relied on exit 0 there needs a look.
-- **Also in this release:** `install` no longer edits the marketplace clone's `hooks/hooks.json`;
-  four MCP tool texts say what the tools do; a hook under a long write lock exits instead of being
-  killed (UserPromptSubmit and SessionStart with their context). Details in CHANGELOG.md.
+  nothing, and `import-jsonl` on lines none of which is a transcript event (an empty file still
+  exits 0); CHANGELOG.md lists the rest. `install` exits 3 when only the MCP registration failed. A
+  script that relied on exit 0 there needs a look.
+- **Also in this release:** `install` no longer empties the marketplace clone's `hooks/hooks.json`
+  (it puts back, with `git checkout`, one an earlier install emptied); four MCP tool texts say what
+  the tools do; a hook under a long write lock exits instead of being killed (UserPromptSubmit and
+  SessionStart with their context), and a lock that ends between 3.5 s and the 5 s kill, which
+  6.27.0 waited out, now drops the write the hook was waiting to make (UserPromptSubmit's prompt
+  row, for one). Details in CHANGELOG.md.
 
 ## Upgrading to 6.25.0
 

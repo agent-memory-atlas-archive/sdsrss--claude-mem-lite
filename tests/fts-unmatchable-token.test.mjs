@@ -54,20 +54,15 @@ describe('sanitizeFtsQuery — unmatchable-token strict-AND regressions (round-5
     expect(matchCount(relaxFtsQueryToOr(strict))).toBe(1);
   });
 
-  it('[MED] mixed-script token keeps its latin anchor as a REQUIRED strict-AND term', () => {
-    // Restated in d366. This case used to pin the token WHOLE ("xyzAbc不存在") so that the CJK
-    // suffix could not be bigrammed into terms that over-recall. Whole, it was itself an
-    // unmatchable required term — the index holds a glued run only as the exact characters the
-    // document glued — so it zeroed strict FTS for every glued query. It is now split the way
-    // the write side indexes it; the anchor survives as a required term, which is what this
-    // case pins. The over-recall moved to the AND->OR fallback and is measured, not hidden.
+  it('[MED] mixed-script token stays WHOLE (latin literal anchor preserved)', () => {
+    // Must NOT bigram the CJK suffix of a latin+CJK token — the latin portion
+    // is a strong literal anchor; bigramming over-recalls onto unrelated docs.
     const out = sanitizeFtsQuery('xyzAbc不存在');
+    expect(out).toContain('xyzAbc不存在');
+    // No standalone CJK-suffix bigram leaked as a separate token.
     const terms = out.split(/\s+/);
-    expect(terms).toContain('xyzabc');
-    expect(terms).not.toContain('xyzAbc不存在');
-    // Strict AND still refuses a doc that carries only the CJK part.
-    db.prepare('INSERT INTO t(content) VALUES (?)').run('这个配置项不存在 不存 存在');
-    expect(matchCount(out)).toBe(0);
+    expect(terms).not.toContain('存在');
+    expect(terms).not.toContain('不存');
   });
 
   it('[HIGH] embedded latin identifier in a glued CJK token is preserved (not dropped)', () => {

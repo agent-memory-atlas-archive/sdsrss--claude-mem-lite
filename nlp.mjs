@@ -345,22 +345,6 @@ const CONTRACTION_FRAGMENTS = [
 
 export const FTS_STOP_WORDS = new Set([...BASE_STOP_WORDS, ...CONTRACTION_FRAGMENTS]);
 
-/**
- * The ASCII query terms inside a token that also carries CJK: the runs the write side indexes
- * (ASCII_RUN, as gluedAsciiRuns extracts them), lowercased for unicode61's case folding, two
- * characters or more, stop words dropped.
- * @param {string} token
- * @returns {string[]}
- */
-function asciiQueryRuns(token) {
-  const out = [];
-  for (const run of token.match(ASCII_RUN) || []) {
-    const low = run.toLowerCase();
-    if (low.length >= 2 && !FTS_STOP_WORDS.has(low) && !out.includes(low)) out.push(low);
-  }
-  return out;
-}
-
 // ─── FTS5 Query Sanitization ─────────────────────────────────────────────────
 
 /**
@@ -475,10 +459,11 @@ export function ftsQueryTokens(query, opts = {}) {
         // "redis" in "redis缓存问题". extractCjkKeywords + cjkBigrams only see CJK runs, so
         // without this the Latin anchor (often the single most precise term — a proper noun
         // like redis/grafana/oauth with no CJK synonym) was dropped, zeroing recall on
-        // whitespace-free mixed-script prompts. Taken with the same extraction the write side
-        // indexes (asciiQueryRuns), so `redis6` is queried as the stored `redis6`.
-        for (const run of asciiQueryRuns(remainder)) {
-          if (!expandedTokens.includes(run)) expandedTokens.push(run);
+        // whitespace-free mixed-script prompts. Mirrors the embedded-
+        // English extraction. Lowercased for parity with the write-path unicode61 folding.
+        for (const en of remainder.match(/[a-zA-Z]{2,}/g) || []) {
+          const low = en.toLowerCase();
+          if (!FTS_STOP_WORDS.has(low) && !expandedTokens.includes(low)) expandedTokens.push(low);
         }
         continue;
       }
@@ -489,24 +474,17 @@ export function ftsQueryTokens(query, opts = {}) {
       // only as the longer whole-run token AND as 同义/义词/词扩/扩展 — never as
       // "同义词扩展" itself. The strict AND is thus unsatisfiable (strict FTS = 0);
       // only relaxFtsQueryToOr in the callers salvaged recall. Emit the non-noise
-      // bigrams the index actually holds instead.
-      //
-      // A MIXED token (ASCII glued to CJK, d366: `redis连接池`, or joined by CJK punctuation,
-      // `docs/measurement/，其余`) was kept whole until d366, on the argument that its ASCII
-      // part is a literal anchor and bigramming the CJK part over-recalls. Kept whole it was
-      // the same unsatisfiable term, and a lone one had no OR fallback at all. It is now split
-      // the way the write side indexes it (cjkIndexTerms): the ASCII runs, each a required
-      // strict-AND term, plus the CJK bigrams. The over-recall the old note named is real but
-      // lives in the AND->OR fallback, where a CJK bigram can match alone; measured in
-      // d366's report (holdout FP) rather than avoided by an unmatchable term.
-      const fallbackBigrams = cjkBigrams(t)
-        .split(' ')
-        .filter((bg) => bg && !isCjkNoiseBigram(bg));
-      const runs = /[A-Za-z0-9]/.test(t) ? asciiQueryRuns(t) : [];
-      if (fallbackBigrams.length + runs.length > 0) {
-        for (const term of [...runs, ...fallbackBigrams])
-          if (!expandedTokens.includes(term)) expandedTokens.push(term);
-        continue;
+      // bigrams the index actually holds instead. Mixed-script tokens (latin+CJK,
+      // e.g. "xyzAbc不存在") stay whole — the latin portion is a literal anchor and
+      // bigramming the CJK suffix over-recalls (mirrors the bigram guard below).
+      if (!/[A-Za-z0-9]/.test(t)) {
+        const fallbackBigrams = cjkBigrams(t)
+          .split(' ')
+          .filter((bg) => bg && !isCjkNoiseBigram(bg));
+        if (fallbackBigrams.length > 0) {
+          expandedTokens.push(...fallbackBigrams);
+          continue;
+        }
       }
     }
     expandedTokens.push(t);

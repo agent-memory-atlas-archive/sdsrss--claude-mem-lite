@@ -13,8 +13,12 @@
 // actually went wrong — elapsed time — rather than asserting on the shape of the filter.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync, existsSync, renameSync } from 'fs';
+import { spawn } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+// Above any pid_max (Linux 2^22, macOS 99998), so kill(pid, 0) reads ESRCH: a worker that is gone.
+const GONE_PID = 999_999_999;
 
 let root;
 let runtimeDir;
@@ -200,7 +204,8 @@ describe('handleLLMSummary flush wait', () => {
         done = true;
       });
       await vi.advanceTimersByTimeAsync(0.5 * POLL_MS);
-      const claimed = join(runtimeDir, 'ep-flush-8-claimed.w4242.json');
+      // A running worker's pid (this process): a claim by a gone pid no longer holds the wait.
+      const claimed = join(runtimeDir, `ep-flush-8-claimed.w${process.pid}.json`);
       renameSync(handed, claimed);
       await vi.advanceTimersByTimeAsync(3 * POLL_MS);
       expect(done, 'stopped waiting when the worker claimed its file').toBe(false);
@@ -227,5 +232,79 @@ describe('handleLLMSummary flush wait', () => {
     const elapsed = await timeSummary();
     expect(elapsed).toBeGreaterThanOrEqual(3000);
     expect(elapsed).toBeLessThan(6000);
+  });
+
+  // Pre-tag review 2026-10-16 P3-3: a worker that died after claiming its file (`.w<pid>`) leaves
+  // that file for SessionStart's hand-off, and until then every Stop's summary worker waited the
+  // whole default (275 s, ~82 MB resident each) on an episode nobody was going to save.
+  it('does not wait on a fresh flush file whose claiming worker is gone', async () => {
+    process.env.CLAUDE_MEM_FLUSH_TIMEOUT = String(SLOW_TIMEOUT_S);
+    const dead = flushFile(`ep-flush-10-died.w${GONE_PID}.json`);
+    expect(await timeSummary()).toBeLessThan(POLL_MS);
+    expect(existsSync(dead), 'the hand-off, not the summary, owns that file').toBe(true);
+  });
+
+  it('stops waiting once the worker that claimed the file dies', async () => {
+    process.env.CLAUDE_MEM_FLUSH_TIMEOUT = String(SLOW_TIMEOUT_S);
+    const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    const exited = new Promise((r) => worker.once('exit', r));
+    flushFile(`ep-flush-11-dies.w${worker.pid}.json`);
+    let t0;
+    let diedAt;
+    const elapsed = await timeSummary(() => {
+      t0 = Date.now();
+      setTimeout(() => {
+        worker.kill('SIGKILL');
+        exited.then(() => {
+          diedAt = Date.now() - t0;
+        });
+      }, 1.5 * POLL_MS);
+    });
+    // The overlap the case claims: the worker was alive for the first tick, so the wait held on
+    // it, and it died during the wait rather than before or after it.
+    expect(diedAt, 'premise: the worker died during the wait').toBeLessThan(elapsed);
+    expect(elapsed, 'premise: a live claim held the wait for a tick').toBeGreaterThanOrEqual(POLL_MS);
+    expect(elapsed - diedAt, 'stopped within two ticks of the death').toBeLessThanOrEqual(2 * POLL_MS);
+    expect(elapsed).toBeLessThan(NOT_BURNED_MS);
+  });
+
+  // The same review: Stop spawns one summary worker per turn, and each waited out the flush even
+  // after a later Stop had made its reply one the write would drop (summarySuperseded).
+  it('stops waiting once a later Stop of its session is recorded', async () => {
+    process.env.CLAUDE_MEM_FLUSH_TIMEOUT = String(SLOW_TIMEOUT_S);
+    const argv = process.argv.slice(3, 6);
+    const spawnEpoch = Date.now() - 60_000;
+    process.argv[3] = 'cc-superseded';
+    process.argv[4] = 'proj';
+    process.argv[5] = String(spawnEpoch);
+    try {
+      const { handleLLMSummary } = await import('../hook-llm.mjs');
+      const { ensureDb } = await import('../schema.mjs');
+      const db = ensureDb();
+      const stop = (epoch) =>
+        db
+          .prepare(
+            `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, completed_at_epoch)
+             VALUES ('cc-superseded', 'cc-superseded', 'proj', '', 0, 'completed', ?)
+             ON CONFLICT(content_session_id) DO UPDATE SET completed_at_epoch = excluded.completed_at_epoch`,
+          )
+          .run(epoch);
+      stop(spawnEpoch);
+      flushFile('ep-flush-12-in-flight.json');
+      let laterStopAt;
+      const t0 = Date.now();
+      setTimeout(() => {
+        stop(spawnEpoch + 30_000);
+        laterStopAt = Date.now() - t0;
+      }, 1.5 * POLL_MS);
+      await handleLLMSummary();
+      const elapsed = Date.now() - t0;
+      db.close();
+      expect(laterStopAt, 'premise: the later Stop landed during the wait').toBeLessThan(elapsed);
+      expect(elapsed, 'premise: its own Stop alone held the wait for a tick').toBeGreaterThanOrEqual(POLL_MS);
+      expect(elapsed).toBeLessThan(NOT_BURNED_MS);
+    } finally {
+      [process.argv[3], process.argv[4], process.argv[5]] = argv;
+    }
   });
 });

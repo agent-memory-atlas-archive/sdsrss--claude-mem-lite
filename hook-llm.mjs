@@ -1597,15 +1597,34 @@ export async function handleLLMEpisode() {
 
 // ─── Background: LLM Session Summary ────────────────────────────────────────
 
-export async function handleLLMSummary() {
-  // Seconds. The default spans an episode worker's whole bound (E2E 2026-10-16 P2-4): it was 15,
-  // below one CLI-leg episode (2-5 s delay + 8-13 s call, + the lesson retry on a bugfix), so the
-  // summary read the DB before the episode's observation existed, found nothing, and the session
-  // kept its Stop-time baseline. A longer default costs nothing when the flush clears early: the
-  // loop below exits on the first tick that finds this summary's files gone.
-  const parsed = parseInt(process.env.CLAUDE_MEM_FLUSH_TIMEOUT, 10);
-  const flushTimeout = Number.isNaN(parsed) ? Math.ceil(episodeWorkerMaxMs() / 1000) : parsed;
+/**
+ * The stem of a flush file whose episode a worker can still save, or null: a name that is not a
+ * flush file's, or a file whose claiming worker (`.w<pid>`, claimFlushFile) is gone. Such a file
+ * waits for SessionStart's hand-off, which takes it only once it is older than
+ * episodeWorkerMaxMs(), so a summary waiting on it waited its whole default for nothing (pre-tag
+ * review 2026-10-16 P3-3: ~82 MB resident for up to 275 s, one per Stop). A pid reused by another
+ * process reads as alive, and its file is waited on as before.
+ *
+ * @param {string} name
+ * @returns {string|null}
+ */
+function inFlightFlushStem(name) {
+  const m = FLUSH_NAME_RE.exec(name);
+  if (!m || (m[3] && !processAlive(Number(m[3])))) return null;
+  return m[1];
+}
 
+/**
+ * Wait up to `flushTimeout` seconds for the episode flushes in flight when it is called, so the
+ * summary reads the observations they save. Returns true as soon as `superseded()` says this
+ * summary's reply would be dropped anyway (checked before every tick): Stop spawns one summary
+ * worker per turn, and each waited out the flush after a later Stop had made it moot (P3-3).
+ *
+ * @param {number} flushTimeout seconds
+ * @param {() => boolean} superseded
+ * @returns {Promise<boolean>}
+ */
+async function waitForEpisodeFlushes(flushTimeout, superseded) {
   // Wait for a DEFINED SET of flush files, not for "the directory is empty" (audit
   // 2026-09-02 P1-7). RUNTIME_DIR is shared by every project on the machine, and the old
   // predicate was `readdirSync(RUNTIME_DIR).some(f => f.startsWith('ep-flush-'))` — so:
@@ -1629,14 +1648,15 @@ export async function handleLLMSummary() {
   // is a bounded overlap with genuinely concurrent work.
   //
   // Tracked by stem (D#383): the worker renames its file when it claims it, and a hand-off renames
-  // it again, so the flush is in flight until no file of that stem is left.
+  // it again, so the flush is in flight until no file of that stem is left, or only one whose
+  // claiming worker is gone (inFlightFlushStem).
   let pending;
   try {
     const cutoff = Date.now() - episodeWorkerMaxMs();
     pending = [
       ...new Set(
         readdirSync(RUNTIME_DIR)
-          .filter((f) => FLUSH_NAME_RE.test(f))
+          .filter((f) => inFlightFlushStem(f) !== null)
           .filter((f) => {
             try {
               return statSync(join(RUNTIME_DIR, f)).mtimeMs >= cutoff;
@@ -1652,6 +1672,7 @@ export async function handleLLMSummary() {
   }
 
   for (let i = 0; i < flushTimeout && pending.length > 0; i++) {
+    if (superseded()) return true;
     await sleep(1000);
     let names;
     try {
@@ -1659,7 +1680,7 @@ export async function handleLLMSummary() {
     } catch {
       names = [];
     }
-    pending = pending.filter((stem) => names.some((f) => f.startsWith(`${stem}.`)));
+    pending = pending.filter((stem) => names.some((f) => inFlightFlushStem(f) === stem));
     debugLog(
       'DEBUG',
       'llm-summary',
@@ -1673,10 +1694,22 @@ export async function handleLLMSummary() {
       `gave up waiting on ${pending.length} flush file(s) after ${flushTimeout}s: ${pending.join(', ')}`,
     );
   }
+  return false;
+}
+
+export async function handleLLMSummary() {
+  // Seconds. The default spans an episode worker's whole bound (E2E 2026-10-16 P2-4): it was 15,
+  // below one CLI-leg episode (2-5 s delay + 8-13 s call, + the lesson retry on a bugfix), so the
+  // summary read the DB before the episode's observation existed, found nothing, and the session
+  // kept its Stop-time baseline. A longer default costs nothing when the flush clears early: the
+  // wait exits on the first tick that finds this summary's files gone.
+  const parsed = parseInt(process.env.CLAUDE_MEM_FLUSH_TIMEOUT, 10);
+  const flushTimeout = Number.isNaN(parsed) ? Math.ceil(episodeWorkerMaxMs() / 1000) : parsed;
 
   // The spawning Stop's epoch (absent for the /clear spawn and pre-upgrade workers). Checked
-  // before the model call and again in the write's transaction, because two workers of one
-  // session can finish out of order (P3-6); the later Stop's worker reads the newer window.
+  // during the flush wait, before the model call and again in the write's transaction, because
+  // two workers of one session can finish out of order (P3-6); the later Stop's worker reads the
+  // newer window.
   const parsedEpoch = Number(process.argv[5]);
   const spawnEpoch = Number.isFinite(parsedEpoch) && parsedEpoch > 0 ? parsedEpoch : null;
   // One `summary_worker` metric row per exit (CLAUDE_MEM_METRICS=1), carrying the session and
@@ -1694,12 +1727,18 @@ export async function handleLLMSummary() {
       ...(llmMs === undefined ? {} : { llmMs }),
     });
 
+  // Opened before the flush wait, which reads the session's latest Stop before every tick.
   const db = openDb();
   if (!db) return outcome('no-db');
 
   try {
     const sessionId = process.argv[3] || getSessionId();
     const project = process.argv[4] || inferProject();
+
+    if (await waitForEpisodeFlushes(flushTimeout, () => summarySuperseded(db, sessionId, spawnEpoch))) {
+      debugLog('DEBUG', 'llm-summary', 'a later Stop owns this session summary, stopped waiting');
+      return outcome('superseded-before-call');
+    }
 
     // Exclude LOW_SIGNAL hook-llm fallback titles ("Error: files +2 more: ...",
     // "Modified X", "Worked on X", etc.) from the Haiku summary input — they

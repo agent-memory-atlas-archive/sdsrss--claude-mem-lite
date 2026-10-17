@@ -725,7 +725,7 @@ function foreignCliEntry(p) {
 function pathHoldsTildeFor(dir) {
   return (process.env.PATH || '')
     .split(delimiter)
-    .some((d) => /^~(?=$|[\\/])/.test(d) && resolve(d.replace(/^~/, homedir())) === resolve(dir));
+    .some((d) => /^~(?=$|[\\/])/.test(d) && sameDir(d.replace(/^~/, homedir()), dir));
 }
 
 function createCliSymlink() {
@@ -749,8 +749,9 @@ function createCliSymlink() {
       symlinkSync(cliSource, cliLink);
       ok(`CLI: ${cliLink} → ${cliSource}`);
       // Only `status` said so, and the command this line announces was not found (E2E
-      // 2026-10-16 round 2).
-      const onPath = (process.env.PATH || '').split(delimiter).some((d) => d && resolve(d) === localBin);
+      // 2026-10-16 round 2). Same directory, not same spelling: with ~/.local a symlink and PATH
+      // holding its target the warning was false (v6.28.0 pre-tag review, install P3-4).
+      const onPath = (process.env.PATH || '').split(delimiter).some((d) => d && sameDir(d, localBin));
       // A leading ~ counts as home: a quoted `export PATH="~/.local/bin:$PATH"` leaves it
       // literal, and bash expands it at lookup (E2E 2026-10-16 round 3).
       if (!onPath && !pathHoldsTildeFor(localBin))

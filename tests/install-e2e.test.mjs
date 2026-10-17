@@ -908,6 +908,26 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
     expect(status).toMatch(/literal ~/);
   });
 
+  // v6.28.0 pre-tag review, install P3-4: the PATH check compared spellings, so with ~/.local a
+  // symlink and PATH holding its target, install said "not on PATH" about a command that resolved.
+  it('install and status find the CLI directory on PATH through a symlinked ~/.local', () => {
+    mkdirSync(join(home, 'real-local'), { recursive: true });
+    symlinkSync(join(home, 'real-local'), join(home, '.local'));
+    const real = runInstall('install', home, ['--dev', '--skip-repos'], {
+      PATH: `${join(home, 'real-local', 'bin')}:${binDir}:${process.env.PATH}`,
+    });
+    expect(real).toMatch(/CLI: .*claude-mem-lite →/);
+    expect(real).not.toMatch(/\.local\/bin is not on PATH/);
+    // The literal-~ spelling of the target (bash expands it at lookup) is the same directory too.
+    const tilde = runInstall('install', home, ['--dev', '--skip-repos'], {
+      PATH: `~/real-local/bin:${binDir}:${process.env.PATH}`,
+    });
+    expect(tilde).not.toMatch(/\.local\/bin is not on PATH/);
+    const status = runInstall('status', home, [], { PATH: `~/real-local/bin:${binDir}:${process.env.PATH}` });
+    expect(status).not.toMatch(/\.local\/bin is not on PATH/);
+    expect(status).toMatch(/literal ~/);
+  });
+
   it('uninstall --purge removes data directory', () => {
     runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
 

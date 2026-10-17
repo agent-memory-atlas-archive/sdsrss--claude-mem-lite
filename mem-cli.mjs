@@ -4072,7 +4072,14 @@ async function runDispatch(argv) {
     );
     if (refused.length > 0) {
       const named = refused.map((f) => {
-        const near = writerAccepts.find((a) => editDistance(f, a) <= 2);
+        // The nearest accepted flag within two edits, not the first: --file was steered to
+        // --title over --files (pre-tag review 2026-10-16 P3-7). Ties keep the listed order.
+        let near = null;
+        let nearDist = 3;
+        for (const a of writerAccepts) {
+          const d = editDistance(f, a);
+          if (d < nearDist) [near, nearDist] = [a, d];
+        }
         return near ? `--${f} (did you mean --${near}?)` : `--${f}`;
       });
       fail(

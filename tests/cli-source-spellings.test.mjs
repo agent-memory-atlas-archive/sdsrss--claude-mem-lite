@@ -278,6 +278,15 @@ describe('a content writer refuses a flag it does not take, before writing', () 
   it('a near-miss gets a suggestion from the command itself', () => {
     expect(cli('save', 'Near miss note', '--titel', 'x').stderr).toMatch(/did you mean --title\?/);
   });
+  // Pre-tag review 2026-10-16 P3-7: the hint took the FIRST accepted flag within two edits, so
+  // --file (one edit from --files) was steered to --title (two edits), and /lesson and /bug
+  // document `--file <path>`.
+  it('the suggestion is the nearest flag, not the first one close enough', () => {
+    const r = cli('save', 'File flag note', '--file', 'a.mjs');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--file \(did you mean --files\?\)/);
+    expect(r.stderr).not.toMatch(/--title\?/);
+  });
   it('control: the flags a writer takes still work', () => {
     const r = cli(
       'save',

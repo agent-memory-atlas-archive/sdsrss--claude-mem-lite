@@ -169,7 +169,9 @@ describe('re-enrich', () => {
       .get();
     expect(obs.title).toBe('Saved by hand');
     expect(obs.narrative).toBe('measured 0.4 ms p50 on staging');
-    expect(obs.lesson_learned).toBe('a lesson with enough signal to persist');
+    expect(obs.lesson_learned, 'marked as model-written (D#380)').toBe(
+      '🤖 a lesson with enough signal to persist',
+    );
     expect(obs.memory_session_id).toBe('manual-test');
     expect(isAutoWritten(obs.memory_session_id)).toBe(false);
   });
@@ -229,7 +231,7 @@ describe('re-enrich', () => {
     });
     expect((await executeReenrich(db, 10, { scope: 'wide' })).processed).toBe(1);
     const obs = db.prepare('SELECT type, importance, lesson_learned FROM observations LIMIT 1').get();
-    expect(obs.lesson_learned).toBe('Stream large exports in fixed-size batches to bound memory.');
+    expect(obs.lesson_learned).toBe('🤖 Stream large exports in fixed-size batches to bound memory.');
     expect(obs.type).toBe('feature');
     expect(obs.importance).toBe(2);
   });

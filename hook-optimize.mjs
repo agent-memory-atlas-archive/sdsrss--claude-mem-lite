@@ -34,7 +34,7 @@ import { normalizeScope, SCOPE_PROMPT_LEGEND, insertObservationRow } from './lib
 import { liveObsFilterSql } from './lib/inject-search-core.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
 import { MEMORY_INPUT_GUARD } from './lib/memory-input-guard.mjs';
-import { MANUAL_SESSION_ID_PREFIX, writerSessionId } from './lib/provenance.mjs';
+import { MANUAL_SESSION_ID_PREFIX, markAutoLesson, writerSessionId } from './lib/provenance.mjs';
 import { ENRICH_OBLIGATED_TYPES } from './lib/save-enrich.mjs';
 
 import { DAY_MS } from './lib/time-constants.mjs';
@@ -577,7 +577,7 @@ Type: ${cand.type || 'change'}`;
       // Scrub BEFORE truncate so a secret straddling the cut can't leave a sub-6-char
       // head that scrubSecrets's value-length floor no longer matches (the scrubRecord
       // below would then miss it too). Mirrors the hook-llm save-path fix.
-      const lessonLearned =
+      let lessonLearned =
         // Wide is the lesson backfill for substantive rows, explicit saves included; narrow
         // retries a failed save-time enrichment, which writes a lesson for these types only (E2E
         // 2026-10-16 round 3: applied to wide too, explicit feature/refactor saves lost it).
@@ -587,6 +587,8 @@ Type: ${cand.type || 'change'}`;
         parsed.lesson_learned.trim().length > 0
           ? scrubSecrets(parsed.lesson_learned).slice(0, 500)
           : null;
+      // On an explicit save the lesson says that a model wrote it (D#380, lib/provenance.mjs).
+      if (manualSave) lessonLearned = markAutoLesson(lessonLearned);
       const searchAliases =
         Array.isArray(parsed.search_aliases) && parsed.search_aliases.length
           ? parsed.search_aliases.slice(0, 6).join(' ')

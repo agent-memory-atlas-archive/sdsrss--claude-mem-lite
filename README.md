@@ -239,17 +239,21 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 
 ## Upgrading to 6.28.0
 
-**The first database open after the update re-indexes events, so CJK text in them is searchable.**
-No schema-version change: 6.27.0 still opens, searches and writes the database after this release
-has (rows it writes are not re-indexed when you update again).
+**After the update, events are re-indexed so CJK text in them is searchable.** No schema-version
+change: 6.27.0 still opens, searches and writes the database after this release has (an event it
+writes after the re-index has finished is not re-indexed when you update again).
 
-- **What the open costs.** 88–94 ms on the maintainer's store (6909 events), growing with the
-  store: about 0.9–1.9 s at 60,000 events and 6.7 s at 200,000. On a store that large, a hook with
-  a 5 s timeout that opens it first is killed once with its output, and the next open finishes the
-  pass; `integrity_check` read ok after each step.
+- **What it costs.** The first open adds a column and rebuilds the events index; existing events
+  are then filled newest first, at most 250 ms of work per database open, each batch committed, so
+  a killed open keeps its progress. On the maintainer's store (6962 events) the first open took
+  294–317 ms and the second 81–110 ms; on a CJK-heavy store of 200,000 events the first open takes
+  956 ms and the fill about 90 opens. Until an event is filled, a CJK query misses it as before.
+- **The MCP server waits out another writer's lock at startup** (up to 15 s of retries) instead of
+  exiting with "database is locked".
 - **Exit codes.** Some commands that exited 0 now exit 1, among them `save`, `update`, `defer add`
   and `activity save` given a flag they do not take, `save` and `defer add` given a mistyped
-  project, `delete` given a malformed id, `self-update` when it checked nothing, and `import-jsonl`
+  project, `delete` given an id list with a malformed part (`1,abc`), `self-update` when it checked
+  nothing, and `import-jsonl`
   on input none of whose lines is a transcript event; CHANGELOG.md lists the rest. `install` exits
   3 when only the MCP registration failed. A script that relied on exit 0 there needs a look.
 - **Also in this release:** `install` no longer edits the marketplace clone's `hooks/hooks.json`;

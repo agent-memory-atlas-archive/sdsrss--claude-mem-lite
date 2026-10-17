@@ -10,6 +10,7 @@ import {
   resolveProject as _resolveProjectCached,
   _resetProjectCache,
   checkWriteProject,
+  unknownProjectNote,
 } from './project-utils.mjs';
 import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
@@ -419,13 +420,31 @@ function defangResult(result, { skillBlocks = true } = {}) {
  * registry, so the chokepoint is now unconditional — every non-verbatim result is defanged
  * for skill blocks. Do not reintroduce the opt-out for a handler that merely wants to emit
  * a wrapper; R6 P1-1 was exactly the shape where one exempt face carried the whole risk.
+ *
+ * @param {boolean} [opts.projectWrite=false] The tool writes rows under `project` and makes
+ *   its own checkWriteProject check (safeProjectWriteHandler). Every other tool given a
+ *   `project` with no rows anywhere gets the CLI dispatcher's note (unknownProjectNote) at the
+ *   top of its answer, or of its error: mem_search / mem_recent / mem_timeline(project:
+ *   "otherr-api") answered like a real project with nothing matching (pre-tag review
+ *   2026-10-16 P3-5). Here, so a new tool that takes `project` is covered by construction.
  */
-function safeHandler(fn, { verbatim = false } = {}) {
+function safeHandler(fn, { verbatim = false, projectWrite = false } = {}) {
   return async (args, extra) => {
+    let projectNote = '';
+    const withNote = (text) => (projectNote ? `Note: ${projectNote}\n\n${text}` : text);
     try {
       lastMcpRequestTime = Date.now();
       idleCleanupRan = false;
-      const result = await fn(args, extra);
+      // Before the tool runs, like the CLI's note, so a mutating tool is judged on the project
+      // as the caller named it.
+      if (!projectWrite && typeof args?.project === 'string' && args.project) {
+        projectNote = unknownProjectNote(db, args.project);
+      }
+      let result = await fn(args, extra);
+      if (projectNote && result?.content?.[0]?.type === 'text') {
+        const [first, ...rest] = result.content;
+        result = { ...result, content: [{ ...first, text: withNote(first.text) }, ...rest] };
+      }
       return verbatim ? result : defangResult(result, { skillBlocks: true });
     } catch (err) {
       // A damaged FTS5 index arrives here as SQLITE_CORRUPT_VTAB from the first MATCH.
@@ -436,11 +455,16 @@ function safeHandler(fn, { verbatim = false } = {}) {
       // (see ftsCorruptionRemedy in lib/db-unusable.mjs).
       const hint = isFtsCorruptionError(err) ? `\n${ftsCorruptionRemedy(CLI_INVOKE)}` : '';
       return defangResult({
-        content: [{ type: 'text', text: `Error: ${err.message}${hint}` }],
+        content: [{ type: 'text', text: withNote(`Error: ${err.message}${hint}`) }],
         isError: true,
       });
     }
   };
+}
+
+/** safeHandler for a tool that writes rows under `project` and checks it itself (mem_save, mem_defer). */
+function safeProjectWriteHandler(fn) {
+  return safeHandler(fn, { projectWrite: true });
 }
 
 // ─── Tool: mem_search — helper functions ────────────────────────────────────
@@ -1377,7 +1401,7 @@ server.registerTool(
     description: descriptionOf('mem_save'),
     inputSchema: memSaveSchema,
   },
-  safeHandler(async (args) => {
+  safeProjectWriteHandler(async (args) => {
     // `obs_type` → `type`: the sibling read tools all name it obs_type (see the schema
     // comment). Without this, an unknown key was dropped and the row saved as `discovery`.
     // `lesson` → `lesson_learned`: the CLI flag the description prints (D#367).
@@ -1458,7 +1482,7 @@ server.registerTool(
     description: descriptionOf('mem_defer'),
     inputSchema: memDeferSchema,
   },
-  safeHandler(async (args) => {
+  safeProjectWriteHandler(async (args) => {
     if (args.project) args = { ...args, project: resolveProjectForWrite(args.project) };
     const project = args.project || inferProject();
     const projectCheck = args.project ? checkWriteProject(db, project) : { ok: true, note: '' };

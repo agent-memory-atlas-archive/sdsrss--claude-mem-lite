@@ -851,8 +851,8 @@ export function initSchema(db) {
   // CREATE above carries it for a fresh DB; an existing one gets the ALTER here, and
   // ensureEventsFTS below recreates the drifted (4-column) index with it. The rows written before
   // it keep NULL (indexed as nothing, so found as 6.27.0 found them), and so does every event an
-  // older build writes later; idx_events_terms_pending lists exactly those, and every open fills
-  // a budget's worth of them (backfillEventSearchTerms, from ensureDb). Filled here, inside this
+  // older build writes later; every open fills a budget's worth of them from a partial index of
+  // exactly those rows (backfillEventSearchTerms, from ensureDb). Filled here, inside this
   // one transaction, the pass took 12.6–25.5 s on a CJK-heavy 200,000-event store, a 5 s hook
   // opening it first was killed with nothing committed, every time, and any process opening it
   // meanwhile got SQLITE_BUSY (round-3 pre-tag review, 2026-10-17). Additive + nullable, no
@@ -866,7 +866,6 @@ export function initSchema(db) {
     .all()
     .map((c) => c.name);
   if (!eventCols.includes('search_terms')) db.exec(`ALTER TABLE events ADD COLUMN search_terms TEXT`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_events_terms_pending ON events(id) WHERE search_terms IS NULL`);
 
   // v42: column-aware self-heal for events_fts (the one FTS table the generic ensureFTS can't
   // manage — UNINDEXED cols + custom tokenizer + events_fts_* triggers). Creates events_fts and its
@@ -1279,7 +1278,8 @@ const DEFERRED_CLEANUPS = [
 ];
 
 /**
- * Segmentation time backfillEventSearchTerms spends per open, checked row by row:
+ * How long backfillEventSearchTerms runs per open, checked after each row it segments (its reads,
+ * segmentation and the writes before; the last batch's write comes on top):
  * scripts/user-prompt-search.js opens under a 2 s host timeout.
  */
 const EVENT_TERMS_BUDGET_MS = 250;
@@ -1287,16 +1287,21 @@ const EVENT_TERMS_BUDGET_MS = 250;
 const EVENT_TERMS_BATCH = 250;
 
 /**
- * Fill events.search_terms for the rows that have none (idx_events_terms_pending), newest first,
- * the most likely to be searched. Rows are segmented one at a time until `budgetMs` has passed,
- * outside any transaction, and each batch is written in its own short IMMEDIATE transaction that
- * does not wait for another writer: if one holds the lock this stops and leaves the rest to a
- * later open, so a hook under a long lock is not held here, and with nothing to fill an open only
- * reads the (empty) index. Keyed on the rows rather than a done marker, so an event an older
- * build writes later is filled by the next open too. The UPDATE re-checks NULL, so terms another
- * writer stored meanwhile are kept; concurrent openers pick the same newest rows, and all but one
- * of them stop at the lock having segmented for nothing. The index trigger re-indexes each filled
- * row. Returns how many rows it filled and whether none is left.
+ * Fill events.search_terms for the rows that have none, newest first, the most likely to be
+ * searched. They are read from idx_events_terms_pending, a partial index of exactly those rows,
+ * created here when missing, and named in the query: statistics sampled while many rows were
+ * pending (the MCP server's startup refreshPlannerStats) turned the planner to a rowid scan of
+ * every filled row, about 41 ms per open at 200,000 events once the fill was done (review,
+ * 2026-10-17). Rows are segmented one at a time until `budgetMs` has passed, outside any
+ * transaction, and each batch is written in its own short IMMEDIATE transaction that does not
+ * wait for another writer: if one holds the lock this stops and leaves the rest to a later open,
+ * so a hook under a long lock is not held here (it may still spend the budget segmenting first),
+ * and with nothing to fill an open only reads the empty index. Keyed on the rows rather than a
+ * done marker, so an event an older build writes later is filled by the next open too. The UPDATE
+ * re-checks NULL, so terms another writer stored meanwhile are kept, and only rows it changed are
+ * counted; concurrent openers pick the same newest rows, so all but one segment for nothing. The
+ * index trigger re-indexes each filled row. Returns how many rows it filled and whether none is
+ * left.
  *
  * @param {import('better-sqlite3').Database} db
  * @param {{ budgetMs?: number, batchSize?: number }} [opts]
@@ -1307,18 +1312,30 @@ export function backfillEventSearchTerms(
   { budgetMs = EVENT_TERMS_BUDGET_MS, batchSize = EVENT_TERMS_BATCH } = {},
 ) {
   const start = performance.now();
-  const pick = db.prepare(
-    `SELECT id, title, body FROM events WHERE search_terms IS NULL AND id < ? ORDER BY id DESC LIMIT ?`,
-  );
-  const fill = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ? AND search_terms IS NULL`);
-  const write = db.transaction((rows) => {
-    for (const r of rows) fill.run(r.terms, r.id);
-  });
-  let filled = 0;
-  let cursor = Number.MAX_SAFE_INTEGER;
   const prior = db.pragma('busy_timeout', { simple: true });
   db.pragma('busy_timeout = 0');
   try {
+    const hasIndex = db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_terms_pending'`)
+      .get();
+    if (!hasIndex) {
+      try {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_events_terms_pending ON events(id) WHERE search_terms IS NULL`,
+        );
+      } catch (e) {
+        if (isDbBusyError(e)) return { filled: 0, done: false };
+        throw e;
+      }
+    }
+    const pick = db.prepare(
+      `SELECT id, title, body FROM events INDEXED BY idx_events_terms_pending
+        WHERE search_terms IS NULL AND id < ? ORDER BY id DESC LIMIT ?`,
+    );
+    const fill = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ? AND search_terms IS NULL`);
+    const write = db.transaction((rows) => rows.reduce((n, r) => n + fill.run(r.terms, r.id).changes, 0));
+    let filled = 0;
+    let cursor = Number.MAX_SAFE_INTEGER;
     for (;;) {
       const batch = pick.all(cursor, batchSize);
       if (batch.length === 0) return { filled, done: true };
@@ -1330,12 +1347,11 @@ export function backfillEventSearchTerms(
         if (performance.now() - start >= budgetMs) break;
       }
       try {
-        write.immediate(rows);
+        filled += write.immediate(rows);
       } catch (e) {
         if (isDbBusyError(e)) return { filled, done: false };
         throw e;
       }
-      filled += rows.length;
       cursor = rows.at(-1).id;
       if (performance.now() - start >= budgetMs) return { filled, done: false };
     }

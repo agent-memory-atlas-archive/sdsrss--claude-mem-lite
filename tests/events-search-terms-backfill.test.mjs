@@ -113,7 +113,7 @@ const nullIds = (d) =>
     .map((r) => r.id);
 
 describe('the events migration pass', () => {
-  it('adds the column, the 5-column index and the pending-rows index without computing any terms', () => {
+  it('adds the column and the 5-column index without computing any terms', () => {
     db = createTestDb();
     const ids = toLegacyShape(db);
     initSchema(db);
@@ -123,22 +123,66 @@ describe('the events migration pass', () => {
       .map((c) => c.name);
     expect(ftsCols).toContain('search_terms');
     expect(nullIds(db)).toEqual(ids);
-    const pending = db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'idx_events_terms_pending'`).get();
-    expect(pending?.sql).toMatch(/WHERE search_terms IS NULL/);
     // Until a row is filled, a CJK substring misses it, as on 6.27.0.
     expect(searchEvents(db, '连接池', { project: P })).toEqual([]);
   });
+});
 
-  it("the backfill's read of the rows to fill walks the pending index, not the table", () => {
+/** The SELECTs backfillEventSearchTerms prepares, as it prepares them. */
+function pickSqlOf(d, opts) {
+  const seen = [];
+  const prepare = d.prepare.bind(d);
+  d.prepare = (sql) => {
+    seen.push(sql);
+    return prepare(sql);
+  };
+  try {
+    backfillEventSearchTerms(d, opts);
+  } finally {
+    delete d.prepare;
+  }
+  return seen.filter((sql) => /^\s*SELECT\b[\s\S]*search_terms IS NULL/i.test(sql));
+}
+
+describe('the read of the rows to fill', () => {
+  // Review, 2026-10-17: the MCP server's startup refreshPlannerStats sampled events while most
+  // rows were pending; with that sqlite_stat1 row the planner read the rows to fill by a rowid
+  // scan of every filled row, about 41 ms per open at 200,000 events once the fill was done.
+  it('walks the pending index even under statistics sampled mid-fill', () => {
     db = createTestDb();
-    const plan = db
-      .prepare(
-        `EXPLAIN QUERY PLAN SELECT id, title, body FROM events WHERE search_terms IS NULL AND id < ? ORDER BY id DESC LIMIT ?`,
-      )
-      .all(Number.MAX_SAFE_INTEGER, 250)
-      .map((r) => r.detail)
-      .join(' | ');
-    expect(plan).toContain('idx_events_terms_pending');
+    toLegacyShape(db);
+    const ins = db.prepare(
+      `INSERT INTO events (project, event_type, title, body, importance, created_at_epoch) VALUES (?, 'bugfix', ?, ?, 2, ?)`,
+    );
+    for (let i = 0; i < 2000; i++) ins.run(P, `事件${i}`, `正文${i}`, Date.now() + i);
+    initSchema(db);
+    backfillEventSearchTerms(db, { budgetMs: 0, batchSize: 1 }); // creates the index
+    db.exec('ANALYZE');
+    expect(
+      db.prepare(`SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_events_terms_pending'`).get()?.stat,
+    ).toMatch(/^\d{4} /); // premise: sampled with ~2000 rows pending
+    backfillEventSearchTerms(db, { budgetMs: 60_000 });
+    const picks = pickSqlOf(db, { budgetMs: 60_000 });
+    expect(picks.length).toBeGreaterThan(0);
+    for (const sql of picks) {
+      const plan = db
+        .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+        .all(Number.MAX_SAFE_INTEGER, 250)
+        .map((r) => r.detail)
+        .join(' | ');
+      expect(plan).toContain('idx_events_terms_pending');
+    }
+  });
+
+  it('creates the pending index on a store migrated without it, then fills', () => {
+    db = createTestDb();
+    const ids = toLegacyShape(db);
+    initSchema(db);
+    db.exec(`DROP INDEX IF EXISTS idx_events_terms_pending`); // an earlier candidate's migration
+    expect(backfillEventSearchTerms(db, { budgetMs: 60_000 })).toEqual({ filled: ids.length, done: true });
+    expect(
+      db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'idx_events_terms_pending'`).get()?.sql,
+    ).toMatch(/WHERE search_terms IS NULL/);
   });
 });
 
@@ -205,7 +249,8 @@ describe('backfillEventSearchTerms', () => {
     const newest = ids.at(-1);
     race.at = 1;
     race.hook = () => db.prepare(`UPDATE events SET search_terms = 'fresh' WHERE id = ?`).run(newest);
-    backfillEventSearchTerms(db, { budgetMs: 0, batchSize: 2 });
+    // The one row segmented was stored meanwhile, so nothing is counted as filled.
+    expect(backfillEventSearchTerms(db, { budgetMs: 0, batchSize: 2 })).toEqual({ filled: 0, done: false });
     expect(db.prepare(`SELECT search_terms FROM events WHERE id = ?`).get(newest).search_terms).toBe('fresh');
   });
 

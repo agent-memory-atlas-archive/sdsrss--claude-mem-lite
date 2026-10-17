@@ -113,9 +113,9 @@ jobs:
 
   # An update swaps the code home one rename at a time, so a killed update leaves files of two
   # releases side by side. scripts/swap-mixed-tree.mjs checks that every entry point still loads
-  # at every split point from the last release tag to this commit (D#397). Here and not in
-  # publish.yml: Release runs only after the tag is pushed, so a failure there strands a tag
-  # (v6.0.0 and v6.28.0 went red that way); here it shows on the push before anyone tags.
+  # at every split point from each of the newest release tags to this commit (D#397). Here and
+  # not in publish.yml: Release runs only after the tag is pushed, so a failure there strands a
+  # tag (v6.0.0 and v6.28.0 went red that way); here it shows on the push before anyone tags.
   swap-mixed-tree:
     runs-on: ubuntu-latest
     steps:
@@ -127,11 +127,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Every entry point loads at every split point of a killed update from the last release
+      # The three newest tags before this commit: a tag that never shipped (v6.28.0) is one of them,
+      # and users updating from the release before it are checked too.
+      - name: Every entry point loads at every split point of a killed update from recent releases
         run: |
-          PREV="$(git describe --tags --abbrev=0 --match 'v*' HEAD^)"
-          echo "From ${PREV} to $(git rev-parse --short HEAD)"
-          node scripts/swap-mixed-tree.mjs "${PREV}" HEAD
+          status=0
+          for PREV in $(git tag --list 'v*' --sort=-v:refname --merged HEAD^ | head -n 3); do
+            echo "From ${PREV} to $(git rev-parse --short HEAD)"
+            node scripts/swap-mixed-tree.mjs "${PREV}" HEAD || status=1
+          done
+          exit "${status}"
 
   test:
     runs-on: ubuntu-latest

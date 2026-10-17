@@ -70,9 +70,11 @@ jobs:
 
       - name: CHANGELOG has an entry for this tag
         # The publish job takes the GitHub Release body from it, after npm publish; a missing
-        # entry has to fail here, before anything is published.
+        # entry has to fail here, before anything is published. tests/changelog-entry.test.mjs
+        # makes the same check on every commit, so a release commit without one fails before the
+        # tag exists.
         run: |
-          awk -v t="${GITHUB_REF_NAME}" '$1 == "##" && $2 == t {f = 1; next} f && /^## /{exit} f' CHANGELOG.md > release-notes.md
+          awk -v t="${GITHUB_REF_NAME}" -f scripts/changelog-entry.awk CHANGELOG.md > release-notes.md
           if ! grep -q '[^[:space:]]' release-notes.md; then
             echo "::error::CHANGELOG.md has no entry headed '## ${GITHUB_REF_NAME}'"
             exit 1
@@ -213,7 +215,7 @@ jobs:
       # and with none since #13 it was a single compare link, set by hand after every release.
       # validate checked the entry exists, before anything was published.
       - name: Release notes from the CHANGELOG entry
-        run: awk -v t="${GITHUB_REF_NAME}" '$1 == "##" && $2 == t {f = 1; next} f && /^## /{exit} f' CHANGELOG.md > release-notes.md
+        run: awk -v t="${GITHUB_REF_NAME}" -f scripts/changelog-entry.awk CHANGELOG.md > release-notes.md
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:

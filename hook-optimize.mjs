@@ -397,15 +397,17 @@ Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}`;
         // regresses recall. Never touches the user's curated title / narrative / lesson /
         // type / importance, and never stamps optimized_at, so the wide pass keeps its
         // own candidates exactly as the alias and scopes passes leave them.
-        const conceptsPrompt = `Extract search concepts and concrete facts from this coding memory. Return ONLY valid JSON, no markdown fences.
-
-Title: ${truncate(cand.title || '(untitled)', 200)}
-Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}
+        // Instructions and the guard in `system`, the stored row in `user` (D#375; the alias
+        // branch above says why — concepts and facts are appended to the FTS text too).
+        const system = `Extract search concepts and concrete facts from this coding memory. Return ONLY valid JSON, no markdown fences.
 
 JSON: {"concepts":["kw1","kw2"],"facts":["specific fact 1","specific fact 2"]}
 concepts: 3-8 short keyword phrases naming what this memory is ABOUT (systems, components, error classes, techniques).
-facts: 1-4 specific, checkable statements the narrative actually asserts. Omit rather than invent.`;
-        const parsed = await callModelJSONAsync(conceptsPrompt, 'haiku', {
+facts: 1-4 specific, checkable statements the narrative actually asserts. Omit rather than invent.
+${MEMORY_INPUT_GUARD}`;
+        const user = `Title: ${truncate(cand.title || '(untitled)', 200)}
+Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}`;
+        const parsed = await callModelJSONAsync({ system, user }, 'haiku', {
           timeout: BG_LLM_TIMEOUT_MS,
           maxTokens: 300,
         });

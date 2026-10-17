@@ -61,8 +61,8 @@ describe('MEMORY_INPUT_GUARD', () => {
     // hook-llm.mjs: SHARED_OBS_SCHEMA_TAIL (covers single- and multi-entry episode
     // extraction) and the session-summary system prompt = 2.
     // hook-optimize.mjs: identifySynonymGroups (the normalize path R10-P3-21 was about),
-    // cluster-merge and the narrow/wide re-enrich prompt (D367), and re-enrich's aliases branch
-    // (D#375) = 4.
+    // cluster-merge and the narrow/wide re-enrich prompt (D367), and re-enrich's aliases and
+    // concepts branches (D#375) = 5.
     // lib/save-enrich.mjs: the save-time enrich prompt (D367) = 1.
     // A prompt edit that drops one injection point regresses this count. Which channel the
     // stored text travels in is asserted behaviourally in stored-text-prompt-boundary.test.mjs.
@@ -70,7 +70,7 @@ describe('MEMORY_INPUT_GUARD', () => {
       Object.keys(CONSUMERS).map((f) => [f, (read(f).match(/\$\{MEMORY_INPUT_GUARD\}/g) || []).length]),
     );
     expect(counts['hook-llm.mjs']).toBeGreaterThanOrEqual(2);
-    expect(counts['hook-optimize.mjs']).toBeGreaterThanOrEqual(4);
+    expect(counts['hook-optimize.mjs']).toBeGreaterThanOrEqual(5);
     expect(counts['lib/save-enrich.mjs']).toBeGreaterThanOrEqual(1);
   });
 

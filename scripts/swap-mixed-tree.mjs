@@ -8,8 +8,8 @@
 // A kill after entry i leaves SOURCE_FILES[0..i] at <new> and everything else at <old>. For every
 // split point this walks the import graph (AST, not text) from each entry point, static imports
 // and import() calls with a literal path alike, and reports a module that is missing or a named
-// import its target does not export (for a dynamic import, the names a `const { … } =` declaration
-// or an `(await …).name` read binds; any other shape, assignment destructuring included, is checked
+// import its target does not export (for a dynamic import, the names its result is destructured
+// into or read by, Promise.all elements included — see dynamicImports; any other shape is checked
 // for the module's existence only). The two
 // shapes it catches: a module swapped before something it imports (source-files.mjs states the
 // order rule), and an export removed that a not-yet-swapped module of <old> still imports. A
@@ -57,36 +57,97 @@ async function manifest(rev) {
   }
 }
 
+/** Calls fn on every AST node under (and including) n. */
+function walk(n, fn) {
+  const stack = [n];
+  while (stack.length > 0) {
+    const x = stack.pop();
+    fn(x);
+    for (const k of Object.keys(x))
+      for (const c of [x[k]].flat()) if (c && typeof c.type === 'string') stack.push(c);
+  }
+}
+
 /**
- * Every import() call with a literal path in the module, with the names it destructures:
- * `const { a } = await import(...)` and `(await import(...)).a` name theirs; any other use (a
- * namespace binding, `.then`, assignment destructuring `({ a } = await import(...))`, an element of
- * Promise.all) checks only that the module exists.
+ * Every import() call with a literal path in the module, with the names its result is read by:
+ * `const { a } = await import(...)`, `({ a } = await import(...))`, `(await import(...)).a`, an
+ * element of `const [{ a }, m] = await Promise.all([import(...), …])`, and a namespace bound to a
+ * name (a declaration, an assignment or a Promise.all element) by the `m.a` reads in the function
+ * that binds it. A name the code probes for (`m.a?.()`, `m.a ?? x`, `typeof m.a`, `if (m.a)`) is
+ * one it expects may be missing, so it is not checked. Any other use (`.then`, a namespace passed
+ * on) checks only that the module exists.
  */
 function dynamicImports(ast) {
-  const out = [];
-  const stack = [[ast, null, null]];
-  while (stack.length > 0) {
-    const [n, parent, grand] = stack.pop();
-    if (n.type === 'ImportExpression' && n.source.type === 'Literal' && typeof n.source.value === 'string') {
-      let names = [];
-      if (parent?.type === 'AwaitExpression') {
-        if (grand?.type === 'VariableDeclarator' && grand.id.type === 'ObjectPattern')
-          names = grand.id.properties
-            .filter((q) => q.type === 'Property' && !q.computed)
-            .map((q) => q.key.name ?? q.key.value);
-        else if (grand?.type === 'MemberExpression' && !grand.computed) names = [grand.property.name];
-      }
-      out.push({ spec: n.source.value, names, dynamic: true });
-    }
-    for (const k of Object.keys(n)) {
-      const v = n[k];
-      if (Array.isArray(v)) {
-        for (const x of v) if (x && typeof x.type === 'string') stack.push([x, n, parent]);
-      } else if (v && typeof v.type === 'string') stack.push([v, n, parent]);
-    }
+  const parent = new Map();
+  const found = [];
+  walk(ast, (n) => {
+    for (const k of Object.keys(n))
+      for (const c of [n[k]].flat()) if (c && typeof c.type === 'string') parent.set(c, n);
+    if (n.type === 'ImportExpression' && n.source.type === 'Literal' && typeof n.source.value === 'string')
+      found.push(n);
+  });
+  return found.map((n) => ({ spec: n.source.value, names: boundNames(n, parent), dynamic: true }));
+}
+
+const isPromiseAll = (c) =>
+  c.type === 'MemberExpression' &&
+  !c.computed &&
+  c.object.type === 'Identifier' &&
+  c.object.name === 'Promise' &&
+  c.property.name === 'all';
+
+function boundNames(imp, parent) {
+  let awaited = parent.get(imp);
+  let index = null; // the element of Promise.all's array, when that is where the import() sits
+  if (awaited?.type === 'ArrayExpression') {
+    const call = parent.get(awaited);
+    if (call?.type !== 'CallExpression' || call.arguments[0] !== awaited || !isPromiseAll(call.callee))
+      return [];
+    index = awaited.elements.indexOf(imp);
+    awaited = parent.get(call);
   }
-  return out;
+  if (awaited?.type !== 'AwaitExpression') return [];
+  const site = parent.get(awaited);
+  let target = null;
+  if (site?.type === 'VariableDeclarator' && site.init === awaited) target = site.id;
+  else if (site?.type === 'AssignmentExpression' && site.operator === '=' && site.right === awaited)
+    target = site.left;
+  else if (site?.type === 'MemberExpression' && site.object === awaited && !site.computed && index === null)
+    return [site.property.name];
+  if (index !== null) target = target?.type === 'ArrayPattern' ? target.elements[index] : null;
+  if (target?.type === 'ObjectPattern')
+    return target.properties
+      .filter((q) => q.type === 'Property' && !q.computed)
+      .map((q) => q.key.name ?? q.key.value);
+  if (target?.type === 'Identifier') return memberReads(target.name, site, parent);
+  return [];
+}
+
+/** The `name.x` reads in the function (or module) holding `site`, minus the names it probes for. */
+function memberReads(name, site, parent) {
+  let scope = site;
+  while (scope && !/Function|Program/.test(scope.type)) scope = parent.get(scope);
+  const read = new Set();
+  const probed = new Set();
+  walk(scope, (n) => {
+    if (
+      n.type !== 'MemberExpression' ||
+      n.computed ||
+      n.object.type !== 'Identifier' ||
+      n.object.name !== name
+    )
+      return;
+    const up = parent.get(n);
+    if (up?.type === 'AssignmentExpression' && up.left === n) return;
+    const tested =
+      n.optional ||
+      (up?.type === 'CallExpression' && up.callee === n && up.optional) ||
+      (up?.type === 'LogicalExpression' && up.left === n) ||
+      (up?.type === 'UnaryExpression' && (up.operator === 'typeof' || up.operator === '!')) ||
+      ((up?.type === 'IfStatement' || up?.type === 'ConditionalExpression') && up.test === n);
+    (tested ? probed : read).add(n.property.name);
+  });
+  return [...read].filter((x) => !probed.has(x));
 }
 
 const parsed = new Map();

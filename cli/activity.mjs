@@ -9,7 +9,7 @@
 // events_fts via triggers.
 
 import { inferProject } from '../utils.mjs';
-import { resolveProject } from '../project-utils.mjs';
+import { resolveProject, checkWriteProject } from '../project-utils.mjs';
 import { resolveCliProject as cliProject } from '../lib/cli-project.mjs';
 import { parseArgs, out, fail, rejectBareStringFlags } from './common.mjs';
 import { parseIntFlag, isNumericToken } from '../lib/cli-flags.mjs';
@@ -42,9 +42,11 @@ export async function cmdActivity(db, args) {
   // `save` CREATES a row, so it keeps plain inferProject(): the DB-aware fallback is a read
   // affordance, and applying it to a write absorbs a not-yet-born subproject's first event
   // into the enclosing repo (pre-tag review, reproduced). Every other subcommand reads or
-  // operates on rows that already exist, where falling back is what finds them.
+  // operates on rows that already exist, where falling back is what finds them. A named
+  // project is resolved for `save` the way `save` and `defer add` resolve theirs: exact
+  // matching only, then checkWriteProject below.
   const project = flags.project
-    ? resolveProject(db, flags.project)
+    ? resolveProject(db, flags.project, sub === 'save' ? { mode: 'write' } : undefined)
     : sub === 'save'
       ? inferProject()
       : cliProject(db);
@@ -86,6 +88,13 @@ export async function cmdActivity(db, args) {
       fail(`[mem] Invalid importance "${flags.importance}". Must be 1, 2, or 3.`);
       return;
     }
+    // A near miss of an existing project is refused, a new name is noted: the check `save` and
+    // `defer add` make (pre-tag review 2026-10-16 P3-4). stdout stays the JSON line.
+    const projectCheck = flags.project ? checkWriteProject(db, project) : { ok: true, note: '' };
+    if (!projectCheck.ok) {
+      fail(`[mem] ${projectCheck.message}`);
+      return;
+    }
     const id = saveEvent(db, {
       project,
       event_type: type,
@@ -95,6 +104,7 @@ export async function cmdActivity(db, args) {
       file_paths,
     });
     out(JSON.stringify({ ok: true, id }));
+    if (projectCheck.note) process.stderr.write(`[mem] Saved event E#${id}${projectCheck.note}\n`);
     return;
   }
 

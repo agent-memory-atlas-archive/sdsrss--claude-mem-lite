@@ -3521,6 +3521,13 @@ async function cmdImportJsonl(db, argv) {
     return;
   }
   const project = flags.project ? resolveProject(db, flags.project, { mode: 'write' }) : inferProject();
+  // The check `save` and `defer add` make: a near miss is refused before anything is imported,
+  // a new name is noted (pre-tag review 2026-10-16 P3-4).
+  const projectCheck = flags.project ? checkWriteProject(db, project) : { ok: true, note: '' };
+  if (!projectCheck.ok) {
+    fail(`[mem] ${projectCheck.message}`);
+    return;
+  }
   const fs = await import('fs');
   const { join: pjoin, resolve } = await import('path');
   const abs = resolve(target);
@@ -3598,6 +3605,7 @@ async function cmdImportJsonl(db, argv) {
     // totalObs (lib/import-jsonl.mjs), so they already count as "something was imported"
     // — an orphan-only first import must not fall through to the "already imported"
     // no-op branch below.
+    if (projectCheck.note) out(`[mem] Imported${projectCheck.note}.`);
     out(`[mem] Try: claude-mem-lite recent 5 --project ${project}`);
   } else if (totalRecognized > 0) {
     // Lines WERE Claude Code transcript events but produced no new rows — the file

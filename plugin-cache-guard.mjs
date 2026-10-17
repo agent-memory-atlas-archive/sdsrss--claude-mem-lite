@@ -102,14 +102,21 @@ export function pluginCacheHookEvents(root) {
   return events.length > 0 ? { ok: true, events, reason: null } : { ok: false, events: [], reason: 'empty' };
 }
 
+// `.<plugin>/` or `/<plugin>/`, with either separator: a Windows settings path carries
+// backslashes, and the gate never saw install-managed hooks there (v6.28.0 pre-tag review,
+// install P3-6). hook-update.mjs keeps an inline copy of this rule.
+function managedPathRe(plugin) {
+  const name = plugin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`[./\\\\]${name}[/\\\\]`);
+}
+
 export function hasInstallManagedHooks(opts) {
   const plugin = opts?.plugin || DEFAULT_PLUGIN;
   const settingsPath = join(claudeConfigDirFor(opts?.home), 'settings.json');
   if (!existsSync(settingsPath)) return false;
   try {
     const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    const serialized = JSON.stringify(s.hooks || {});
-    return serialized.includes(`.${plugin}/`) || serialized.includes(`/${plugin}/`);
+    return managedPathRe(plugin).test(JSON.stringify(s.hooks || {}));
   } catch {
     return false;
   }
@@ -145,6 +152,10 @@ export function settingsHookCommands(home) {
   return out;
 }
 
+// POSIX, or Windows (`C:\…`, `C:/…`, `\\server\…`): a Windows path counted as "nothing to check"
+// and kept the string answer, so a deleted install's entries there would authorise the clear.
+const ABSOLUTE_RE = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
+
 /**
  * Absolute paths a hook command names. install.mjs writes `node "<abs>" …` /
  * `bash "<abs>"`, so the quoted form is the shipped shape; the unquoted arm covers
@@ -152,9 +163,9 @@ export function settingsHookCommands(home) {
  */
 function commandPaths(command) {
   const paths = [];
-  for (const m of command.matchAll(/"([^"]+)"/g)) if (m[1].startsWith('/')) paths.push(m[1]);
+  for (const m of command.matchAll(/"([^"]+)"/g)) if (ABSOLUTE_RE.test(m[1])) paths.push(m[1]);
   if (paths.length === 0) {
-    for (const tok of command.split(/\s+/)) if (tok.startsWith('/')) paths.push(tok);
+    for (const tok of command.split(/\s+/)) if (ABSOLUTE_RE.test(tok)) paths.push(tok);
   }
   return paths;
 }
@@ -186,10 +197,8 @@ function commandPaths(command) {
  */
 export function hasLiveInstallManagedHooks(opts) {
   if (!hasInstallManagedHooks(opts)) return false;
-  const plugin = opts?.plugin || DEFAULT_PLUGIN;
-  const managed = settingsHookCommands(opts?.home).filter(
-    (c) => c.includes(`.${plugin}/`) || c.includes(`/${plugin}/`),
-  );
+  const managedPath = managedPathRe(opts?.plugin || DEFAULT_PLUGIN);
+  const managed = settingsHookCommands(opts?.home).filter((c) => managedPath.test(c));
   let checked = 0;
   for (const c of managed) {
     for (const p of commandPaths(c)) {

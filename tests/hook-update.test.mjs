@@ -1046,6 +1046,61 @@ describe('cache hook residue clearing', () => {
       process.env.HOME = origHome;
     }
   });
+
+  // v6.28.0 pre-tag review, install P3-6: the inline mirror of plugin-cache-guard's gate looked
+  // for `.claude-mem-lite/`, so a Windows settings path (backslashes) never owned the hooks.
+  function residueHome(name, command) {
+    const home = makeDir(name);
+    const cacheBase = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
+    const manifest = join(cacheBase, '6.27.0', 'hooks', 'hooks.json');
+    mkdirSync(dirname(manifest), { recursive: true });
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'x' }] }] },
+      }),
+    );
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({ hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command }] }] } }),
+    );
+    return { home, manifest };
+  }
+  async function residueCleared(home) {
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { clearCacheHookResidue } = await loadModule({ CLAUDE_MEM_DIR: makeDataDir() });
+      return clearCacheHookResidue();
+    } finally {
+      process.env.HOME = origHome;
+    }
+  }
+
+  it('clears for a backslash-separated install path that exists', async () => {
+    // A Windows path cannot exist on this machine; a file whose NAME carries the backslashes
+    // stands in for one, so the separator rule meets an existing path.
+    const dir = makeDir('mem-cache-residue-win-live');
+    const launcher = join(dir, '.claude-mem-lite\\scripts\\hook-launcher.mjs');
+    writeFileSync(launcher, '// installed launcher\n');
+    const { home, manifest } = residueHome(
+      'mem-cache-residue-win-live-home',
+      `node "${launcher}" hook.mjs stop`,
+    );
+    expect(await residueCleared(home)).toBe(1);
+    expect(JSON.parse(readFileSync(manifest, 'utf8')).hooks).toEqual({});
+  });
+
+  it('refuses to clear for a Windows install path that is gone', async () => {
+    const { home, manifest } = residueHome(
+      'mem-cache-residue-win-dead',
+      'node "C:\\Users\\u\\.claude-mem-lite\\scripts\\hook-launcher.mjs" hook.mjs stop',
+    );
+    const original = readFileSync(manifest, 'utf8');
+    expect(await residueCleared(home)).toBe(0);
+    expect(readFileSync(manifest, 'utf8')).toBe(original);
+  });
 });
 
 describe('plugin cache pruning', () => {

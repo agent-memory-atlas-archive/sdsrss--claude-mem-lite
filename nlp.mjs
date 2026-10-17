@@ -81,10 +81,17 @@ const ASCII_RUN = /[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?/g;
  * Runs shorter than two characters are skipped (a lone `5` or `A` matches noise), and a run
  * that also stands alone elsewhere in `text` is skipped because the index already holds it,
  * which also makes appending the result idempotent.
+ *
+ * Exported though nothing in this release imports it: v6.28.x's schema.mjs does, and an update
+ * swaps this file before schema.mjs, so for that window (and after a killed swap, until a
+ * repair) the previous release's schema.mjs loads against it. Unexported, every entry point
+ * failed to load at 114 of 168 split points from v6.28.1 (scripts/swap-mixed-tree.mjs).
+ *
+ * @public
  * @param {string} text
  * @returns {string} space-separated runs, '' when there are none
  */
-function gluedAsciiRuns(text) {
+export function gluedAsciiRuns(text) {
   if (!text || !HAN_CHAR.test(text)) return '';
   const tokens = String(text).match(UNICODE61_TOKEN) || [];
   const standalone = new Set(tokens.filter((t) => !HAN_CHAR.test(t)).map((t) => t.toLowerCase()));

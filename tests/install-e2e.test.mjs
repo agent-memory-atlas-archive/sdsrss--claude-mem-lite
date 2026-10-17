@@ -841,10 +841,45 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
       join(home, '.claude.json'),
       JSON.stringify({ mcpServers: { 'mem-lite': { command: 'node', args: ['/x/server.mjs'] } } }),
     );
-    const out = runInstall('uninstall', home, [], { PATH: `${failBin}:${process.env.PATH}` });
+    let out;
+    let status = 0;
+    try {
+      out = runInstall('uninstall', home, [], { PATH: `${failBin}:${process.env.PATH}` });
+    } catch (e) {
+      status = e.status;
+      out = e.stdout || '';
+    }
     expect(out).not.toMatch(/not found or already removed/);
     expect(out).toMatch(/still registered/);
     expect(out).toMatch(/claude mcp remove -s user mem-lite/);
+    // v6.28.0 pre-tag review, install P3-3: and exited 0 after "Done!", the leftover read as success.
+    expect(status).toBe(3);
+    expect(out.trim().split('\n').pop()).toMatch(/MCP server is still registered/);
+  });
+
+  // v6.28.0 pre-tag review, install P3-3: with no `claude` on PATH uninstall warned, printed
+  // "Done!" and exited 0 while ~/.claude.json still registered mem-lite, so `uninstall && …` read
+  // the leftover as success. install exits 3 for the mirror case.
+  it('uninstall exits 3 when claude cannot run and the registration is still there', () => {
+    const nodeOnly = join(home, 'node-only-bin');
+    mkdirSync(nodeOnly, { recursive: true });
+    symlinkSync(process.execPath, join(nodeOnly, 'node'));
+    writeFileSync(
+      join(home, '.claude.json'),
+      JSON.stringify({ mcpServers: { 'mem-lite': { command: 'node', args: ['/x/server.mjs'] } } }),
+    );
+    let out;
+    let status = 0;
+    try {
+      out = runInstall('uninstall', home, [], { PATH: `${nodeOnly}:/usr/bin:/bin` });
+    } catch (e) {
+      status = e.status;
+      out = e.stdout || '';
+    }
+    expect(out).toMatch(/could not run `claude`/);
+    expect(status).toBe(3);
+    expect(out).not.toMatch(/Done!/);
+    expect(out.trim().split('\n').pop()).toMatch(/MCP server is still registered/);
   });
 
   // Round 2 (install B15): install printed "✓ CLI: ~/.local/bin/claude-mem-lite → …" with that

@@ -1631,7 +1631,8 @@ async function install() {
 
 /**
  * install's exit code when everything was installed except the MCP registration (B8). Its own
- * code rather than 1, so repair can tell it from an install that failed.
+ * code rather than 1, so repair can tell it from an install that failed. uninstall exits with it
+ * when everything but the registration's removal was done.
  */
 export const EXIT_MCP_UNREGISTERED = 3;
 
@@ -1760,8 +1761,8 @@ async function uninstall() {
   }
   // A failed `claude mcp remove` is "not registered" only when ~/.claude.json agrees: any other
   // failure read as "not found or already removed" with the server still registered (E2E
-  // 2026-10-16 round 2).
-  const stillRegistered = claudeMissing ? [] : owned.names.filter((name) => userMcpRegistered(name));
+  // 2026-10-16 round 2). Asked when `claude` could not run too: it decides the exit code below.
+  const stillRegistered = owned.names.filter((name) => userMcpRegistered(name));
   if (claudeMissing) {
     warn('MCP server: could not run `claude` (not on PATH), so its registration was not removed. Run:');
     for (const name of owned.names) log(`    claude mcp remove -s user ${name}`);
@@ -1930,6 +1931,15 @@ async function uninstall() {
     log('  `uninstall --purge` removes the directory, memories included');
   }
 
+  // "Done!" and exit 0 followed a registration left in ~/.claude.json, so `uninstall && …` read
+  // it as success (v6.28.0 pre-tag review, install P3-3). install's code for the mirror case.
+  if (stillRegistered.length > 0) {
+    console.log(
+      '\n  ✗ Uninstalled, but the MCP server is still registered: run the "claude mcp remove" command above, then restart Claude Code.\n',
+    );
+    process.exitCode = EXIT_MCP_UNREGISTERED;
+    return;
+  }
   console.log('\n  Done!\n');
 }
 

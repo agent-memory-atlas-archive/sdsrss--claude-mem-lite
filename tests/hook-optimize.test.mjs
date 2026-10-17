@@ -2329,8 +2329,12 @@ describe('smart-compress', () => {
     // QUOTED, so it matches the JSON TEMPLATE and not the prose line that explains the
     // field. The bare-string form was walked straight past by the real revert shape
     // (delete the key from the template, keep the explanation) — mutation M16.
-    expect(prompt).toContain('"should_compress"');
-    expect(prompt).not.toContain('Summarize these related');
+    // RESTATED for D#375: the prompt is `{ system, user }`, and the verdict is an
+    // instruction, so it must be in `system` (stored-text-prompt-boundary.test.mjs asserts
+    // the members are in `user`).
+    expect(prompt.system).toContain('"should_compress"');
+    expect(prompt.system).not.toContain('Summarize these related');
+    expect(prompt.user).not.toContain('Summarize these related');
   });
 });
 

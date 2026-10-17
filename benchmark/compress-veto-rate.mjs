@@ -630,11 +630,16 @@ export function runSelfChecks() {
     // 4. The ruler drives the SHIPPED prompt, and drives it with its own input. Quoted,
     //    because the bare-string form was walked past by the real revert shape (mutation
     //    M16: delete the key from the JSON template, keep the prose that explains it).
+    //    Since D#375 the prompt is `{ system, user }`: the verdict is an instruction, the
+    //    cluster is data, so each is looked for in its own channel.
     const prompt = buildCompressPrompt(UNRELATED[0]);
-    check('the shipped prompt asks for the verdict', prompt.includes('"should_compress"'));
+    check(
+      'the shipped prompt asks for the verdict',
+      typeof prompt?.system === 'string' && prompt.system.includes('"should_compress"'),
+    );
     check(
       'the prompt is built from the cluster, not a constant',
-      prompt.includes(UNRELATED[0][0].title),
+      typeof prompt?.user === 'string' && prompt.user.includes(UNRELATED[0][0].title),
       UNRELATED[0][0].title,
     );
 

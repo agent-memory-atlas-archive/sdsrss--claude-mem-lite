@@ -1593,8 +1593,8 @@ export function clusterForCompression(candidates) {
 /**
  * The smart-compress prompt. Exported so a RULER can measure the shipped text.
  *
- * Extracted for benchmark/compress-veto-rate.mjs (D#10). It has to be one string in one
- * place: a ruler that retypes the prompt measures its own copy, which is exactly how
+ * Extracted for benchmark/compress-veto-rate.mjs (D#10). It has to be built in one place:
+ * a ruler that retypes the prompt measures its own copy, which is exactly how
  * tests/handoff-simulation.test.mjs came to assert on a re-implementation while the real
  * hook emitted a block no user had ever seen.
  *
@@ -1615,8 +1615,12 @@ export function clusterForCompression(candidates) {
  * on. This veto is therefore the ONLY thing standing between the heuristic and an
  * unattended write that hides real rows.
  *
+ * D#375: instructions, the veto and MEMORY_INPUT_GUARD in `system`, the members in `user`
+ * (the cluster-merge prompt says why). A member's narrative is the one input that could
+ * talk the veto out of refusing, so it must not travel in the instruction channel.
+ *
  * @param {Array<object>} observations cluster members
- * @returns {string}
+ * @returns {{ system: string, user: string }}
  */
 export function buildCompressPrompt(observations) {
   const obsDescriptions = observations
@@ -1626,14 +1630,15 @@ export function buildCompressPrompt(observations) {
     )
     .join('\n');
 
-  return `These code memory observations were grouped by a heuristic that may be wrong. FIRST decide whether they are one story worth collapsing into a single memory. Return ONLY valid JSON.
-
-Observations:
-${obsDescriptions}
+  const system = `These code memory observations were grouped by a heuristic that may be wrong. FIRST decide whether they are one story worth collapsing into a single memory. Return ONLY valid JSON.
 
 JSON: {"should_compress":true,"title":"descriptive summary ≤120 chars","narrative":"comprehensive summary ≤800 chars preserving key decisions and lessons","concepts":["kw1","kw2"],"facts":["all specific facts preserved"],"lesson_learned":"most important synthesized lesson or 'none'","search_aliases":["alt search 1","alt search 2"]}
 should_compress: false when these are about unrelated systems, files or problems, or when a merged summary would lose more than it saves. Compressing HIDES the originals from search, so refuse when in doubt. When false, the other fields are ignored.
-When true: preserve all important decisions, lessons, and specific facts.`;
+When true: preserve all important decisions, lessons, and specific facts.
+${MEMORY_INPUT_GUARD}`;
+  const user = `Observations:
+${obsDescriptions}`;
+  return { system, user };
 }
 
 export async function executeSmartCompressCluster(db, observations, project) {
@@ -1643,9 +1648,9 @@ export async function executeSmartCompressCluster(db, observations, project) {
   if (!gotSlot) return { compressed: false };
 
   try {
-    const prompt = buildCompressPrompt(observations);
+    const { system, user } = buildCompressPrompt(observations);
 
-    const parsed = await callModelJSONAsync(prompt, 'sonnet', {
+    const parsed = await callModelJSONAsync({ system, user }, 'sonnet', {
       timeout: BG_LLM_TIMEOUT_MS,
       maxTokens: 1000,
     });

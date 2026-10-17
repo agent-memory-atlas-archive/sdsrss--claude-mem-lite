@@ -276,6 +276,44 @@ describe('a hook is ours only when the product or one of OUR entries anchors it'
     });
   });
 
+  // v6.28.0 pre-tag review, install P3-1: the entry names alone made a user's launcher ours when
+  // it ran `hook.mjs <one of our events>` or `scripts/<one of our scripts>`, wherever it lived, so
+  // install, uninstall, cleanup-hooks and the update prune deleted it, and it vouched for its own
+  // root, which took a dead prefilter-named hook beside it as well. The names anchor only a
+  // launcher that is gone (the relocated, deleted install they exist for).
+  it("a user's existing launcher running one of our entry names is not ours", () => {
+    withRoot((root) => {
+      const launcher = join(root, 'scripts', 'hook-launcher.mjs');
+      const stop = `node "${launcher}" hook.mjs stop`;
+      const recall = `node "${launcher}" scripts/pre-tool-recall.js`;
+      const deadPrefilter = `bash ${join(root, 'scripts', 'post-tool-use.sh')} --notify`;
+      expect(isMemHook(mk(stop))).toBe(false);
+      expect(isMemHook(mk(recall))).toBe(false);
+      const settings = { hooks: { Stop: [mk(stop)], PostToolUse: [mk(deadPrefilter)] } };
+      const roots = ourInstallRoots(settings, {});
+      expect(roots.has(root), 'it vouches for its own root').toBe(false);
+      expect(isMemHook(mk(deadPrefilter), roots)).toBe(false);
+      // The update prune: an entry of ours the launcher's root lacks.
+      const skill = `node "${launcher}" scripts/pre-skill-bridge.js`;
+      const pruned = pruneDanglingMemHooks({ hooks: { PreToolUse: [mk(skill)] } }, '/nonexistent-install');
+      expect(pruned.removed).toEqual([]);
+      // The same launcher in a root that carries our package stays ours.
+      ourPackage(root);
+      expect(isMemHook(mk(stop))).toBe(true);
+    });
+    // "Gone" is asked of an absolute path only: a relative one is missing or present depending
+    // on where the installer runs, and installs write absolute paths.
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cml-anchor-cwd-'));
+    const prev = process.cwd();
+    try {
+      process.chdir(elsewhere);
+      expect(isMemHook(mk('node scripts/hook-launcher.mjs hook.mjs stop'))).toBe(false);
+    } finally {
+      process.chdir(prev);
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   // The entry list is what recognises a relocated install whose directory is gone, so every
   // entry a release writes must be on it — read from the plugin manifest, whose entries
   // install.mjs writes too (tests/audit-silent-20260814.test.mjs diffs the two).
@@ -390,6 +428,36 @@ describe('cleanup-hooks keeps user hooks in and around our groups', () => {
         env: { ...process.env, HOME: home, CLAUDE_MEM_DIR: join(root, 'data'), MEM_NO_AUTO_ADOPT: '1' },
       });
       expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/No claude-mem-lite hooks found/);
+      expect(readFileSync(p, 'utf8')).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // v6.28.0 pre-tag review, install P3-1, home B: a user's launcher running `hook.mjs stop` and a
+  // missing post-tool-use.sh beside it were both removed on a machine without the product.
+  it("leaves a user's launcher that runs one of our entry names, and the dead hook beside it", () => {
+    const root = mkdtempSync(join(tmpdir(), 'cml-hookprune-p31-'));
+    try {
+      const home = join(root, 'home');
+      mkdirSync(join(home, 'tools', 'scripts'), { recursive: true });
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(join(home, 'tools/scripts/hook-launcher.mjs'), '// the user launcher');
+      const commands = [
+        `node "${home}/tools/scripts/hook-launcher.mjs" hook.mjs stop`,
+        `bash ${home}/tools/scripts/post-tool-use.sh --notify`,
+      ];
+      const p = join(home, '.claude', 'settings.json');
+      const before = JSON.stringify({
+        hooks: { Stop: commands.map((command) => ({ hooks: [{ type: 'command', command }] })) },
+      });
+      writeFileSync(p, before);
+      const r = spawnSync(process.execPath, [join(REPO, 'install.mjs'), 'cleanup-hooks'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, CLAUDE_MEM_DIR: join(root, 'data'), MEM_NO_AUTO_ADOPT: '1' },
+      });
+      expect(r.status, r.stderr).toBe(0);
       expect(r.stdout).toMatch(/No claude-mem-lite hooks found/);
       expect(readFileSync(p, 'utf8')).toBe(before);
     } finally {

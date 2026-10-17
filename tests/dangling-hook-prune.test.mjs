@@ -162,6 +162,9 @@ describe('resolution base is the command, not the caller (R9 review, adversarial
     const other = join(root, 'other-install2');
     mkdirSync(join(other, 'scripts'), { recursive: true });
     writeFileSync(join(other, 'scripts', 'hook-launcher.mjs'), '// launcher');
+    // Our package, as every install root has: an existing launcher whose root lacks it is a
+    // user's own, whatever entry it runs (v6.28.0 pre-tag review, install P3-1).
+    writeFileSync(join(other, 'package.json'), '{"name":"claude-mem-lite"}');
     const cmd = `node "${join(other, 'scripts', 'hook-launcher.mjs')}" scripts/pre-skill-bridge.js`;
     const s = { hooks: { PreToolUse: [{ matcher: 'Skill', hooks: [{ type: 'command', command: cmd }] }] } };
     const { removed } = pruneDanglingMemHooks(s, installDir);

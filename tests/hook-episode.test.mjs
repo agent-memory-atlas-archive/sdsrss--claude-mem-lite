@@ -1,5 +1,5 @@
 // Tests for hook-episode.mjs — episode buffer management, locking, pending entries
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, readdirSync } from 'fs';
@@ -353,6 +353,38 @@ describe('hook-episode.mjs', () => {
       writeFileSync(lockFile(), JSON.stringify({ pid: 2147483647, ts: Date.now() }));
       const got = acquireLock(2000);
       expect(got).toBe(true);
+    });
+
+    // D#398: acquireLock read Date.now() for its wait, the class bb4e4ac6 fixed for the hook's DB
+    // deadline. A Date whose readings after the first are `step` ms off puts the step inside the
+    // wait; every reader moves (Date.now and new Date alike), and the elapsed time is read on
+    // performance.now(), which the stub does not touch.
+    describe('under a step of the wall clock', () => {
+      const RealDate = Date;
+      function stepWallClock(step) {
+        let reads = 0;
+        const off = () => (reads++ > 0 ? step : 0);
+        class SteppedDate extends RealDate {
+          constructor(...args) {
+            if (args.length) super(...args);
+            else super(RealDate.now() + off());
+          }
+          static now() {
+            return RealDate.now() + off();
+          }
+        }
+        vi.stubGlobal('Date', SteppedDate);
+      }
+      afterEach(() => vi.unstubAllGlobals());
+
+      it('a backward step does not stretch the wait past maxWaitMs', () => {
+        // A live holder (this process), so only the wait's end can end the call.
+        writeFileSync(lockFile(), JSON.stringify({ pid: process.pid, ts: Date.now() }));
+        stepWallClock(-3000);
+        const t0 = performance.now();
+        expect(acquireLock(200)).toBe(false);
+        expect(performance.now() - t0).toBeLessThan(1000);
+      });
     });
   });
 

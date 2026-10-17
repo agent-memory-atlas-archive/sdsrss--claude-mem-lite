@@ -124,8 +124,12 @@ export function lockFile() {
  */
 export function acquireLock(maxWaitMs = 500) {
   const lf = lockFile();
-  const deadline = Date.now() + maxWaitMs;
-  while (Date.now() < deadline) {
+  // The wait is measured on this process's own clock (performance.now()), which a step of the
+  // system clock does not move, as the hook's DB deadline is (setHookDbDeadline). On Date.now() a
+  // backward step kept a hook spinning here until the host killed it, and a forward one gave up
+  // at once (D#398).
+  const start = performance.now();
+  while (performance.now() - start < maxWaitMs) {
     try {
       let fd;
       try {

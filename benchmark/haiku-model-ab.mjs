@@ -51,8 +51,8 @@
 // model Claude Code's alias resolves to (the report records `claude --version`). It removes
 // OPENROUTER_API_KEY and the CLI block for its own calls only, so the shipped dispatchers
 // take their cli-mode branch. It costs subscription quota, not OpenRouter credit.
-// --dump writes the episode rows with lesson text and the prompt's user part (the evidence
-// the model saw) — the input for a blind correctness read (D#320).
+// --dump writes the episode rows with lesson text, the model's own importance and the prompt's
+// user part (the evidence the model saw) — the input for a blind correctness read (D#320).
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -304,6 +304,7 @@ async function main() {
           lesson: !!lesson && !hl.isLowSignalLesson(lesson),
           grounded: !!lesson && isLessonGrounded(lesson, hl.episodeDiagnosis(sub)),
           type: p?.type,
+          importance: p?.importance ?? null,
           lessonText: lesson,
           rawHead: v.usable ? undefined : String(raw ?? '').slice(0, 160),
         };
@@ -369,6 +370,8 @@ async function main() {
           arm: a,
           usable: x.usable,
           type: x.type ?? null,
+          // The model's own importance, before the shipped gates (D#414 counts its 3s).
+          importance: x.importance,
           lesson: x.lessonText ?? null,
           grounded: x.grounded,
           kept: lessonKept(x, eventTypes),

@@ -807,6 +807,24 @@ describe('array fields accept the serialised shapes their siblings accept', () =
     expect(msg(memOptimizeSchema, { action: 'run', tasks: 7 })).toMatch(/invalid|expected/i);
     expect(msg(memOptimizeSchema, { action: 'run', tasks: 7 })).not.toMatch(/must not be empty/);
   });
+  // Pre-tag review 2026-10-16 P3-9: mem_delete's ids is required, and its empty-list refusal
+  // advised "or omit the field" — which is the required-field error.
+  it("mem_delete's empty-list refusal does not advise omitting the required ids", () => {
+    const msg = (args) =>
+      parseSchema(memDeleteSchema, args)
+        .error.issues.map((i) => i.message)
+        .join(' | ');
+    for (const empty of ['[]', ' [ ] ', '']) {
+      expect(msg({ ids: empty, confirm: true })).toMatch(/must not be empty/);
+      expect(msg({ ids: empty, confirm: true })).not.toMatch(/omit/);
+    }
+    // The optional lists keep the omit advice.
+    expect(
+      parseSchema(memSaveSchema, { content: 'x', supersedes: '[]' })
+        .error.issues.map((i) => i.message)
+        .join(' | '),
+    ).toMatch(/or omit the field/);
+  });
   // Round 3 (data NEW-4): mem_delete took digits only, the one id-list argument without #N or a
   // JSON-array string.
   it('mem_delete ids: #N and a JSON-array string', () => {

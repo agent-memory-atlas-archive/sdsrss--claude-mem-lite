@@ -129,6 +129,9 @@ const asArrayOrRaw = (v) => {
 const emptyListError = (whenEmpty) => (iss) =>
   typeof iss.input === 'string' && /^\s*(\[\s*\])?\s*$/.test(iss.input) ? whenEmpty : undefined;
 const MUST_NOT_BE_EMPTY = emptyListError('must not be empty: pass a non-empty list, or omit the field');
+// A required list cannot be omitted: mem_delete's ids advised it, and omitting it is the
+// required-field error (pre-tag review 2026-10-16 P3-9).
+const REQUIRED_MUST_NOT_BE_EMPTY = emptyListError('must not be empty: pass a non-empty list');
 
 // Coerce mixed ID tokens (#N / P#N / S#N / D#N / bare N) for mem_get. Accepts:
 //   - native arrays: [1, "P#2", "#3"]
@@ -341,7 +344,7 @@ export const memDeleteSchema = {
   // toJSONSchema({io:'input'}) reads a ZodPipe's input side as accepting `undefined` and
   // drops the key, so the advertised contract said optional while the server said required.
   // See tests/tool-schemas.test.mjs, which grades every field against runtime ground truth.
-  ids: boundedIntArray(z.array(z.number().int(), { error: MUST_NOT_BE_EMPTY }).min(1).max(50))
+  ids: boundedIntArray(z.array(z.number().int(), { error: REQUIRED_MUST_NOT_BE_EMPTY }).min(1).max(50))
     .nonoptional()
     .describe('Observation IDs to delete'),
   confirm: coerceBool.describe('false=preview what will be deleted, true=execute deletion'),

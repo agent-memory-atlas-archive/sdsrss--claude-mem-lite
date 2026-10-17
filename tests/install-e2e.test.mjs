@@ -526,6 +526,55 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
       runInstall('install', home, ['--dev', '--skip-repos'], { PATH: `${binDir}:${process.env.PATH}` });
       expect(readFileSync(cloneManifest(), 'utf8')).toBe(theirs);
     });
+
+    // v6.28.0 pre-tag review, install P3-5 (home M): on a plugin + direct machine whose clone an
+    // earlier install emptied, cleanup-hooks removed the settings.json hooks, left the clone
+    // emptied, and told the user to reinstall the plugin, skipping the restore install does.
+    it("cleanup-hooks puts back an earlier install's emptied clone manifest and names the copy", () => {
+      seedClone();
+      writeFileSync(
+        cloneManifest(),
+        JSON.stringify(
+          {
+            _note: 'Hooks managed by install.mjs in settings.json — this file cleared to prevent duplicates',
+            hooks: {},
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+      const cache = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '6.27.0');
+      mkdirSync(join(cache, 'hooks'), { recursive: true });
+      mkdirSync(join(cache, 'scripts'), { recursive: true });
+      writeFileSync(join(cache, 'scripts', 'launch.mjs'), '// launcher\n');
+      writeFileSync(join(cache, 'package.json'), '{"name":"claude-mem-lite","version":"6.27.0"}');
+      writeFileSync(join(cache, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
+      writeFileSync(
+        join(home, '.claude', 'plugins', 'installed_plugins.json'),
+        JSON.stringify({
+          version: 2,
+          plugins: { 'claude-mem-lite@sdsrss': [{ installPath: cache, version: '6.27.0' }] },
+        }),
+      );
+      const ours = `node "${join(home, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs')}" hook.mjs stop`;
+      writeFileSync(
+        join(home, '.claude', 'settings.json'),
+        JSON.stringify({
+          enabledPlugins: { 'claude-mem-lite@sdsrss': true },
+          hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: ours }] }] },
+        }),
+      );
+      const out = runInstall('cleanup-hooks', home, [], { PATH: `${binDir}:${process.env.PATH}` });
+      expect(out).toMatch(/Removed 1 claude-mem-lite hook configuration/);
+      expect(readFileSync(cloneManifest(), 'utf8')).toBe(UPSTREAM);
+      expect(git('status', '--porcelain')).toBe('');
+      expect(out).toMatch(/put back hooks\/hooks\.json/);
+      expect(out).toMatch(/every hook is now unregistered/);
+      expect(out).toMatch(
+        /Repair: cp .*marketplaces\/sdsrss\/hooks\/hooks\.json .*6\.27\.0\/hooks\/hooks\.json/,
+      );
+      expect(out).not.toMatch(/reinstall the plugin/);
+    });
   });
 
   it('status shows MCP registered and hooks configured', () => {

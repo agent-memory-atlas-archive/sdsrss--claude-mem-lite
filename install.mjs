@@ -979,6 +979,17 @@ export function restoreMarketplaceHooksManifest(
   }
 }
 
+/** restoreMarketplaceHooksManifest, with the line install and cleanup-hooks print for it. */
+function putBackMarketplaceHooksManifest(pluginDir) {
+  const restored = restoreMarketplaceHooksManifest(pluginDir);
+  if (restored === 'restored')
+    ok('Marketplace clone: put back hooks/hooks.json an earlier install had emptied');
+  else if (restored?.failed) {
+    warn(`Marketplace clone: could not put back hooks/hooks.json (${restored.failed})`);
+    warn(`  Run: git -C ${shellWord(pluginDir)} checkout -- hooks/hooks.json`);
+  }
+}
+
 export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) {
   // 3b. Deduplicate: if marketplace plugin also registers MCP + hooks,
   // clear them to prevent double execution. install.mjs hooks (in settings.json)
@@ -1031,13 +1042,7 @@ export function dedupePluginCacheAndHooks({ managedHooks, isDev = false } = {}) 
     // again by hook.mjs's SessionStart self-heal. The cost: a version materialized after that
     // self-heal ran registers its hooks alongside settings.json for one session.
     // An earlier install's edit is put back — only when the file is exactly that edit.
-    const restored = restoreMarketplaceHooksManifest(pluginDir);
-    if (restored === 'restored')
-      ok('Marketplace clone: put back hooks/hooks.json an earlier install had emptied');
-    else if (restored?.failed) {
-      warn(`Marketplace clone: could not put back hooks/hooks.json (${restored.failed})`);
-      warn(`  Run: git -C ${shellWord(pluginDir)} checkout -- hooks/hooks.json`);
-    }
+    putBackMarketplaceHooksManifest(pluginDir);
 
     // Sync launch.mjs to plugin cache — ensures MCP server loads dev code via symlink detection.
     // ALSO clear cached hooks.json in every version dir — Claude Code runtime reads hooks from
@@ -2024,6 +2029,12 @@ async function cleanupHooks() {
     ok('No claude-mem-lite hooks found in settings.json');
   }
 
+  // The clone's hooks.json an earlier install emptied is put back here too, as install does:
+  // without it the repair below had no copy to name and sent the user to reinstall the plugin
+  // (v6.28.0 pre-tag review, install P3-5).
+  const marketplaceDir = join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY);
+  if (existsSync(marketplaceDir)) putBackMarketplaceHooksManifest(marketplaceDir);
+
   // With the plugin enabled, a direct `install` empties the plugin's hooks.json (the dedup in
   // dedupePluginCacheAndHooks), so the settings.json entries just removed were the only
   // registration: capture stopped with "Removed N" as the last word. Same check and repair
@@ -2035,7 +2046,7 @@ async function cleanupHooks() {
       warn(
         `The enabled plugin's hooks/hooks.json registers none — every hook is now unregistered (an earlier ` +
           `direct install emptied it to avoid duplicates). Repair: ` +
-          hookManifestRepairHint(root, join(claudeConfigDir(), 'plugins', 'marketplaces', MARKETPLACE_KEY)),
+          hookManifestRepairHint(root, marketplaceDir),
       );
     }
   }

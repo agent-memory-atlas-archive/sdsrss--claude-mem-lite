@@ -23,6 +23,9 @@ import { callModelJSONAsync } from '../haiku-client.mjs';
 import { coreRunSearchPipeline, buildSearchFtsQuery } from '../lib/search-core.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 import { cjkIndexTerms } from '../nlp.mjs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const P = 'parent--cjkside';
 let db;
@@ -201,6 +204,50 @@ describe('CJK in side fields is searchable', () => {
     expect(await obsHits('执行'), 'premise: the save indexes its lesson').toEqual([saved.id]);
     applyObsUpdate(db, saved.id, { importance: 3 });
     expect(await obsHits('执行')).toEqual([saved.id]);
+  });
+});
+
+// Pre-tag review 2026-10-17 F10: two writers outside the four side fields indexed no CJK terms.
+describe('CJK in a weekly summary and an imported body is searchable', () => {
+  it('a weekly summary is found by a substring of a member title', async () => {
+    const { compressGroup } = await import('../lib/compress-core.mjs');
+    for (const t of ['连接池泄漏修复', '缓存击穿排查', '索引重建完成'])
+      insertObs(db, { project: P, title: t, narrative: 'x', epochOffset: -40 * 86400000 });
+    const members = db.prepare('SELECT * FROM observations ORDER BY id').all();
+    const { summaryId } = compressGroup(db, P, members);
+    expect(await obsHits('击穿')).toEqual([summaryId]);
+  });
+
+  it('an imported tool call is found by a substring of its CJK output', async () => {
+    const { importJsonl } = await import('../lib/import-jsonl.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'cjk-import-'));
+    try {
+      const file = join(dir, 't.jsonl');
+      const line = (o) => JSON.stringify({ sessionId: 'imp-1', timestamp: '2026-10-16T10:00:00Z', ...o });
+      writeFileSync(
+        file,
+        [
+          line({
+            type: 'assistant',
+            message: {
+              content: [{ type: 'tool_use', id: 'u1', name: 'Bash', input: { command: 'npm test' } }],
+            },
+          }),
+          line({
+            type: 'user',
+            message: {
+              content: [{ type: 'tool_result', tool_use_id: 'u1', content: '测试失败：连接池泄漏导致超时' }],
+            },
+          }),
+        ].join('\n') + '\n',
+      );
+      await importJsonl(db, file, { project: P });
+      const id = db.prepare(`SELECT id FROM observations WHERE narrative LIKE '%连接池%'`).get()?.id;
+      expect(id, 'premise: the tool call was imported').toBeGreaterThan(0);
+      expect(await obsHits('超时')).toEqual([id]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

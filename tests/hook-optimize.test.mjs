@@ -1712,6 +1712,29 @@ describe('cluster-merge', () => {
     expect(candidates.length).toBeGreaterThanOrEqual(0);
   });
 
+  // Round-2 pre-tag review 2026-10-17 (pre-existing), the merge twin of smart-compress's verdict:
+  // the string "false" read as consent and the members were folded into the keeper.
+  it.each(['false', 'no'])(
+    'does not merge on a verdict that is not the boolean true (%j)',
+    async (verdict) => {
+      const { executeMergeCluster } = await import('../hook-optimize.mjs');
+      insertObs(db, { title: 'Fix FTS5 bug A', narrative: 'Handled special chars', accessCount: 3 });
+      insertObs(db, { title: 'Fix FTS5 bug B', narrative: 'Handled parentheses', accessCount: 1 });
+      const obs = db.prepare('SELECT * FROM observations ORDER BY id').all();
+      callModelJSONAsync.mockResolvedValue({
+        should_merge: verdict,
+        merged_title: 'Fix FTS5 query sanitization bugs',
+        merged_narrative: 'Fixed multiple edge cases',
+        importance: 2,
+      });
+      expect((await executeMergeCluster(db, obs)).merged).toBe(false);
+      expect(
+        db.prepare('SELECT compressed_into FROM observations WHERE id = ?').get(obs[1].id).compressed_into ??
+          0,
+      ).toBe(0);
+    },
+  );
+
   it('executes merge when LLM approves', async () => {
     const { executeMergeCluster } = await import('../hook-optimize.mjs');
     insertObs(db, { title: 'Fix FTS5 bug A', narrative: 'Handled special chars', accessCount: 3 });
@@ -2286,6 +2309,25 @@ describe('smart-compress', () => {
     // value: compressed_into is what removes them from every surface.
     // Asserted with the system's OWN liveness predicate, not a literal: a fresh row's
     // compressed_into is NULL, not 0, and COALESCE(...,0)=0 is what every read path uses.
+    const hidden = db
+      .prepare(
+        `SELECT COUNT(*) c FROM observations WHERE id IN (${obs.map(() => '?').join(',')}) AND COALESCE(compressed_into,0) <> 0`,
+      )
+      .get(...obs.map((o) => o.id)).c;
+    expect(hidden).toBe(0);
+  });
+
+  // Round-2 pre-tag review 2026-10-17 (pre-existing): `!parsed.should_compress` read the STRING
+  // "false" as consent and hid the three rows. Only a boolean true consents.
+  it.each(['false', 'no', 1])('refuses a verdict that is not the boolean true (%j)', async (verdict) => {
+    const { executeSmartCompressCluster } = await import('../hook-optimize.mjs');
+    const obs = cluster3(db);
+    callModelJSONAsync.mockResolvedValue({
+      should_compress: verdict,
+      title: 'Assorted unrelated maintenance',
+      narrative: 'These three changes have nothing to do with each other.',
+    });
+    expect((await executeSmartCompressCluster(db, obs, 'test')).compressed).toBe(false);
     const hidden = db
       .prepare(
         `SELECT COUNT(*) c FROM observations WHERE id IN (${obs.map(() => '?').join(',')}) AND COALESCE(compressed_into,0) <> 0`,

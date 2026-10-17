@@ -1290,7 +1290,8 @@ ${obsDescriptions}`;
       timeout: BG_LLM_TIMEOUT_MS,
       maxTokens: 1000,
     });
-    if (!parsed || !parsed.should_merge) return { merged: false };
+    // Only the boolean true consents: the string "false" is truthy (round-2 pre-tag review).
+    if (parsed?.should_merge !== true) return { merged: false };
 
     // Keeper = highest importance, then highest access_count, then highest id. Previously
     // access_count alone, so a critical (importance=3) but never-accessed observation lost
@@ -1658,7 +1659,8 @@ export async function executeSmartCompressCluster(db, observations, project) {
     // failure directions are not symmetric — refusing wrongly means a compression did not
     // happen, proceeding wrongly means unrelated observations were hidden from every
     // surface. On a path that hides its inputs, silence is not consent.
-    if (!parsed || !parsed.should_compress) return { compressed: false };
+    // Only the boolean true consents: the string "false" is truthy (round-2 pre-tag review).
+    if (parsed?.should_compress !== true) return { compressed: false };
     if (!parsed.title) return { compressed: false };
 
     // Scrub BEFORE truncate (see re-enrich note): boundary cut on scrubbed text.

@@ -4,7 +4,7 @@ import { writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createTestDb, insertSession } from './test-helpers.mjs';
-import { computeMinHash, parseJsonFromLLM } from '../utils.mjs';
+import { computeMinHash, parseJsonFromLLM, getCurrentBranch } from '../utils.mjs';
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -2067,6 +2067,67 @@ describe('handleLLMEpisode', () => {
     expect(deleted).toBeUndefined();
     // The delete DB handle should have been closed
     expect(deleteDbProxy.close).toHaveBeenCalled();
+  });
+
+  // Pre-tag review 2026-10-16 P3-5: SessionStart hands flush files of every project to a worker
+  // that runs in ITS cwd, and the row took `git rev-parse` of that cwd, i.e. the recovering
+  // project's branch. The branch now comes from the flush file (stamped by the flushing hook).
+  describe("stores the branch its flush file names, not the worker cwd's", () => {
+    const changeReply = JSON.stringify({
+      type: 'change',
+      title: 'Guard undefined invoice lines before reduce',
+      narrative: 'Defaulted the lines array so the totals reduce never sees undefined.',
+      concepts: ['invoice'],
+      facts: [],
+      importance: 2,
+      lesson_learned: 'Default invoice lines to an empty array before reduce so totals never crash',
+    });
+    const flush = (extra) =>
+      writeFileSync(
+        tmpFile,
+        JSON.stringify({
+          sessionId: 'ep-sess',
+          project: 'other-project',
+          files: ['/w/other/invoice.js'],
+          filesRead: [],
+          entries: [{ tool: 'Edit', desc: 'invoice.js: guard undefined lines', isError: false }],
+          ...extra,
+        }),
+      );
+    const branchOfRow = () =>
+      db.prepare("SELECT branch FROM observations WHERE project = 'other-project'").all();
+
+    it('on a clean insert', async () => {
+      expect(getCurrentBranch(), 'premise: the worker cwd is on another branch').not.toBe('feat-a');
+      callLLM.mockReturnValue(changeReply);
+      flush({ branch: 'feat-a' });
+      await handleLLMEpisode();
+      expect(branchOfRow()).toEqual([{ branch: 'feat-a' }]);
+    });
+
+    it('when the pre-saved row is gone and the enrichment is saved fresh', async () => {
+      callLLM.mockReturnValue(changeReply);
+      flush({ branch: 'feat-a', savedId: 987654 });
+      await handleLLMEpisode();
+      expect(branchOfRow()).toEqual([{ branch: 'feat-a' }]);
+    });
+
+    it('as none when the work was outside a git work tree', async (ctx) => {
+      // Only says something where the worker cwd is on a branch; a detached checkout (a CI tag
+      // build) reads null either way.
+      if (getCurrentBranch() === null) ctx.skip();
+      callLLM.mockReturnValue(changeReply);
+      flush({ branch: null });
+      await handleLLMEpisode();
+      expect(branchOfRow()).toEqual([{ branch: null }]);
+    });
+
+    it('from the worker cwd for a file written before the stamp, as before', async () => {
+      callLLM.mockReturnValue(changeReply);
+      flush({});
+      await handleLLMEpisode();
+      expect(branchOfRow()).toEqual([{ branch: getCurrentBranch() }]);
+    });
   });
 });
 

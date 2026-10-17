@@ -28,7 +28,7 @@ import {
   unclaimedFlushMinAgeMs,
   RECOVERED_FLUSH_SUFFIX,
 } from '../hook-llm.mjs';
-import { sweepOrphanEpisodeFiles, ORPHAN_EPISODE_AGE_MS } from '../hook-shared.mjs';
+import { sweepOrphanEpisodeFiles, ORPHAN_EPISODE_AGE_MS, processAlive } from '../hook-shared.mjs';
 import { makeFixtureTracker } from './test-helpers.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -288,6 +288,114 @@ describe('SessionStart after an episode worker was killed', () => {
     expect(saved).toEqual([{ project: 'work--invoice-app', title: 'Mock episode summary' }]);
     expect(flushFilesIn(f.runtime)).toEqual([]);
   });
+});
+
+// Pre-tag review 2026-10-16 P3-5: the hand-off takes flush files of every project (the runtime dir
+// is shared), and the new worker runs in the recovering SessionStart's cwd. The row's project
+// came from the file, its branch from `git rev-parse` in that cwd: another project's branch.
+describe('SessionStart in one project handing on another project’s flush file', () => {
+  const git = (cwd, ...args) =>
+    execFileSync(
+      'git',
+      ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args],
+      {
+        cwd,
+        encoding: 'utf8',
+      },
+    );
+  function repoOnBranch(dir, branch) {
+    mkdirSync(dir, { recursive: true });
+    git(dir, 'init', '-q');
+    git(dir, 'checkout', '-q', '-b', branch);
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'init');
+    expect(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe(branch);
+  }
+
+  it('saves the episode with the branch its work was on', async () => {
+    const root = fixtures.track(join(tmpdir(), `mem-flushrec-branch-${randomUUID().slice(0, 8)}`));
+    const home = join(root, 'home');
+    const runtime = join(home, '.claude-mem-lite', 'runtime');
+    const dbPath = join(home, '.claude-mem-lite', 'claude-mem-lite.db');
+    const projectA = join(root, 'work', 'invoice-app');
+    const projectB = join(root, 'other', 'billing');
+    repoOnBranch(projectA, 'feat-a');
+    repoOnBranch(projectB, 'b-main');
+    // A model CLI that kills the worker calling it (the worker that claimed the flush file): the
+    // file is left claimed by a dead pid, as a reboot or the OOM killer leaves it.
+    const killer = join(root, 'killer-claude.sh');
+    writeFileSync(
+      killer,
+      `#!/bin/sh\nfor f in '${runtime}'/ep-flush-*.w*.json; do p=\${f##*.w}; kill -9 "\${p%.json}"; done\n`,
+    );
+    chmodSync(killer, 0o755);
+    const env = (projectDir, cli) => {
+      const e = {
+        ...process.env,
+        HOME: home,
+        CLAUDE_PROJECT_DIR: projectDir,
+        CLAUDE_PID: String(process.pid),
+        CLAUDE_CODE_PATH: cli,
+        ...CLEAN_ENV,
+      };
+      delete e.CLAUDE_MEM_HOOK_RUNNING;
+      return e;
+    };
+    const run = (event, projectDir, cli, payload) =>
+      execFileSync(process.execPath, [join(REPO, 'hook.mjs'), event], {
+        input: JSON.stringify({ session_id: 'cc-a', cwd: projectDir, ...payload }),
+        env: env(projectDir, cli),
+        cwd: projectDir,
+        encoding: 'utf8',
+        timeout: 20000,
+      });
+
+    // Project A: one edit, then Stop flushes it and spawns the worker the killer CLI ends.
+    run('session-start', projectA, killer, { source: 'startup' });
+    writeFileSync(
+      join(projectA, 'invoice.js'),
+      'export const total = (l) => (l ?? []).reduce((a, x) => a + x, 0);\n',
+    );
+    run('post-tool-use', projectA, killer, {
+      tool_name: 'Edit',
+      tool_input: {
+        file_path: join(projectA, 'invoice.js'),
+        old_string: 'l.reduce',
+        new_string: '(l ?? []).reduce',
+      },
+      tool_response: { success: true },
+    });
+    run('stop', projectA, killer, {});
+    let claimed;
+    const deadClaim = () => {
+      claimed = flushFilesIn(runtime).find((f) => /\.w\d+\.json$/.test(f));
+      return !!claimed && !processAlive(Number(/\.w(\d+)\.json$/.exec(claimed)[1]));
+    };
+    expect(await until(deadClaim, 15000), 'premise: the worker claimed the file and died').toBe(true);
+    // The pre-save of a lesson-less change is dropped, so the episode's row is the worker's insert,
+    // the path that stamps the branch.
+    expect(savedRows(dbPath), 'premise: nothing saved before the hand-off').toEqual([]);
+    const aged = (Date.now() - 10 * MIN) / 1000;
+    utimesSync(join(runtime, claimed), aged, aged);
+
+    // Project B, on another branch: its SessionStart hands A's file to a worker in B's cwd.
+    run('session-start', projectB, join(REPO, 'scripts/mock-claude.mjs'), {
+      session_id: 'cc-b',
+      source: 'startup',
+    });
+    let rows = [];
+    const branchRows = () => {
+      const ro = new Database(dbPath, { readonly: true });
+      try {
+        rows = ro.prepare('SELECT project, branch FROM observations').all();
+      } finally {
+        ro.close();
+      }
+      return rows.length > 0;
+    };
+    expect(await until(branchRows, 15000), 'premise: the handed-on episode was saved').toBe(true);
+    expect(rows).toEqual([{ project: 'work--invoice-app', branch: 'feat-a' }]);
+    await until(() => flushFilesIn(runtime).length === 0, 10000);
+  }, 60000);
 });
 
 // D#383: the shape a suspended laptop leaves. The worker is alive but its flush file is already

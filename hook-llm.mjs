@@ -455,7 +455,9 @@ export function saveObservation(obs, projectOverride, sessionIdOverride, externa
         minhash_sig: minhashSig,
         lesson_learned: safe.lesson_learned,
         search_aliases: safe.search_aliases,
-        branch: getCurrentBranch(),
+        // An episode worker passes the branch its flush file names, null included (P3-5); every
+        // other writer runs in the session's own cwd.
+        branch: obs.branch === undefined ? getCurrentBranch() : obs.branch,
         created_at: now.toISOString(),
         created_at_epoch: now.getTime(),
         // P3 (D#78): re-validate at the write boundary — saveObservation is also
@@ -506,7 +508,9 @@ function obsToSummary(obs) {
 //
 // Input shape (matches the v2.31 MVP plan's stable interface):
 //   summary: { type, title, lesson_learned?, narrative?, importance?, files_modified? }
-//   ctx:     { project, session_id, preSavedObsId? }
+//   ctx:     { project, session_id, preSavedObsId?, branch? }
+//   (`branch`: the episode's, observations only — events have no branch column; omitted, the
+//   row takes this process's cwd branch)
 //
 // Returns { table: 'events'|'observations', id: number|null }. Callers inspect
 // `table` to decide whether follow-up observations-only logic (linking, vector
@@ -569,6 +573,7 @@ export function persistHaikuSummary(db, summary, ctx) {
       lessonLearned: summary.lesson_learned || null,
       searchAliases: summary.search_aliases || null,
       scope: summary.scope ?? null,
+      branch: ctx.branch,
     },
     ctx.project,
     ctx.session_id,
@@ -1497,6 +1502,10 @@ export async function handleLLMEpisode() {
   try {
     let savedId;
     let savedTable;
+    // One context for every save below. `branch` is the one the flushing hook read in the
+    // session's cwd (P3-5); a file written before that stamp has none, and the row takes this
+    // worker's cwd branch, as before.
+    const ctx = { project: episode.project, session_id: episode.sessionId, branch: episode.branch };
 
     if (episode.savedId && obs) {
       if (EVENT_TYPE_SET.has(obs.type)) {
@@ -1504,11 +1513,7 @@ export async function handleLLMEpisode() {
         // classified by Haiku as an event type. Delete the stale observations
         // row and insert into events instead. Dispatcher handles the atomic
         // swap via transaction.
-        const result = persistHaikuSummary(db, obsToSummary(obs), {
-          project: episode.project,
-          session_id: episode.sessionId,
-          preSavedObsId: episode.savedId,
-        });
+        const result = persistHaikuSummary(db, obsToSummary(obs), { ...ctx, preSavedObsId: episode.savedId });
         savedId = result.id;
         savedTable = result.table;
         debugLog('DEBUG', 'llm-episode', `upgrade-delete: obs #${episode.savedId} → event #${savedId}`);
@@ -1575,10 +1580,7 @@ export async function handleLLMEpisode() {
             'llm-episode',
             `pre-saved obs #${episode.savedId} no longer live — saving enrichment as a fresh row`,
           );
-          const result = persistHaikuSummary(db, obsToSummary(obs), {
-            project: episode.project,
-            session_id: episode.sessionId,
-          });
+          const result = persistHaikuSummary(db, obsToSummary(obs), ctx);
           savedId = result.id;
           savedTable = result.table;
         } else {
@@ -1589,10 +1591,7 @@ export async function handleLLMEpisode() {
       }
     } else {
       // Clean insert (no pre-save) — dispatcher routes by type.
-      const result = persistHaikuSummary(db, obsToSummary(obs), {
-        project: episode.project,
-        session_id: episode.sessionId,
-      });
+      const result = persistHaikuSummary(db, obsToSummary(obs), ctx);
       savedId = result.id;
       savedTable = result.table;
     }

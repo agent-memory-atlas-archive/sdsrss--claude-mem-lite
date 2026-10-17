@@ -46,6 +46,7 @@ import {
   debugLog,
   formatErrorRecallHints,
   MAX_HOOK_STDIN_BYTES,
+  getCurrentBranch,
 } from './utils.mjs';
 // Direct import (not via the utils.mjs barrel): the barrel's re-exports are a v2.21
 // backward-compat surface that knip already lists as unused; new shared symbols go to
@@ -716,6 +717,10 @@ function flushEpisodeGroup(ep, db) {
   if (isSignificant) {
     const id = saveEpisodeImmediate(ep, db, 'flushEpisode-immediateSave');
     if (id) ep.savedId = id;
+    // The branch the work was on, read here in the session's cwd, for the worker's insert: a worker
+    // runs in its spawner's cwd, and for a file SessionStart hands on that is another project's
+    // (pre-tag review 2026-10-16 P3-5). Cached from the immediate save when it inserted.
+    ep.branch = getCurrentBranch();
   }
 
   const flushFile = join(RUNTIME_DIR, `ep-flush-${Date.now()}-${randomUUID().slice(0, 8)}.json`);

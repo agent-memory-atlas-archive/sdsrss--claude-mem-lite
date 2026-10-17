@@ -239,19 +239,19 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
 
 ## Upgrading to 6.28.0
 
-**After the update, events are re-indexed so Chinese text in them is searchable** (Han characters;
-kana and Hangul are not segmented). No schema-version change: 6.27.0 still opens, searches and
-writes the database after this release has, and an event it writes is filled the next time this
-release opens the database.
+**After the update, events are re-indexed so Chinese text in them is searchable** (the Han ranges
+U+4E00–9FFF and U+3400–4DBF; kana, Hangul and the rarer Han extensions are not segmented). No
+schema-version change: 6.27.0 still opens, searches and writes the database after this release has,
+and an event it writes is filled the next time this release opens the database.
 
 - **What it costs.** The first open adds a column, rebuilds the events index and adds the Latin
-  identifiers glued to Chinese text to existing observations' index text. Existing events are
-  then filled newest first, about 250 ms of segmentation per database open, each batch committed,
-  so a killed open keeps its progress; with nothing left an open takes 3–4 ms. On the maintainer's
-  store (6962 events) the first three opens took 303–323, 84–108 and 4 ms, and the file grew from
-  14 to 15 MB; on a CJK-heavy synthetic store of 200,000 events the first open takes 981 ms, the
-  fill 79 opens, and the file grows from 93 to 273 MB. Until an event is filled, a Chinese query
-  misses it as before.
+  identifiers glued to Chinese text to existing observations' index text. Existing events are then
+  filled newest first, about 250 ms per database open (checked after each row), each batch
+  committed, so a killed open keeps its progress; with nothing left an open takes 3–4 ms. On the
+  maintainer's store (6963 events) the first three opens took 295–327, 80–102 and 4 ms, and the file
+  grew from 14 to 15 MB; on a CJK-heavy synthetic store of 200,000 events the first open takes 964
+  ms, the fill 79 opens, and the file grows from 93 to 273 MB. Until an event is filled, a Chinese
+  query misses it as before.
 - **The MCP server waits out another writer's lock at startup** (up to 15 s of retries) instead of
   exiting with "database is locked".
 - **Exit codes.** Some commands that exited 0 now exit 1, among them `save`, `update`, `defer add`

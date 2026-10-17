@@ -16,7 +16,15 @@ import {
   constants as fsConstants,
 } from 'fs';
 import { inferProject, isEditEntry } from './utils.mjs';
-import { RUNTIME_DIR, hostScopeSuffix, deadHostFiles, isOtherLiveHost } from './hook-shared.mjs';
+import {
+  RUNTIME_DIR,
+  hostScopeSuffix,
+  deadHostFiles,
+  isOtherLiveHost,
+  processAlive,
+  STALE_LOCK_MS,
+  ABANDONED_LOCK_MS,
+} from './hook-shared.mjs';
 import { inferProjectDir } from './project-utils.mjs';
 import { legacyProjectNameFromDir } from './lib/project-rekey.mjs';
 
@@ -145,15 +153,14 @@ export function acquireLock(maxWaitMs = 500) {
       try {
         const raw = readFileSync(lf, 'utf8');
         const info = JSON.parse(raw);
+        // On the wall clock: the stamp is another process's, and only that clock is shared.
         const age = Date.now() - (info.ts || 0);
-        let stale = age > 30000; // >30s = stale
-        if (!stale && info.pid) {
-          try {
-            process.kill(info.pid, 0);
-          } catch (killErr) {
-            stale = killErr.code === 'ESRCH'; // Only stale if process truly gone
-          }
-        }
+        // A recorded holder is asked first. A gone one's lock is stale at once; a running one keeps
+        // it until ABANDONED_LOCK_MS, the bound cleanStaleLockFiles and proc-lock give a live
+        // holder, past which its pid is taken to be recycled. Age alone (> STALE_LOCK_MS) took a
+        // running holder's lock without asking once a forward clock step or a suspended machine
+        // made it look 30 s old, and two hooks then rewrote the buffer at once (D#398).
+        const stale = info.pid ? !processAlive(info.pid) || age > ABANDONED_LOCK_MS : age > STALE_LOCK_MS;
         if (stale) {
           try {
             unlinkSync(lf);

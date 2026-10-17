@@ -25,6 +25,7 @@ import {
   planEpisodeFlush,
 } from '../hook-episode.mjs';
 import { DB_DIR } from '../schema.mjs';
+import { ABANDONED_LOCK_MS } from '../hook-shared.mjs';
 
 const RUNTIME_DIR = join(DB_DIR, 'runtime');
 
@@ -341,11 +342,15 @@ describe('hook-episode.mjs', () => {
       expect(got).toBe(false);
     });
 
-    it('recovers stale lock (old timestamp)', () => {
-      // Write a stale lock file with old timestamp
-      writeFileSync(lockFile(), JSON.stringify({ pid: 999999, ts: Date.now() - 60000 }));
-      const got = acquireLock(1000);
-      expect(got).toBe(true);
+    // A running holder keeps its lock up to ABANDONED_LOCK_MS (D#398); past it the pid is taken to
+    // be recycled onto another process. (This case read "old timestamp" at 60 s with pid 999999,
+    // which since pid_max 2^22 can be a running process.)
+    it('recovers a running holder’s lock once it is older than ABANDONED_LOCK_MS', () => {
+      writeFileSync(
+        lockFile(),
+        JSON.stringify({ pid: process.pid, ts: Date.now() - ABANDONED_LOCK_MS - 60_000 }),
+      );
+      expect(acquireLock(1000)).toBe(true);
     });
 
     it('recovers lock from dead process', () => {
@@ -384,6 +389,18 @@ describe('hook-episode.mjs', () => {
         const t0 = performance.now();
         expect(acquireLock(200)).toBe(false);
         expect(performance.now() - t0).toBeLessThan(1000);
+      });
+
+      // The age compares another process's stamp, so it stays on the wall clock; what changed is
+      // that a recorded holder is asked first. Age alone (> 30 s) took a running holder's lock
+      // without asking once a forward step (or a suspended machine) made it look old, and two hooks
+      // then rewrote the buffer at once.
+      it('a forward step does not make a running holder’s lock stale', () => {
+        const held = JSON.stringify({ pid: process.pid, ts: Date.now() });
+        writeFileSync(lockFile(), held);
+        stepWallClock(60_000);
+        expect(acquireLock(200)).toBe(false);
+        expect(readFileSync(lockFile(), 'utf8')).toBe(held);
       });
     });
   });

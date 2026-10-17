@@ -10,7 +10,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
-import { runDeferredCleanups } from '../schema.mjs';
+import { runDeferredCleanups, backfillEventSearchTerms } from '../schema.mjs';
 import { saveEvent, searchEvents } from '../lib/activity.mjs';
 import { saveObservation } from '../lib/save-observation.mjs';
 import { looksAlreadyDerived } from '../lib/observation-write.mjs';
@@ -149,8 +149,8 @@ describe('rows written before the change are backfilled once', () => {
     expect(once.split(' ').filter((t) => t === 'redis')).toHaveLength(1);
   });
 
-  // Events are filled by backfill-event-search-terms, from NULL (every event a pre-d366 build
-  // wrote); no release wrote bigram-only search_terms, so nothing recomputes a filled row.
+  // Events are filled by backfillEventSearchTerms, from NULL (every event a pre-d366 build wrote);
+  // no release wrote bigram-only search_terms, so nothing recomputes a filled row.
   it('an event a pre-d366 build wrote (no search_terms) is found by its glued run after the backfill', () => {
     db = createTestDb();
     const id = saveEvent(db, {
@@ -163,7 +163,7 @@ describe('rows written before the change are backfilled once', () => {
     db.prepare(`DELETE FROM migration_cleanups`).run();
     expect(searchEvents(db, 'token', { project: P })).toEqual([]);
 
-    runDeferredCleanups(db);
+    backfillEventSearchTerms(db);
     expect(searchEvents(db, 'token', { project: P }).map((r) => r.id)).toEqual([id]);
   });
 });

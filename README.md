@@ -237,7 +237,7 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
-## Upgrading to 6.28.0
+## Upgrading to 6.28.1
 
 **After the update, events are re-indexed so Chinese text in them is searchable** (the Han ranges
 U+4E00–9FFF and U+3400–4DBF; kana, Hangul and the rarer Han extensions are not segmented). No

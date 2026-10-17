@@ -2,7 +2,13 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
-## v6.28.0 — Chinese text in events is searchable, four MCP tool descriptions corrected, install no longer empties the marketplace clone's hooks
+## v6.28.1 — Chinese text in events is searchable, four MCP tool descriptions corrected, install no longer empties the marketplace clone's hooks
+
+v6.28.0 was tagged but never published: its release check failed on seven tests that ran `install`
+with the GitHub runner's PATH, which has no `claude`, so the MCP registration failed and install
+exited 3 (a change of this release, below); here, with Claude Code installed, they ran the real CLI.
+Those tests now put a stub `claude` first on PATH. 6.28.1 ships the same product code, and the notes
+below are the 6.28.0 notes.
 
 **Upgrade note: the first database open after the update migrates the events index, and some
 commands that exited 0 now exit non-zero.** The `events` table gets a `search_terms` column (the

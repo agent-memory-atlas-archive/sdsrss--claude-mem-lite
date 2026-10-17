@@ -5,7 +5,16 @@
 import Database from 'better-sqlite3';
 import { homedir } from 'os';
 import { join } from 'path';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  chmodSync,
+} from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
 import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
@@ -1808,6 +1817,45 @@ export function isDbCorruptionError(err) {
 export { isFtsCorruptionError };
 
 /**
+ * Whether a process other than this one holds a lock on any of `paths`, read from Linux's
+ * /proc/locks. Every WAL-mode connection holds a shared lock on the database file and a read lock
+ * on byte 128 of the -shm file for as long as it is open (2026-10-17: a better-sqlite3 holder
+ * showed both, with its pid, and neither once it closed). Matched by inode alone, so a lock on a
+ * file with the same inode number on another device reads as held: the answer errs towards held.
+ * A path that does not exist is skipped (a store without a -shm file).
+ *
+ * @param {string[]} paths
+ * @param {{ locksText?: string, pid?: number }} [opts] the lock table's text and this process's
+ *   pid, for tests
+ * @returns {boolean|null} null: could not look (no /proc/locks, or a path that does not stat)
+ */
+export function dbHeldByOtherProcess(paths, { locksText, pid = process.pid } = {}) {
+  let text = locksText;
+  if (text === undefined) {
+    try {
+      text = readFileSync('/proc/locks', 'utf8');
+    } catch {
+      return null;
+    }
+  }
+  const inodes = new Set();
+  for (const p of paths) {
+    try {
+      inodes.add(String(statSync(p, { bigint: true }).ino));
+    } catch (e) {
+      if (e?.code !== 'ENOENT') return null;
+    }
+  }
+  for (const line of text.split('\n')) {
+    const fields = line.trim().split(/\s+/);
+    const at = fields.findIndex((f) => /^[0-9a-f]+:[0-9a-f]+:\d+$/i.test(f));
+    if (at < 1 || !inodes.has(fields[at].split(':')[2])) continue;
+    if (Number(fields[at - 1]) !== pid) return true;
+  }
+  return false;
+}
+
+/**
  * ensureDb with corruption-gated WAL recovery. Was inlined in server.mjs only,
  * so hooks (openDb → silent null) and the CLI (raw throw) stayed degraded on a
  * corrupt WAL until the next MCP server start. One shared implementation now
@@ -1817,7 +1865,10 @@ export { isFtsCorruptionError };
  * Corruption → retries once with the files untouched; corruption again → deletes
  * -wal/-shm, retries once more; a still-failing retry rethrows
  * with `err.walRecoveryAttempted = true` so callers can word their fatal hint
- * accurately (recovery already tried vs WAL deliberately preserved).
+ * accurately (recovery already tried vs WAL deliberately preserved). The delete
+ * runs only when no other process holds the store; otherwise the second error is
+ * rethrown with `err.walKept` = 'in-use' (another process has it open) or
+ * 'unknown' (the lock table could not be read: not Linux, or no /proc).
  *
  * @param {{warn?: (msg: string) => void, info?: (msg: string) => void}} [opts]
  */
@@ -1876,6 +1927,20 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
     } catch (retryErr) {
       if (!isDbCorruptionError(retryErr)) throw retryErr;
       walErr = retryErr;
+    }
+    // D#430: the delete loses another connection's commits the same way when the error repeats,
+    // so it runs only when the lock table shows no other process on the store.
+    const held = dbHeldByOtherProcess([DB_PATH, DB_PATH + '-shm']);
+    if (held !== false) {
+      warn?.(
+        `DB corruption detected, WAL kept: ${held ? 'another process has the database open' : 'could not tell whether another process has the database open'}: ${walErr.message}`,
+      );
+      try {
+        walErr.walKept = held ? 'in-use' : 'unknown';
+      } catch {
+        /* frozen error — fine */
+      }
+      throw walErr;
     }
     warn?.(`DB corruption detected, attempting WAL recovery: ${walErr.message}`);
     try {

@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { createRequire } from 'module';
@@ -31,7 +31,7 @@ const DB_NAME = 'claude-mem-lite.db';
 // throwaway sandbox BEFORE the dynamic import (vitest.config forces CLAUDE_MEM_DIR='').
 const SANDBOX = mkdtempSync(join(tmpdir(), 'mem-wal-sandbox-'));
 process.env.CLAUDE_MEM_DIR = SANDBOX;
-const { ensureDb, DB_PATH, CURRENT_SCHEMA_VERSION } = await import('../schema.mjs');
+const { ensureDb, DB_PATH, CURRENT_SCHEMA_VERSION, dbHeldByOtherProcess } = await import('../schema.mjs');
 
 const fixtures = [];
 function fixtureDir(tag) {
@@ -118,9 +118,9 @@ function plantCorruptWal(dir) {
  * Resolves { exitCode, stderr, served } — `served` is true only if the process answered
  * the JSON-RPC handshake, i.e. it really came up rather than merely not crashing yet.
  */
-function runServer(dir, { timeoutMs = 20000 } = {}) {
+function runServer(dir, { timeoutMs = 20000, execArgv = [] } = {}) {
   return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [SERVER_PATH], {
+    const child = spawn(process.execPath, [...execArgv, SERVER_PATH], {
       env: {
         ...process.env,
         CLAUDE_MEM_DIR: dir,
@@ -473,16 +473,26 @@ function seedStore(tag, { behind = false } = {}) {
   return { dir, dbPath };
 }
 
-/** ensureDbWithWalRecovery in a child where the first `site.at` call matching `site.match`
- *  throws `code` once. */
-function openWithInjectedFault(dir, { site, code, deadlineMs = null }) {
+/** ensureDbWithWalRecovery in a child where the `site.at` calls matching `site.match` throw
+ *  `code`, the first `times` of them (-1: every one, a corruption that repeats);
+ *  `locksUnreadable` makes the child's /proc/locks read fail. */
+function openWithInjectedFault(dir, { site, code, deadlineMs = null, times = 1, locksUnreadable = false }) {
   const src = `
+    if (${locksUnreadable}) {
+      const fs = require('node:fs');
+      const read = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (p === '/proc/locks') throw Object.assign(new Error('EACCES: /proc/locks'), { code: 'EACCES' });
+        return read.call(this, p, ...rest);
+      };
+      require('node:module').syncBuiltinESMExports();
+    }
     Promise.all([import(${JSON.stringify(BSQ_URL)}), import(${JSON.stringify(SCHEMA_URL)})]).then(([{ default: Database }, m]) => {
       let thrown = 0;
       const re = new RegExp(${JSON.stringify(site.match)}, 'i');
       const orig = Database.prototype[${JSON.stringify(site.at)}];
       Database.prototype[${JSON.stringify(site.at)}] = function (sql, ...rest) {
-        if (thrown === 0 && re.test(sql)) {
+        if ((${times} < 0 || thrown < ${times}) && re.test(sql)) {
           thrown++;
           throw new Database.SqliteError('database disk image is malformed', ${JSON.stringify(code)});
         }
@@ -491,13 +501,17 @@ function openWithInjectedFault(dir, { site, code, deadlineMs = null }) {
       if (${deadlineMs} !== null) m.setBusyDeadline(Date.now() + ${deadlineMs});
       const msgs = [];
       const t0 = Date.now();
-      const r = { opened: false, seen: null, error: null };
+      const r = { opened: false, seen: null, error: null, walKept: null, walRecoveryAttempted: false };
       try {
         const db = m.ensureDbWithWalRecovery({ warn: (x) => msgs.push(x), info: (x) => msgs.push(x) });
         r.opened = true;
         try { r.seen = db.prepare('SELECT count(*) AS n FROM _holder').get().n; } catch (e) { r.seen = e.message; }
         db.close();
-      } catch (e) { r.error = e.code || e.message; }
+      } catch (e) {
+        r.error = e.code || e.message;
+        r.walKept = e.walKept ?? null;
+        r.walRecoveryAttempted = !!e.walRecoveryAttempted;
+      }
       console.log(JSON.stringify({ ...r, thrown, msgs, ms: Date.now() - t0 }));
     });`;
   const out = execFileSync(process.execPath, ['-e', src], {
@@ -565,4 +579,125 @@ describe('the FTS rebuild arm under a busy deadline (D#415)', () => {
     expect(r.msgs.join('\n'), 'the rebuild must have met the lock').toMatch(/FTS rebuild reported: .*locked/);
     expect(r.ms).toBeLessThan(4000);
   }, 90000);
+});
+
+// D#430. A corruption error that repeats still reached the delete, with the MCP server's
+// connection possibly open: the same loss as above (6cec1ac4's probe, 2200 of 2200 rows). Every
+// WAL-mode connection holds a shared lock on the database file and a read lock on the -shm file
+// while it is open, and Linux lists them with the holder's pid in /proc/locks (2026-10-17: both,
+// for a better-sqlite3 holder, and neither once it closed). The delete now runs only when that
+// list shows no other process; where it cannot be read, the WAL is kept.
+describe('a corruption error that repeats, with the store held or the lock table unreadable (D#430)', () => {
+  it.runIf(existsSync('/proc/locks'))(
+    'keeps the WAL while another process has the store open',
+    async () => {
+      const { dir, dbPath } = seedStore('repeat-held');
+      const holder = startHolder(dbPath);
+      let r;
+      try {
+        await holder.until('ready');
+        r = openWithInjectedFault(dir, { site: FAULT_SITES.pragma, code: 'SQLITE_CORRUPT', times: -1 });
+        holder.send('more');
+        await holder.until('more-done');
+      } finally {
+        await holder.stop();
+      }
+      expect(r.thrown, 'premise: the fault repeated on the retry').toBeGreaterThanOrEqual(2);
+      expect(r.opened).toBe(false);
+      expect(r.walKept, JSON.stringify(r)).toBe('in-use');
+      expect(r.walRecoveryAttempted).toBe(false);
+      expect(r.msgs.join('\n')).not.toContain('attempting WAL recovery');
+      const v = new Database(dbPath);
+      expect(v.prepare('SELECT count(*) AS n FROM _holder').get().n, 'every row the holder committed').toBe(
+        200,
+      );
+      expect(v.pragma('integrity_check', { simple: true })).toBe('ok');
+      v.close();
+    },
+    30000,
+  );
+
+  it('keeps the WAL where the lock table cannot be read', () => {
+    const { dir } = seedStore('repeat-unknown');
+    const r = openWithInjectedFault(dir, {
+      site: FAULT_SITES.pragma,
+      code: 'SQLITE_CORRUPT',
+      times: -1,
+      locksUnreadable: true,
+    });
+    expect(r.thrown).toBeGreaterThanOrEqual(2);
+    expect(r.opened).toBe(false);
+    expect(r.walKept, JSON.stringify(r)).toBe('unknown');
+    expect(r.msgs.join('\n')).not.toContain('attempting WAL recovery');
+  }, 30000);
+
+  it.runIf(existsSync('/proc/locks'))(
+    'the server says why it left the WAL in place',
+    async () => {
+      const { dir, dbPath } = seedStore('repeat-server');
+      const patch = join(dir, 'fault.mjs');
+      writeFileSync(
+        patch,
+        [
+          `import Database from ${JSON.stringify(BSQ_URL)};`,
+          `const orig = Database.prototype.pragma;`,
+          `Database.prototype.pragma = function (sql, ...rest) {`,
+          `  if (/^\\s*journal_mode\\s*=\\s*WAL/i.test(sql)) throw new Database.SqliteError('database disk image is malformed', 'SQLITE_CORRUPT');`,
+          `  return orig.call(this, sql, ...rest);`,
+          `};`,
+        ].join('\n'),
+      );
+      const holder = startHolder(dbPath);
+      let res;
+      try {
+        await holder.until('ready');
+        res = await runServer(dir, { execArgv: ['--import', pathToFileURL(patch).href] });
+      } finally {
+        await holder.stop();
+      }
+      expect(res.exitCode).toBe(1);
+      expect(res.stderr).toContain('another process has it open');
+      expect(res.stderr).not.toContain('not a corruption error');
+    },
+    30000,
+  );
+});
+
+describe('dbHeldByOtherProcess', () => {
+  const line = (n, pid, ino, kind = 'POSIX  ADVISORY  READ') => `${n}: ${kind} ${pid} 08:02:${ino} 128 128`;
+  const files = () => {
+    const d = fixtureDir('locks');
+    const db = join(d, 'a.db');
+    writeFileSync(db, '');
+    writeFileSync(db + '-shm', '');
+    const ino = (p) => String(statSync(p, { bigint: true }).ino);
+    return { paths: [db, db + '-shm'], dbIno: ino(db), shmIno: ino(db + '-shm') };
+  };
+
+  it('reads a lock another pid holds on the database or its -shm file as held', () => {
+    const { paths, dbIno, shmIno } = files();
+    expect(dbHeldByOtherProcess(paths, { locksText: line(1, 4242, dbIno), pid: 7 })).toBe(true);
+    expect(dbHeldByOtherProcess(paths, { locksText: line(1, 4242, shmIno), pid: 7 })).toBe(true);
+    // A waiter is listed under the lock it waits for, with "->".
+    expect(
+      dbHeldByOtherProcess(paths, {
+        locksText: `1: -> POSIX  ADVISORY  WRITE 4242 08:02:${dbIno} 0 EOF`,
+        pid: 7,
+      }),
+    ).toBe(true);
+  });
+
+  it("reads this process's own locks and other files' locks as not held", () => {
+    const { paths, dbIno, shmIno } = files();
+    const own = [line(1, 7, dbIno), line(2, 7, shmIno)].join('\n');
+    expect(dbHeldByOtherProcess(paths, { locksText: own, pid: 7 })).toBe(false);
+    expect(dbHeldByOtherProcess(paths, { locksText: line(1, 4242, '999999999'), pid: 7 })).toBe(false);
+    expect(dbHeldByOtherProcess(paths, { locksText: '', pid: 7 })).toBe(false);
+  });
+
+  it('a -shm file that does not exist is not a reason to give up', () => {
+    const { paths, dbIno } = files();
+    rmSync(paths[1]);
+    expect(dbHeldByOtherProcess(paths, { locksText: line(1, 7, dbIno), pid: 7 })).toBe(false);
+  });
 });

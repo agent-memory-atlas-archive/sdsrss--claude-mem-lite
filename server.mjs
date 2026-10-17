@@ -254,6 +254,13 @@ try {
     console.error(
       `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
     );
+  } else if (err.walKept) {
+    // D#430: removing them under another open connection loses that connection's writes.
+    console.error(
+      err.walKept === 'in-use'
+        ? `[claude-mem-lite] Left WAL/SHM intact: the database reports corruption and another process has it open, so removing them would lose that process's writes. Close the other Claude Code sessions, then start this one again.`
+        : `[claude-mem-lite] Left WAL/SHM intact: the database reports corruption, and this system cannot tell whether another process has it open. With every other Claude Code session closed: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)}`,
+    );
   } else {
     console.error(
       `[claude-mem-lite] Left WAL/SHM intact (not a corruption error). If this persists, retry or reinstall: node install.mjs install`,

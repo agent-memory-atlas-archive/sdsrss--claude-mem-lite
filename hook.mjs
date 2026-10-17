@@ -78,7 +78,7 @@ import {
 } from './hook-episode.mjs';
 // CODE_DIR, not DB_DIR: the schema-skew notice asks which CODE homes exist, and those are
 // always homedir-rooted even when CLAUDE_MEM_DIR relocates the data.
-import { DB_DIR, DB_PATH, CODE_DIR, refreshPlannerStats } from './schema.mjs';
+import { DB_DIR, DB_PATH, CODE_DIR, refreshPlannerStats, recheckObservationIndexTerms } from './schema.mjs';
 import { cleanupClaudeMdLegacyBlock, buildSessionContextLines } from './hook-context.mjs';
 import { entry as preCompactEntry } from './hook-precompact.mjs';
 import {
@@ -2333,6 +2333,19 @@ function runSessionStartAutoMaintain(db, project) {
         if (gc.changes > 0) debugLog('DEBUG', 'auto-maintain', `gc'd ${gc.changes} expired session_handoffs`);
       } catch (e) {
         debugCatch(e, 'auto-maintain-handoff-gc');
+      }
+
+      // The CJK index terms an older build still writing this store left out (D#413).
+      try {
+        const { appended } = recheckObservationIndexTerms(db);
+        if (appended > 0)
+          debugLog(
+            'DEBUG',
+            'auto-maintain',
+            `appended index terms to ${appended} observations an older build wrote`,
+          );
+      } catch (e) {
+        debugCatch(e, 'auto-maintain-recheck-index-terms');
       }
 
       // Planner statistics, the "once a day" half of SQLite's recommendation (#41). Last, so

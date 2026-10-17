@@ -17,7 +17,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 // A pass-through, except that a test can run something just before the backfill segments its
@@ -47,8 +49,9 @@ vi.mock('../nlp.mjs', async (importOriginal) => {
   };
 });
 
-import { initSchema, runDeferredCleanups } from '../schema.mjs';
-import { cjkBigrams, cjkIndexTerms } from '../nlp.mjs';
+import { initSchema, runDeferredCleanups, recheckObservationIndexTerms } from '../schema.mjs';
+import { cjkBigrams, cjkIndexTerms, missingCjkIndexTerms } from '../nlp.mjs';
+import { OBS_FTS_COLUMNS } from '../scoring-sql.mjs';
 import { coreRunSearchPipeline, buildSearchFtsQuery } from '../lib/search-core.mjs';
 import { searchObservationsHybrid } from '../search-engine.mjs';
 
@@ -491,4 +494,109 @@ describe('the pass and the rows it cannot see as derived', () => {
     runDeferredCleanups(db);
     expect(db.prepare('SELECT text FROM observations WHERE id = ?').get(id).text).toBe(text);
   });
+});
+
+// D#413. The pass is marked done once, but an older build can go on writing the same store for as
+// long as a session started before the update lives (this maintainer's machine, sessions
+// 2026-09-05 to 2026-10-17, start to last activity: p50 0.65 h, p99 39 h, 4 of 540 past 7 days),
+// and it inserts rows without these terms (live store 2026-10-17: 8 of the 36 rows the 6.27.0
+// hooks wrote after the fill) or rewrites a filled row's text without them (6.28.x mem_update).
+// The daily maintain worker walks the store again, on a cursor of its own, for 7 days from its
+// first run.
+describe('rows an older build writes after the pass is done (D#413)', () => {
+  const DAY = 24 * 3600 * 1000;
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const missingOf = (d, id) =>
+    missingCjkIndexTerms(
+      d
+        .prepare(
+          `SELECT ${OBS_FTS_COLUMNS.map((c) => `COALESCE(${c}, '')`).join(` || ' ' || `)} AS doc FROM observations WHERE id = ?`,
+        )
+        .get(id).doc,
+    );
+
+  /** A store the pass finished, then one row an older build rewrote and one it inserted. */
+  function afterOlderBuild() {
+    const rewritten = insertLegacy(db, { title: 'tenant cache key collision', lesson: '缓存键缺少租户前缀' });
+    runDeferredCleanups(db);
+    expect(marked(db), 'premise: the open-time pass is done').toBe(true);
+    expect(missingOf(db, rewritten)).toBe('');
+    // 6.28.x mem_update: the derived text rebuilt without the lesson's terms.
+    db.prepare('UPDATE observations SET text = ? WHERE id = ?').run('tenant cache key collision', rewritten);
+    const inserted = insertLegacy(db, { title: '修复了redis连接池泄漏', lesson: '连接复用的上限' });
+    runDeferredCleanups(db);
+    expect(missingOf(db, rewritten), 'premise: the open-time pass does not come back').not.toBe('');
+    expect(missingOf(db, inserted)).not.toBe('');
+    return { rewritten, inserted };
+  }
+
+  it('the recheck appends their terms, and the next day the rows written since', async () => {
+    memStore();
+    const { rewritten, inserted } = afterOlderBuild();
+    expect(cjkIndexTerms('连接复用的上限').split(' '), 'premise: the query term is an index term').toContain(
+      '复用',
+    );
+    expect(await obsHits(db, '租户')).toEqual([]);
+    const now = Date.now();
+    expect(recheckObservationIndexTerms(db, { now })).toEqual({ appended: 2, ran: true });
+    expect(await obsHits(db, '租户')).toEqual([rewritten]);
+    expect(await obsHits(db, '复用')).toEqual([inserted]);
+    const filled = [textOf(db, rewritten), textOf(db, inserted)];
+    const later = insertLegacy(db, { title: 'pool sizing', lesson: '连接池的上限' });
+    expect(recheckObservationIndexTerms(db, { now: now + DAY })).toEqual({ appended: 1, ran: true });
+    expect(missingOf(db, later)).toBe('');
+    expect([textOf(db, rewritten), textOf(db, inserted)], 'nothing appended twice').toEqual(filled);
+  });
+
+  it('stops 7 days after its first run', () => {
+    memStore();
+    afterOlderBuild();
+    const t0 = Date.now();
+    expect(recheckObservationIndexTerms(db, { now: t0 }).ran).toBe(true);
+    const late = insertLegacy(db, { title: 'late row', lesson: '迟到的教训' });
+    expect(recheckObservationIndexTerms(db, { now: t0 + 7 * DAY - 1 }).appended).toBe(1);
+    const last = insertLegacy(db, { title: 'last row', lesson: '最后的教训' });
+    expect(recheckObservationIndexTerms(db, { now: t0 + 7 * DAY })).toEqual({ appended: 0, ran: false });
+    expect(recheckObservationIndexTerms(db, { now: t0 + 8 * DAY })).toEqual({ appended: 0, ran: false });
+    expect(missingOf(db, late)).toBe('');
+    expect(missingOf(db, last)).not.toBe('');
+  });
+
+  it('waits for the open-time pass, and its window opens at its own first run', () => {
+    memStore();
+    const id = insertLegacy(db, { title: 'tenant cache key collision', lesson: '缓存键缺少租户前缀' });
+    const before = textOf(db, id);
+    const t0 = Date.now();
+    expect(recheckObservationIndexTerms(db, { now: t0 })).toEqual({ appended: 0, ran: false });
+    expect(textOf(db, id)).toBe(before);
+    runDeferredCleanups(db);
+    expect(marked(db)).toBe(true);
+    const late = insertLegacy(db, { title: 'late row', lesson: '迟到的教训' });
+    expect(recheckObservationIndexTerms(db, { now: t0 + 8 * DAY })).toEqual({ appended: 1, ran: true });
+    expect(missingOf(db, late)).toBe('');
+  });
+
+  it('the daily auto-maintain worker runs it', () => {
+    fileStore();
+    const { rewritten, inserted } = afterOlderBuild();
+    db.close();
+    db = null;
+    execFileSync(process.execPath, [join(REPO, 'hook.mjs'), 'auto-maintain'], {
+      cwd: REPO,
+      env: {
+        ...process.env,
+        CLAUDE_MEM_DIR: dir,
+        CLAUDE_PROJECT_DIR: join(dir, 'proj'),
+        CLAUDE_MEM_SKIP_COMPRESS: '1',
+        CLAUDE_MEM_SKIP_OPTIMIZE: '1',
+        CLAUDE_MEM_SKIP_EPISODE_LLM: '1',
+        MEM_NO_AUTO_ADOPT: '1',
+      },
+      stdio: 'pipe',
+      timeout: 60_000,
+    });
+    db = new Database(join(dir, 'claude-mem-lite.db'));
+    expect(missingOf(db, rewritten)).toBe('');
+    expect(missingOf(db, inserted)).toBe('');
+  }, 60_000);
 });

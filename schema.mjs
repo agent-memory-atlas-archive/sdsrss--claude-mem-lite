@@ -1303,12 +1303,13 @@ const OBS_DOC_SQL = OBS_FTS_COLUMNS.map((c) => `COALESCE(${c}, '')`).join(` || '
  * appended to and whether the walk is finished.
  *
  * @param {import('better-sqlite3').Database} db
- * @param {{ budgetMs?: number, batchSize?: number }} [opts]
+ * @param {{ budgetMs?: number, batchSize?: number, cursor?: string }} [opts] `cursor`: the name of
+ *   the walk's row in migration_cursors (recheckObservationIndexTerms walks on its own)
  * @returns {{ appended: number, done: boolean }}
  */
 export function backfillObservationIndexTerms(
   db,
-  { budgetMs = OBS_TERMS_BUDGET_MS, batchSize = OBS_TERMS_BATCH } = {},
+  { budgetMs = OBS_TERMS_BUDGET_MS, batchSize = OBS_TERMS_BATCH, cursor = OBS_TERMS_CURSOR } = {},
 ) {
   const start = performance.now();
   const prior = db.pragma('busy_timeout', { simple: true });
@@ -1318,8 +1319,7 @@ export function backfillObservationIndexTerms(
       const table = db
         .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration_cursors'`)
         .get();
-      const row =
-        table && db.prepare(`SELECT below_id FROM migration_cursors WHERE name = ?`).get(OBS_TERMS_CURSOR);
+      const row = table && db.prepare(`SELECT below_id FROM migration_cursors WHERE name = ?`).get(cursor);
       return row ? row.below_id : Number.MAX_SAFE_INTEGER;
     };
     const pick = db.prepare(
@@ -1356,7 +1356,7 @@ export function backfillObservationIndexTerms(
       db.prepare(
         `INSERT INTO migration_cursors (name, below_id) VALUES (?, ?)
            ON CONFLICT(name) DO UPDATE SET below_id = excluded.below_id`,
-      ).run(OBS_TERMS_CURSOR, below);
+      ).run(cursor, below);
       return n;
     });
     let appended = 0;
@@ -1383,6 +1383,54 @@ export function backfillObservationIndexTerms(
   } finally {
     db.pragma(`busy_timeout = ${Number.isInteger(prior) ? prior : DB_BUSY_TIMEOUT_MS}`);
   }
+}
+
+/** How long recheckObservationIndexTerms keeps walking after its first run (D#413). */
+const OBS_TERMS_RECHECK_WINDOW_MS = 7 * 24 * 3600 * 1000;
+/** Its budget per run: the maintain worker has no host deadline, and its lock goes stale at 10 min. */
+const OBS_TERMS_RECHECK_BUDGET_MS = 30_000;
+/** Its cursor and done marker; the window's start is stored as `<name>-opened`. */
+const OBS_TERMS_RECHECK = 'recheck-cjk-index-terms';
+
+/**
+ * Walk the observations again for the CJK index terms an older build left out (D#413), once a day
+ * from the auto-maintain worker, for OBS_TERMS_RECHECK_WINDOW_MS from this function's first run on
+ * the store, then mark itself done. The open-time pass is marked done once, but an older build can
+ * go on writing the store for as long as a session started before the update lives: it inserts
+ * rows without these terms (live store 2026-10-17: 8 of the 36 rows the 6.27.0 hooks wrote after
+ * the fill) and rewrites a filled row's text without them (6.28.x mem_update), and no column says
+ * which rows a writer touched. The window starts at the first run, not at the open-time pass's
+ * marker, so a store whose pass finished long before this build arrived still gets a whole walk.
+ * Waits for the open-time pass to be done, so the two never walk at once. The walk is
+ * backfillObservationIndexTerms on a cursor of its own: a finished walk drops the cursor, so the
+ * next run starts from the top again; one cut short by its budget or another writer's lock keeps
+ * it, and the next run continues below it. Returns how many rows it appended to and whether it
+ * walked.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ now?: number, budgetMs?: number }} [opts]
+ * @returns {{ appended: number, ran: boolean }}
+ */
+export function recheckObservationIndexTerms(
+  db,
+  { now = Date.now(), budgetMs = OBS_TERMS_RECHECK_BUDGET_MS } = {},
+) {
+  const doneAt = db.prepare(`SELECT done_at_epoch FROM migration_cleanups WHERE name = ?`).pluck();
+  const mark = db.prepare(`INSERT OR IGNORE INTO migration_cleanups (name, done_at_epoch) VALUES (?, ?)`);
+  // 'backfill-cjk-index-terms' is the open-time pass's marker (DEFERRED_CLEANUPS).
+  if (doneAt.get('backfill-cjk-index-terms') === undefined || doneAt.get(OBS_TERMS_RECHECK) !== undefined)
+    return { appended: 0, ran: false };
+  mark.run(`${OBS_TERMS_RECHECK}-opened`, now);
+  if (now - doneAt.get(`${OBS_TERMS_RECHECK}-opened`) >= OBS_TERMS_RECHECK_WINDOW_MS) {
+    mark.run(OBS_TERMS_RECHECK, now);
+    return { appended: 0, ran: false };
+  }
+  const { appended, done } = backfillObservationIndexTerms(db, { budgetMs, cursor: OBS_TERMS_RECHECK });
+  const cursors = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration_cursors'`)
+    .get();
+  if (done && cursors) db.prepare(`DELETE FROM migration_cursors WHERE name = ?`).run(OBS_TERMS_RECHECK);
+  return { appended, ran: true };
 }
 
 /**

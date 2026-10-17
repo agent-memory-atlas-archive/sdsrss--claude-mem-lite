@@ -2,6 +2,189 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.29.0 — CJK in lessons and facts is searchable, the first open after an update stays inside a hook's timeout, model-written lessons on explicit saves are marked
+
+**Upgrade note: the first database opens after the update fill the observations' index terms in
+bounded batches, a lesson a model writes onto an explicit save now starts with `🤖`, and some
+commands that exited 0 now exit non-zero.** The schema version stays 49. Going back is pinning
+`claude-mem-lite@6.28.1`, after the fill has finished (checked on a copy of this machine's store
+that an earlier build of this pass had filled and this release had opened: 6.28.1's `search`, `save`, `activity search` and
+`fts-check check` exit 0, and this release then finds the row 6.28.1 saved). Before it finishes,
+going back leaves the rows it has not reached without the Latin identifiers glued to CJK under
+6.28.1: this release marks 6.28.x's own glued-run pass done on its first open, so 6.28.1 does
+not run it again.
+
+- **Index terms, filled per open.** The observations' CJK index terms (bigrams and the Latin
+  identifiers glued to CJK) are filled by a new pass, `backfill-cjk-index-terms`: newest rows
+  first, about 250 ms per database open (the budget is checked after each row, the batch write
+  comes on top), each batch committed in its own transaction that does
+  not wait for another writer, with its position in a new table, `migration_cursors`. A killed
+  open keeps what it wrote, and two processes opening at once never append the same terms twice
+  (6.28.x's one-transaction pass doubled 8334 of 8334 rows with three openers on a synthetic
+  store, per the v6.28.0 pre-tag review). It replaces 6.28.x's `backfill-glued-ascii-runs` and
+  runs again on stores that finished that one, because it also fills the CJK of lessons, facts,
+  concepts and aliases, below. A row the next `update` would move into its narrative (an empty
+  narrative over text that does not read as derived, as imports before 3.69.0 left them) is left
+  as it was. On a synthetic v6.27.0 store of 250,000 observations and 200,000 events (two thirds
+  and three quarters of them with CJK)
+  (2026-10-17, this release's code against 6.28.1, back to back; three runs each for the hook,
+  server and first opens, one run each for the fill; load average 2–11): 6.28.1's prompt hook
+  opening it first was killed at its 5 s timeout with no output in 3 of 3 runs, and an MCP server
+  started 0.5 s later answered after 12.4–12.6 s; this release's hook exited 0 in 0.77–1.10 s and
+  the server answered in 0.35–0.74 s. A plain first open took 8.8 s on 6.28.1 (one of three runs
+  threw SQLITE_CORRUPT after 0.3 s, below) and 0.94–0.97 s here. The fill then took 105 opens of about 0.5 s
+  each (6.28.1: 54 opens, the first 8.6 s for its one-transaction observations pass, then 0.26 s
+  each for events), an open after it 3 ms, and while it runs the 2 s prompt search took 561–580 ms
+  per prompt (6.28.1: 307–320 ms in two of three runs). On a copy of this machine's store (516
+  observations, most of which an earlier build of this pass had already filled; it appended to the
+  4 rows written since) the pass walked every row and finished in one open of 48–49 ms. On that
+  synthetic store, on the machine these numbers come from, writes through the FTS triggers now and
+  then failed with "database disk image is malformed" under both 6.28.1 and this release, and also
+  when the same SQL was replayed without this project's code; the cause is not settled (D#424,
+  `docs/audits/20261017-v6.29.0-pretag-measurements.md`). In three fills run as the hooks run
+  them, one process per open, the 16 batches that failed rolled back, a later open wrote them
+  again, and both FTS indexes passed `integrity-check` at the end. In 60 runs that wrote a whole
+  fill on one connection (the pass, or its SQL replayed through three bindings), 9 left the
+  observations index inconsistent with its rows (2 without raising any error); `fts-check
+  rebuild` rebuilds that index from the rows.
+- **The `🤖` lesson mark.** A lesson that save-time enrichment, or the daily re-enrich retrying
+  it, distills onto an explicit save was shown as the person's own words. It now starts with `🤖 `,
+  and `get` / `mem_get` add "🤖 lesson auto-written" to the header. A lesson you write is never
+  marked, and rewriting a marked lesson drops the mark. The index stores the mark as a token, but
+  no search can match on it: the query side drops it.
+- **Exit codes and refusals.** A flag that takes no value (the 28 in `cli/common.mjs`
+  BOOLEAN_CLI_FLAGS: `--force`, `--json`, `--confirm`, `--or`, `--dry-run`, …) no longer swallows the
+  word after it, so `save --title X --force "text"` saves "text", `search --or redis kafka`
+  searches both, `recent --json 5` prints five rows as JSON, `get --json 2` shows #2 (as text: get
+  has no JSON output) — and `delete --confirm 12`, a usage error before, now deletes #12.
+  `--json true` / `--force false` still parse as before. These now exit 1 where they exited 0,
+  with nothing written:
+  - `compress`, `maintain`, `optimize`, `delete`, `activity promote` / `delete`, `import-jsonl`,
+    `defer drop` and `fts-check rebuild` given `--dry-run` (or `--dry-run=1`, `=yes`, …) on a run
+    that writes. They never read it: `maintain execute --dry-run` ran the delete, and
+    `maintain --dry-run execute` would have started to. Preview with `maintain scan`, or without
+    `--execute` / `--run`; `restore` and `adopt` read it, and `restore` now takes `--dry-run=1` as
+    a dry run too. `--dry-run false` runs the write.
+  - `activity save`, `import-jsonl` and `restore` given a `--project` short name that is a near
+    miss of an existing project's name (two edits for a name of 8 characters or more, one for
+    4–7, an exact match below that; a full `parent--name` id is not compared), as `save` and
+    `defer add` already did.
+  - `save`, `defer add`, `activity save`, `import-jsonl`, `restore`, `mem_save` and `mem_defer`
+    given a full project id that differs from an existing one only in case.
+  - `save "…" --force --draft`: an unknown flag after a flag that takes no value is refused, not
+    taken for that flag's value.
+
+  `restore --project <short name>` that only a fuzzy match tied to an existing project now writes
+  under that exact name (as a new project, and says so); a short name that is an existing
+  project's last segment still restores into that project. `uninstall` exits 3 when the MCP
+  registration is left in `~/.claude.json` (as `install` does); `install`, `uninstall` and
+  `cleanup-hooks` exit 1 before doing anything when the config home is missing under a parent
+  they cannot write; `doctor` reports a 6.27.0-or-older plugin cache whose first npm install
+  failed as ✗ (exit 1) instead of "not installed yet". MCP tools other than `mem_save` /
+  `mem_defer` given a `project` with no rows start their answer with a note saying so.
+
+### Search
+- **CJK inside a lesson, fact, concept or alias is searchable** (the precondition of D#422). unicode61
+  stores a CJK run as one token, and hook capture, re-enrich, cluster merge, smart compress and
+  save-time enrichment's lesson appended CJK index terms for title + narrative only, so a query
+  for `泄漏` missed a model-written lesson reading `连接池泄漏的根因…` (an explicit save already
+  indexed its own lesson). On 2026-10-17, 58 of this machine's 472 live observations carried CJK
+  in those fields. Each of those writers now indexes the side fields it writes, so do weekly
+  summaries and imported tool calls, an `update` keeps a lesson's terms (the first update dropped
+  the ones an explicit save had indexed), and the pass above fills rows written before. `restore`
+  keeps an export's index text as it was.
+- The query-side split of a token that glues Latin to CJK without a dictionary word
+  (`redis连接池`), measured for this release, is not in it: it reached more targets on
+  observations and events, but lost every such hit on sessions and prompts, whose indexes carry
+  no CJK terms (D#422).
+
+### Hooks
+- **Every statement a hook runs through `ensureDb` waits at most the time left until its
+  deadline** (D#394), the first open's migration and pending cleanups included; a second statement
+  after a waited one no longer waits the whole budget again. The prompt search (2 s in
+  `hooks.json`) and the opt-in Agent injection (5 s) set deadlines too: under another writer's
+  8 s lock on a store needing its migration they were killed at 2005 ms and 5007 ms with no output,
+  and now exit 0 at 1579 ms and 3550 ms, leaving the migration to the next open. The MCP server,
+  the CLI, background workers and the PreToolUse file recall's read-only connection (1 s per
+  statement) wait as before.
+- Openers that start together fill different events (D#396): three openers released together
+  filled 12.4% more rows per round (30 rounds, sign test p 0.016; one opener alone +1.9%, not
+  significant).
+- A failed `events_fts` rebuild leaves the index it found, so the next open retries; it used to
+  commit an empty index the version check then read as migrated.
+- The summary worker stops waiting on a flush whose worker died, and when a later Stop owns its
+  session; each Stop after a worker death kept a process waiting up to 275 s (~82 MB resident,
+  per the v6.28.0 pre-tag review).
+- An unclaimed flush file (from a worker of 6.27.0 or older, still running during the update) is
+  handed on after 365 s instead of 275 s, so its episode is not saved twice.
+- A handed-on episode keeps the git branch its work was on, not the recovering session's.
+- The episode lock measures its wait on the process's own clock, and asks a recorded holder
+  whether it is still running before taking its lock on age: a clock step or a resumed machine
+  let the next hook take a running holder's lock. The cost: a crashed holder's lock whose pid is
+  reused by a long-running process is taken back after 1 h instead of 30 s.
+
+### Unattended model passes
+- **Re-enrich raises a machine-written row's importance to 2 at most** (D#376). Stored text could
+  talk the model into importance 3, the top tier of Key Context (2 of 12 replies to a hostile row
+  before the prompt guard); no benign re-enrich reply in the same A/B said 3 (0 of 40). A row
+  already at 3 keeps it.
+- **The alias and concept backfills and smart-compress send stored rows to the model as data**
+  (D#375): instructions and `MEMORY_INPUT_GUARD` in the system role, the rows in the user turn, as
+  cluster merge, re-enrich and save-time enrichment already did. Measured through `claude -p`,
+  2 repetitions per fixture (`benchmark/prompt-guard-ab.mjs`, not in the npm package): benign rows
+  parsed and complete 20/20 in both arms of each pass, smart-compress's verdict agreeing 20/20.
+  Hostile rows were steered 2/14 → 0/14 on the alias pass, 0/14 → 0/14 on the concept pass (blind
+  there) and 1/14 → 1/14 on smart-compress; none of the differences is significant (all three
+  passes, 3/42 → 1/42, Fisher p 0.62). One after-arm smart-compress run followed a row that forged
+  an end-of-data line: it hid three rows and stored the injected line as the summary's lesson. The
+  same shape got through the guarded cluster merge in 6.28; it is filed (D#416). The scope
+  backfill, whose output is one of four fixed values, still puts the row inside its prompt.
+- **Smart-compress and cluster merge proceed only on a verdict of boolean `true`**: a reply of
+  `"should_compress": "false"` (a string) hid the rows it named, `"should_merge": "false"` folded
+  them. A missing verdict refuses, as before.
+
+### CLI and MCP
+- MCP tools given a `project` with no rows say so at the top of the answer, as the CLI does.
+- A content writer's refusal suggests the nearest flag it takes (`save --file` → `--files`).
+- `mem_save(lesson_learned: "", lesson: X)` keeps X; every alias pair treats an empty canonical
+  value as not given.
+- `mem_delete`'s empty-list error no longer advises omitting the required ids.
+- The CLI deep search no longer says its rewrites found nothing when the rewrite failed.
+- `restore --project` refuses a near-miss project too, and names a new one in its summary.
+
+### Install and doctor
+- `uninstall`'s MCP lines agree with `~/.claude.json`: no removal command when nothing of ours is
+  registered, and no "removed" line when the entry is still there.
+- `cleanup-hooks` keeps a launcher of yours that runs one of our entry names (it deleted it) and
+  puts back a marketplace clone's `hooks.json` an earlier install emptied.
+- An absent config home under a parent that cannot be written is refused before anything is done
+  (it left half an install and a raw EACCES stack).
+- The "not on PATH" warning compares directories, so a symlinked `~/.local` no longer triggers it.
+- The plugin-cache self-heal recognises install-managed hooks whose paths use backslashes; it reads
+  each hook command as written, so a hook of yours that quotes a path ending in `claude-mem-lite`
+  is not taken for ours.
+- `doctor` no longer reads a 6.27.0-or-older plugin cache whose first npm install failed as "not
+  installed yet"; it reports it with the npm command that repairs it.
+
+### Index terms (review repairs)
+- The new pass marks 6.28.x's `backfill-glued-ascii-runs` done, so a 6.28.x opener of the same
+  store (a global CLI beside the plugin) does not append the glued runs a second time.
+- A connection opened under a hook's deadline gets its own wait back when the deadline is lifted.
+
+### Development
+- CI runs `scripts/swap-mixed-tree.mjs` from each of the three newest tags on every push to main
+  and every pull request, and fails if it finds none: every entry point must load at every split point of a killed update.
+  Run by hand before that job existed, the script caught a break in this release (an export the
+  previous release's `schema.mjs` imports had been made internal). It now also checks names bound
+  by assignment destructuring, `Promise.all` elements and namespace imports, static or dynamic.
+- The GitHub Release body is this version's CHANGELOG entry (`scripts/changelog-entry.awk`); a
+  test checks on every commit that package.json's version has one, and the release check fails a
+  tag without one before anything is published.
+- `benchmark/tool-text-ab.mjs` probes B1's `prefix*` case in its registered wording (P11/P12):
+  B1 does no harm there and barely changes the call — the first query was `migr*` in 10 of 10
+  base sessions and 9 of 10 B1 sessions.
+- The readings behind these notes are in `docs/audits/20261017-v6.29.0-pretag-measurements.md`.
+
 ## v6.28.1 — Chinese text in events is searchable, four MCP tool descriptions corrected, install no longer empties the marketplace clone's hooks
 
 v6.28.0 was tagged but never published: its release check failed on seven tests that ran `install`

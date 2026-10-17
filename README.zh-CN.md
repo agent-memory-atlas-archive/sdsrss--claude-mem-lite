@@ -199,6 +199,15 @@ rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
     repos/               # 浅克隆的源代码仓库
 ```
 
+## 升级到 6.29.0
+
+**lesson、facts、concepts 和 aliases 里的中文变得可以搜到；更新后的数据库打开会逐步补上这些索引，不会拖住钩子。** 没有 schema 版本变化：本版打开过的数据库，6.28.1 仍能打开、搜索和写入。要退回，请等补完之后再退：还没补到的行，在 6.28.1 下会缺少粘在中文上的英文标识符。
+
+- **代价。** 每次打开数据库约花 250 ms 为已有的 observation 补索引词，从最新的开始，每批单独提交，直到补完。维护者的库的副本（516 条 observation，大部分已由这一遍的早期版本补过）上，这一遍一次打开（48–49 ms）就走完。在 25 万条 observation、20 万条 event（大部分含中文）的合成 v6.27.0 库上，首次打开约 1 s（6.28.1 约要 9 s，先打开它的 5 s 钩子 3 次都被杀掉），之后补完需要 105 次打开、每次约 0.5 s；补完后的一次打开 3 ms。
+- **模型写在你显式保存的记录上的 lesson 以 `🤖` 开头**，`get` 的标题行注明 "🤖 lesson auto-written"。你自己写的 lesson 不会被标记。
+- **退出码。** 不带值的 flag（`--force`、`--json`、`--confirm`、`--or`、`--dry-run` 等）不再吞掉后面的词：`delete --confirm 12` 现在会删除 #12，`recent --json 5` 输出 JSON。`maintain`、`compress`、`optimize`、`delete`、`activity promote` / `delete`、`import-jsonl`、`defer drop` 和 `fts-check rebuild` 从来不读 `--dry-run`，在会写入的运行中遇到它会以 exit 1 拒绝，而不是照常执行；`activity save`、`import-jsonl` 和 `restore` 拒绝拼错的 `--project`；MCP 注册没删掉时 `uninstall` 以 exit 3 结束。其余见 CHANGELOG.md；依赖旧行为的脚本需要检查一下。
+- **本版还有：** 经 `ensureDb` 打开数据库的钩子，所有数据库等待都在截止时间前结束，包括首次打开的迁移、提示词搜索和 Agent 注入；无人值守的 re-enrich 最多把 importance 提到 2；又有三个后台提示把存储的行作为数据交给模型；smart-compress 和 cluster merge 只在明确同意时才动手。详见 CHANGELOG.md。
+
 ## 升级到 6.28.1
 
 **更新后会给事件重建索引，事件里的中文从此能搜到**（切分 U+4E00–9FFF 和 U+3400–4DBF 两段汉字；假名、韩文和更少见的汉字扩展区不切分）。

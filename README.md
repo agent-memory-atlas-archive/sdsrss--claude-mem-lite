@@ -237,6 +237,35 @@ rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden (if not auto-moved)
     repos/               # Shallow-cloned source repos
 ```
 
+## Upgrading to 6.29.0
+
+**Chinese text in lessons, facts, concepts and aliases becomes searchable, and the database opens
+after the update fill that in without holding up a hook.** No schema-version change: 6.28.1 still
+opens, searches and writes the database after this release has. Go back only after the fill
+finishes: rows it has not reached stay without the Latin identifiers glued to Chinese under 6.28.1.
+
+- **What it costs.** Each database open spends about 250 ms filling the index terms of existing
+  observations, newest first, each batch committed, until all are done. On a copy of the
+  maintainer's store (516 observations, most already filled by an earlier build of this pass)
+  the pass walked every row in one open of 48–49 ms. On a synthetic v6.27.0 store of 250,000
+  observations and 200,000 events (mostly CJK) the first open takes about 1 s (6.28.1: about 9 s,
+  and a 5 s hook opening it first was killed), and the fill then takes 105 opens of about 0.5 s;
+  an open after it takes 3 ms.
+- **A lesson a model writes onto one of your explicit saves starts with `🤖`**, and `get` says
+  "🤖 lesson auto-written". A lesson you write is never marked.
+- **Exit codes.** A flag that takes no value (`--force`, `--json`, `--confirm`, `--or`,
+  `--dry-run`, …) no longer swallows the next word: `delete --confirm 12` now deletes #12, and
+  `recent --json 5` prints JSON. `maintain`, `compress`, `optimize`, `delete`, `activity promote` /
+  `delete`, `import-jsonl`, `defer drop` and `fts-check rebuild`, which never read `--dry-run`,
+  refuse it with exit 1 on a run that would write, instead of running; `activity save`, `import-jsonl` and `restore` refuse a mistyped
+  `--project`; `uninstall` exits 3 when the MCP registration is left. CHANGELOG.md lists the
+  rest; a script that relied on the old behaviour needs a look.
+- **Also in this release:** the database waits of a hook that opens through `ensureDb` all end by
+  its deadline, the first open's migration, the prompt search and the Agent injection included;
+  the unattended re-enrich raises importance to 2 at most; three more background prompts send
+  stored rows to the model as data, and smart-compress and cluster merge act only on an explicit
+  yes. Details in CHANGELOG.md.
+
 ## Upgrading to 6.28.1
 
 **After the update, events are re-indexed so Chinese text in them is searchable** (the Han ranges

@@ -82,10 +82,14 @@ function pluginCacheDir(version) {
   return join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', version);
 }
 
-function makePluginVersion(version, { deps = 'real' } = {}) {
+function makePluginVersion(version, { deps = 'real', launcher = 'current' } = {}) {
   const root = pluginCacheDir(version);
   mkdirSync(join(root, 'scripts'), { recursive: true });
-  writeFileSync(join(root, 'scripts', 'launch.mjs'), '// launcher\n');
+  // This tree's launcher, which leaves .npm-install-failed when its npm install fails; 'old' is
+  // one from before that marker (<= 6.27.0), which leaves nothing.
+  if (launcher === 'current')
+    copyFileSync(join(REPO, 'scripts', 'launch.mjs'), join(root, 'scripts', 'launch.mjs'));
+  else writeFileSync(join(root, 'scripts', 'launch.mjs'), '// launcher\n');
   for (const f of ['cli.mjs', 'server.mjs', 'hook.mjs']) writeFileSync(join(root, f), '// x\n');
   mkdirSync(join(root, 'hooks'), { recursive: true });
   writeFileSync(
@@ -688,6 +692,22 @@ describe('doctor: the MCP SDK is checked in each code home', () => {
     const r = run('doctor', { CLAUDE_MEM_DIR: join(home, 'data') });
     expect(
       failLines(r.stdout).some((l2) => /better-sqlite3/.test(l2)),
+      r.stdout,
+    ).toBe(true);
+    expect(r.stdout).toMatch(/npm install --omit=dev/);
+    expect(r.stdout).not.toMatch(/not installed yet/);
+  });
+
+  // v6.28.0 pre-tag review, install P3-8: only this tree's launch.mjs leaves the marker, so a
+  // <= 6.27.0 cache whose first-start npm install had failed (no node_modules, no marker) still
+  // read as "not installed yet" and stayed out of the ✗ count. Without a launcher that leaves the
+  // marker, its absence says nothing.
+  it('a plugin cache whose launcher leaves no failure marker is not called pending', () => {
+    makePluginVersion('6.27.0', { deps: 'none', launcher: 'old' });
+    enablePlugin();
+    const r = run('doctor', { CLAUDE_MEM_DIR: join(home, 'data') });
+    expect(
+      failLines(r.stdout).some((l) => /better-sqlite3/.test(l)),
       r.stdout,
     ).toBe(true);
     expect(r.stdout).toMatch(/npm install --omit=dev/);

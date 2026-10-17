@@ -136,7 +136,7 @@ import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from '
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, EXPORT_FIDELITY_NOTE, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
-import { isFtsCorruptionError, ftsCorruptionRemedy, formatDbWalKeptNotice } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError, ftsCorruptionRemedy } from './lib/db-unusable.mjs';
 import { fetchRecent } from './lib/recent-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
@@ -190,20 +190,8 @@ function openDbAtStartup() {
         info: (m) => debugLog('INFO', 'server', m),
       });
     } catch (err) {
-      // A corruption error that repeats while another process holds the store is waited out the
-      // same way: the holder can be this session's own SessionStart hook or a background worker,
-      // gone a moment later, and the open repairs it once nobody holds it (pre-tag review
-      // 2026-10-17, P3-3). Such a try takes milliseconds, so a quarter second between them.
-      const held = err?.walKept === 'in-use';
-      if (!(isDbBusyError(err) || held) || Date.now() - start >= SERVER_OPEN_BUSY_RETRY_MS) throw err;
-      debugLog(
-        'WARN',
-        'server',
-        held
-          ? `database reports corruption and another process holds it, waiting: ${err.message}`
-          : `database busy at startup, waiting for the other writer: ${err.message}`,
-      );
-      if (held) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+      if (!isDbBusyError(err) || Date.now() - start >= SERVER_OPEN_BUSY_RETRY_MS) throw err;
+      debugLog('WARN', 'server', `database busy at startup, waiting for the other writer: ${err.message}`);
     }
   }
 }
@@ -266,9 +254,6 @@ try {
     console.error(
       `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
     );
-  } else if (err.walKept === 'in-use' || err.walKept === 'unknown') {
-    // D#430: removing them under another open connection loses that connection's writes.
-    console.error(formatDbWalKeptNotice({ dbPath: DB_PATH, walKept: err.walKept }));
   } else {
     console.error(
       `[claude-mem-lite] Left WAL/SHM intact (not a corruption error). If this persists, retry or reinstall: node install.mjs install`,

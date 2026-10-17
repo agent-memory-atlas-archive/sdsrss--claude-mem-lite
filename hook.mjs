@@ -106,7 +106,6 @@ import {
   sweepStaleProjectMarkers,
   lastSchemaSkew,
   lastDbUnusable,
-  lastDbWalKept,
 } from './hook-shared.mjs';
 import {
   handleLLMEpisode,
@@ -2780,13 +2779,8 @@ async function emitDbUnusableNotice() {
     // TWO DIFFERENT STRINGS, unlike the skew twin, and the asymmetry is the point: the
     // human channel carries the repair command, the model channel carries only the fact.
     // See formatDbUnusableModelNotice — this family's remedy overwrites the database.
-    // The files kept because another process may be writing through them (schema.mjs
-    // ensureDbWithWalRecovery): the set-aside remedy would delete them, so say why instead.
-    const walKept = lastDbWalKept();
     queueHookSystemMessage(
-      walKept
-        ? mod.formatDbWalKeptNotice({ dbPath: DB_PATH, walKept })
-        : mod.formatDbUnusableNotice({ dbPath: DB_PATH, remedy: mod.dbUnusableRemedy(DB_PATH) }),
+      mod.formatDbUnusableNotice({ dbPath: DB_PATH, remedy: mod.dbUnusableRemedy(DB_PATH) }),
     );
     queueHookContext('SessionStart', mod.formatDbUnusableModelNotice());
   } catch (e) {

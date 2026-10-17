@@ -1364,6 +1364,13 @@ export function backfillObservationIndexTerms(
 const EVENT_TERMS_BUDGET_MS = 250;
 /** Rows read per batch; a batch is cut short where the budget runs out. */
 const EVENT_TERMS_BATCH = 250;
+/**
+ * How long a batch write waits for another writer, and how many batches apart ensureDb starts
+ * openers (by pid): D#396, measured together (either alone gained nothing), see
+ * backfillEventSearchTerms.
+ */
+const EVENT_TERMS_WRITE_WAIT_MS = 100;
+const EVENT_TERMS_SPREAD = 4;
 
 /**
  * Fill events.search_terms for the rows that have none, newest first, the most likely to be
@@ -1372,23 +1379,35 @@ const EVENT_TERMS_BATCH = 250;
  * pending (the MCP server's startup refreshPlannerStats) turned the planner to a rowid scan of
  * every filled row, about 41 ms per open at 200,000 events once the fill was done (review,
  * 2026-10-17). Rows are segmented one at a time until `budgetMs` has passed, outside any
- * transaction, and each batch is written in its own short IMMEDIATE transaction that does not
- * wait for another writer: if one holds the lock this stops and leaves the rest to a later open,
- * so a hook under a long lock is not held here (it may still spend the budget segmenting first),
- * and with nothing to fill an open only reads the empty index. Keyed on the rows rather than a
- * done marker, so an event an older build writes later is filled by the next open too. The UPDATE
- * re-checks NULL, so terms another writer stored meanwhile are kept, and only rows it changed are
- * counted; concurrent openers pick the same newest rows, so all but one segment for nothing. The
- * index trigger re-indexes each filled row. Returns how many rows it filled and whether none is
- * left.
+ * transaction, and each batch is written in its own short IMMEDIATE transaction that waits at most
+ * `writeWaitMs` for another writer: if one holds the lock longer this stops and leaves the rest
+ * to a later open, so a hook under a long lock is held here for that wait at most (it may still
+ * spend the budget segmenting first), and with nothing to fill an open only reads the empty index.
+ * Keyed on the rows rather than a done marker, so an event an older build writes later is filled
+ * by the next open too. The UPDATE re-checks NULL, so terms another writer stored meanwhile are
+ * kept, and only rows it changed are counted. The index trigger re-indexes each filled row.
+ *
+ * Openers started together (UserPromptSubmit always runs two) used to segment the same newest rows
+ * and all but one stopped at their first write (D#396). ensureDb now starts each process
+ * `startBatch` batches below the newest pending rows (its pid modulo EVENT_TERMS_SPREAD), going
+ * back up for the rows above once it reaches the end, and a batch write waits for another opener's
+ * short write: three openers released together filled 12.4% more rows per round on a synthetic
+ * store of 200,000 CJK events (30 rounds each, order rotated, 22 of 30 ahead; 2026-10-17, load
+ * average 24-30), while the start alone or the wait alone gained nothing measurable and one opener
+ * alone was unchanged. Returns how many rows it filled and whether none is left.
  *
  * @param {import('better-sqlite3').Database} db
- * @param {{ budgetMs?: number, batchSize?: number }} [opts]
+ * @param {{ budgetMs?: number, batchSize?: number, startBatch?: number, writeWaitMs?: number }} [opts]
  * @returns {{ filled: number, done: boolean }}
  */
 export function backfillEventSearchTerms(
   db,
-  { budgetMs = EVENT_TERMS_BUDGET_MS, batchSize = EVENT_TERMS_BATCH } = {},
+  {
+    budgetMs = EVENT_TERMS_BUDGET_MS,
+    batchSize = EVENT_TERMS_BATCH,
+    startBatch = 0,
+    writeWaitMs = EVENT_TERMS_WRITE_WAIT_MS,
+  } = {},
 ) {
   const start = performance.now();
   const prior = db.pragma('busy_timeout', { simple: true });
@@ -1409,15 +1428,23 @@ export function backfillEventSearchTerms(
     }
     const pick = db.prepare(
       `SELECT id, title, body FROM events INDEXED BY idx_events_terms_pending
-        WHERE search_terms IS NULL AND id < ? ORDER BY id DESC LIMIT ?`,
+        WHERE search_terms IS NULL AND id < ? ORDER BY id DESC LIMIT ? OFFSET ?`,
     );
     const fill = db.prepare(`UPDATE events SET search_terms = ? WHERE id = ? AND search_terms IS NULL`);
     const write = db.transaction((rows) => rows.reduce((n, r) => n + fill.run(r.terms, r.id).changes, 0));
     let filled = 0;
     let cursor = Number.MAX_SAFE_INTEGER;
+    let skip = startBatch * batchSize;
     for (;;) {
-      const batch = pick.all(cursor, batchSize);
-      if (batch.length === 0) return { filled, done: true };
+      const batch = pick.all(cursor, batchSize, skip);
+      if (batch.length === 0) {
+        if (cursor === Number.MAX_SAFE_INTEGER && skip === 0) return { filled, done: true };
+        // Started below the newest rows, or fewer were pending than the start: go back up.
+        cursor = Number.MAX_SAFE_INTEGER;
+        skip = 0;
+        continue;
+      }
+      skip = 0;
       // Row by row, so a batch of long bodies stops at the budget instead of after 250 of them
       // (4000-character CJK bodies: 2098 ms per 250, round-4 review).
       const rows = [];
@@ -1425,11 +1452,14 @@ export function backfillEventSearchTerms(
         rows.push({ id: e.id, terms: eventSearchTerms(e.title, e.body) });
         if (performance.now() - start >= budgetMs) break;
       }
+      db.pragma(`busy_timeout = ${writeWaitMs}`);
       try {
         filled += write.immediate(rows);
       } catch (e) {
         if (isDbBusyError(e)) return { filled, done: false };
         throw e;
+      } finally {
+        db.pragma('busy_timeout = 0');
       }
       cursor = rows.at(-1).id;
       if (performance.now() - start >= budgetMs) return { filled, done: false };
@@ -1608,7 +1638,7 @@ export function ensureDb() {
     // tests, silently halting orphan/normalize hygiene. Best-effort: never throws.
     runDeferredCleanups(ready);
     try {
-      backfillEventSearchTerms(ready);
+      backfillEventSearchTerms(ready, { startBatch: process.pid % EVENT_TERMS_SPREAD });
     } catch (e) {
       debugCatch(e, 'event-search-terms-backfill');
     }

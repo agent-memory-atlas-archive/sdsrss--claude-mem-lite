@@ -327,15 +327,18 @@ scope: ${SCOPE_PROMPT_LEGEND}`;
         // concepts/facts (empty on manual saves → would drop the original
         // narrative terms and regress recall) and never touch the user's curated
         // title / narrative / lesson / type / importance.
-        const aliasPrompt = `Generate alternative search terms so this memory is findable by paraphrase, synonym, or cross-language queries. Return ONLY valid JSON, no markdown fences.
-
-Title: ${truncate(cand.title || '(untitled)', 200)}
-Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}
+        // Instructions and the guard in `system`, the stored row in `user` (D#375, as D367 did
+        // for the general prompt): the aliases are appended to the FTS text, so a narrative
+        // that names its own search terms would otherwise choose what the row is found by.
+        const system = `Generate alternative search terms so this memory is findable by paraphrase, synonym, or cross-language queries. Return ONLY valid JSON, no markdown fences.
 
 JSON: {"search_aliases":["alt phrasing","synonym","spelled-out jargon","CJK term if the domain word has one"],"scope":"file|module|project|environment"}
 Give 3-6 aliases: words a user might search for the SAME concept but that are NOT already in the title (synonyms, the spelled-out form of an acronym, the jargon term for a described symptom, a CJK translation of a key domain term).
-scope: ${SCOPE_PROMPT_LEGEND}`;
-        const parsed = await callModelJSONAsync(aliasPrompt, 'haiku', {
+scope: ${SCOPE_PROMPT_LEGEND}
+${MEMORY_INPUT_GUARD}`;
+        const user = `Title: ${truncate(cand.title || '(untitled)', 200)}
+Narrative: ${truncate(cand.narrative || '(no narrative)', 500)}`;
+        const parsed = await callModelJSONAsync({ system, user }, 'haiku', {
           timeout: BG_LLM_TIMEOUT_MS,
           maxTokens: 300,
         });

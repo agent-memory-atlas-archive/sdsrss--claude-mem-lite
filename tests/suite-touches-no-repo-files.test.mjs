@@ -32,6 +32,7 @@ import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
+import { pathWithClaudeStub } from './claude-stub.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const INSTALL_PATH = join(REPO, 'install.mjs');
@@ -78,6 +79,7 @@ function runInstall(home, proj, extraEnv) {
     encoding: 'utf8',
     env: {
       ...process.env,
+      PATH: pathWithClaudeStub(home),
       HOME: home,
       CLAUDE_PROJECT_DIR: proj,
       CLAUDE_MEM_SKIP_REPOS: '1',
@@ -148,7 +150,14 @@ function seedClone(home) {
 }
 
 function runInstallFrom(clone, home, extraEnv) {
-  const env = { ...process.env, HOME: home, PWD: clone, CLAUDE_MEM_SKIP_REPOS: '1', ...extraEnv };
+  const env = {
+    ...process.env,
+    PATH: pathWithClaudeStub(home),
+    HOME: home,
+    PWD: clone,
+    CLAUDE_MEM_SKIP_REPOS: '1',
+    ...extraEnv,
+  };
   delete env.CLAUDE_PROJECT_DIR;
   return execFileSync(process.execPath, [join(clone, 'install.mjs'), 'install', '--dev'], {
     encoding: 'utf8',

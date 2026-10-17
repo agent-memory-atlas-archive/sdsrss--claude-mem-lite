@@ -21,6 +21,7 @@ import { execFileSync } from 'child_process';
 import { Worker } from 'node:worker_threads';
 import { acquireLock } from '../lib/proc-lock.mjs';
 import { atomicWriteFileSync } from '../lib/atomic-write.mjs';
+import { pathWithClaudeStub } from './claude-stub.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const INSTALL_PATH = join(REPO, 'install.mjs');
@@ -274,7 +275,13 @@ describe('R10 P1-8 — a settings.json that is not valid JSON is never overwritt
     const args = cmd === 'install' ? [cmd, '--dev'] : [cmd];
     return execFileSync(process.execPath, [INSTALL_PATH, ...args], {
       encoding: 'utf8',
-      env: { ...process.env, HOME: home, CLAUDE_MEM_SKIP_REPOS: '1', MEM_NO_AUTO_ADOPT: '1' },
+      env: {
+        ...process.env,
+        PATH: pathWithClaudeStub(home),
+        HOME: home,
+        CLAUDE_MEM_SKIP_REPOS: '1',
+        MEM_NO_AUTO_ADOPT: '1',
+      },
       cwd: root,
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 60000,

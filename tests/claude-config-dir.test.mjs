@@ -22,6 +22,7 @@ import { spawnSync } from 'child_process';
 import { recentPlans } from '../lib/plan-reader.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
+import { pathWithClaudeStub } from './claude-stub.mjs';
 
 const saved = process.env.CLAUDE_CONFIG_DIR;
 afterEach(() => {
@@ -210,6 +211,7 @@ describe('the installer and its probes use the host config home', () => {
       timeout: 120000,
       env: {
         ...process.env,
+        PATH: pathWithClaudeStub(root),
         HOME: home(),
         CLAUDE_CONFIG_DIR: cfg(),
         CLAUDE_MEM_DIR: join(root, 'data'),

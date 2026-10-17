@@ -1329,9 +1329,15 @@ export function backfillObservationIndexTerms(
     const fieldsOf = db.prepare(
       `SELECT title, subtitle, concepts, facts, lesson_learned, search_aliases, text FROM observations WHERE id = ?`,
     );
-    // The update repair's own condition (lib/observation-write.mjs rebuildObservationDerived).
-    const repairWouldMove = (id, narrative) =>
-      !String(narrative ?? '').trim() && !looksAlreadyDerived(fieldsOf.get(id));
+    // The update repair's own condition (lib/observation-write.mjs rebuildObservationDerived), asked
+    // of the text as it would be after the append: decided on the text before it, an appended
+    // spelling the case-exact known set lacks made a derived blob read as a body (round-3 pre-tag
+    // review, 2026-10-17). A text that is no body before the append is none after it either.
+    const repairWouldMove = (id, narrative, terms) => {
+      if (String(narrative ?? '').trim()) return false;
+      const row = fieldsOf.get(id);
+      return !looksAlreadyDerived({ ...row, text: `${row.text ?? ''} ${terms}` });
+    };
     const append = db.prepare(`UPDATE observations SET text = COALESCE(text, '') || ? WHERE id = ?`);
     const write = db.transaction((rows, from, below) => {
       db.exec(
@@ -1341,10 +1347,11 @@ export function backfillObservationIndexTerms(
       let n = 0;
       for (const r of rows) {
         const now = docOf.get(r.id);
-        // Decided here, under the write lock, on the row as it is now.
-        if (!now || repairWouldMove(r.id, now.narrative)) continue;
+        if (!now) continue; // deleted meanwhile
         const terms = now.doc === r.doc ? r.terms : missingCjkIndexTerms(now.doc);
-        if (terms) n += append.run(` ${terms}`, r.id).changes;
+        // Decided here, under the write lock, on the row as it is now.
+        if (!terms || repairWouldMove(r.id, now.narrative, terms)) continue;
+        n += append.run(` ${terms}`, r.id).changes;
       }
       db.prepare(
         `INSERT INTO migration_cursors (name, below_id) VALUES (?, ?)

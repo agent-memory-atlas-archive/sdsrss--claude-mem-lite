@@ -425,6 +425,58 @@ describe('the pass and the rows it cannot see as derived', () => {
     expect(after === before.narrative || after === text).toBe(true);
   });
 
+  // Round-3 pre-tag review: decided on the text BEFORE the append, the skip let through a derived
+  // blob that the append itself made non-derived (the same glued identifier in two side fields in
+  // a different case: the appended `Redis` is not in looksAlreadyDerived's case-exact known set),
+  // and a hook blob with nothing missing tested nothing. Both cases append terms if not skipped.
+  function hookRow({ title, text, lesson, aliases }) {
+    db.prepare(
+      `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+       VALUES ('hook-x', 'hook-x', ?, ?, ?, 'completed')`,
+    ).run(P, new Date().toISOString(), Date.now());
+    return Number(
+      db
+        .prepare(
+          `INSERT INTO observations (memory_session_id, project, text, type, title, narrative, lesson_learned, search_aliases, created_at, created_at_epoch, importance)
+           VALUES ('hook-x', ?, ?, 'change', ?, '', ?, ?, ?, ?, 1)`,
+        )
+        .run(P, text, title, lesson, aliases, new Date().toISOString(), Date.now()).lastInsertRowid,
+    );
+  }
+  it.each([
+    [
+      'a derived blob the append would make non-derived',
+      {
+        title: '修复连接池泄漏',
+        text: 'Redis连接 修复 连接 接池 池泄 泄漏',
+        lesson: 'redis连接池要设上限',
+        aliases: 'Redis连接',
+      },
+    ],
+    [
+      'a hook blob with a file-name fallback term and a CJK lesson',
+      {
+        title: '修复连接池泄漏',
+        text: '修复 复连 连接 接池 池泄 泄漏 hook-llm',
+        lesson: '异常路径没有归还连接',
+        aliases: null,
+      },
+    ],
+  ])('leaves %s alone, so the next update moves no terms', async (_, row) => {
+    const { applyObsUpdate } = await import('../lib/observation-write.mjs');
+    const { missingCjkIndexTerms } = await import('../nlp.mjs');
+    memStore();
+    const id = hookRow(row);
+    const doc = [row.title, row.text, row.lesson, row.aliases].filter(Boolean).join(' ');
+    expect(missingCjkIndexTerms(doc), 'premise: the pass has terms to append').not.toBe('');
+    db.prepare(`DELETE FROM migration_cleanups`).run();
+    runDeferredCleanups(db);
+    expect(textOf(db, id)).toBe(row.text);
+    applyObsUpdate(db, id, { importance: 3 });
+    const narrative = db.prepare('SELECT narrative FROM observations WHERE id = ?').get(id).narrative;
+    expect(narrative === '' || narrative === row.text).toBe(true);
+  });
+
   it('treats a whitespace-only narrative as blank, as the update does (round-2 P3-7)', () => {
     memStore();
     const id = insertLegacy(db, { title: 'Bash: npm test', narrative: '\n\t' });

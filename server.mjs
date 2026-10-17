@@ -174,14 +174,28 @@ import {
   chmodSync,
 } from 'fs';
 
+// Corruption-gated WAL recovery lives in schema.mjs (shared with hooks/CLI since the D#8-adjacent
+// P3 fix); the server keeps only its exit semantics. A busy open is retried for
+// SERVER_OPEN_BUSY_RETRY_MS first: another process's long write (a maintain, a store's first open
+// migrating it) is waited out rather than costing the session its memory tools.
+function openDbAtStartup() {
+  const start = Date.now();
+  for (;;) {
+    try {
+      return ensureDbWithWalRecovery({
+        warn: (m) => debugLog('WARN', 'server', m),
+        info: (m) => debugLog('INFO', 'server', m),
+      });
+    } catch (err) {
+      if (!isDbBusyError(err) || Date.now() - start >= SERVER_OPEN_BUSY_RETRY_MS) throw err;
+      debugLog('WARN', 'server', `database busy at startup, waiting for the other writer: ${err.message}`);
+    }
+  }
+}
+
 let db;
 try {
-  // Corruption-gated WAL recovery lives in schema.mjs (shared with hooks/CLI
-  // since the D#8-adjacent P3 fix); the server keeps only its exit semantics.
-  db = ensureDbWithWalRecovery({
-    warn: (m) => debugLog('WARN', 'server', m),
-    info: (m) => debugLog('INFO', 'server', m),
-  });
+  db = openDbAtStartup();
 } catch (err) {
   // Schema skew gets the same treatment as the CLI (mem-cli.mjs) and for the same reason:
   // the raw message ends in `npm i -g claude-mem-lite@latest`, which repairs nothing on the
@@ -2094,7 +2108,8 @@ server.registerTool(
 // Handler extracted to server/fts-check.mjs (v2.41 split).
 import { handleMemFtsCheck } from './server/fts-check.mjs';
 
-import { DAY_MS, DB_BUSY_TIMEOUT_MS } from './lib/time-constants.mjs';
+import { DAY_MS, DB_BUSY_TIMEOUT_MS, SERVER_OPEN_BUSY_RETRY_MS } from './lib/time-constants.mjs';
+import { isDbBusyError } from './lib/db-busy.mjs';
 server.registerTool(
   'mem_fts_check',
   {

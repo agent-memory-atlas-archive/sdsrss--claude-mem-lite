@@ -534,11 +534,13 @@ function openWithInjectedFault(
 }
 
 // D#427. The WAL-delete arm is for a frame that stays corrupt. On 2026-10-17, 3 of 43 first opens
-// of intact store copies on one host threw a plain SQLITE_CORRUPT that a second open did not
-// (D#424). Deleting -wal/-shm there, with another connection open, discards every transaction that
-// connection committed since its last checkpoint and everything it commits after, until it
-// closes, and integrity_check still reads ok (2026-10-17 probe: 3 of 3 runs, 2200 of 2200 of the
-// holder's rows gone). So the open is retried once with the files untouched first.
+// by 6.28.1 of fresh copies of one intact store threw a plain SQLITE_CORRUPT on one host (D#424);
+// the other 40 did not. Deleting -wal/-shm there, with another connection open, discards what that
+// connection committed since its last checkpoint, and until it closes the two overwrite each
+// other's pages, with integrity_check still ok (2026-10-17 probe: with auto-checkpoint off, 3 of 3
+// runs lost all 2200 rows the holder committed; with SQLite's default, 2 of 3 lost all 2200 and one
+// lost 1300 of them and 900 of the other connection's 2000). So the open is retried once with the
+// files untouched first.
 describe('a corruption error that does not repeat (D#427)', () => {
   for (const [name, site] of Object.entries(FAULT_SITES)) {
     it(`keeps a live connection's committed rows when the ${name} throws once`, async () => {
@@ -593,10 +595,10 @@ describe('the FTS rebuild arm under a busy deadline (D#415)', () => {
 });
 
 // D#430. A corruption error that repeats still reached the delete, with the MCP server's
-// connection possibly open: the same loss as above (6cec1ac4's probe, 2200 of 2200 rows). Every
-// WAL-mode connection holds a shared lock on the database file and a read lock on the -shm file
-// while it is open, and Linux lists them with the holder's pid in /proc/locks (2026-10-17: both,
-// for a better-sqlite3 holder, and neither once it closed). The delete now runs only when that
+// connection possibly open: the same loss as above. A WAL-mode connection that has read the
+// database holds a shared lock on the database file and, in the default locking mode, a read lock
+// on the -shm file until it closes, and Linux lists them with the holder's pid in /proc/locks
+// (2026-10-17: both, for a better-sqlite3 holder, and neither once it closed). The delete now runs only when that
 // list shows no other process; where it cannot be read, the WAL is kept.
 describe('a corruption error that repeats, with the store held or the lock table unreadable (D#430)', () => {
   it.runIf(existsSync('/proc/locks'))(

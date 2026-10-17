@@ -1444,8 +1444,8 @@ export async function handleLLMEpisode() {
         // carries tool output, text whoever controls a file or a command's output wrote, and 3 is
         // Key Context's top tier; benign episodes did not use it: 72 real sub-episodes from this
         // machine's transcripts through this prompt (claude -p haiku, 2026-10-17) scored 1 x42,
-        // 2 x30, 3 x0. (The row buildImmediateObservation saves before the call, which stays when
-        // the call fails, still takes the path heuristic's 3: that is no model output.)
+        // 2 x30, 3 x0. (A rule-based row, buildImmediateObservation's, saved before the call or when
+        // it fails, can still be 3 after a failing test or build command: that is no model output.)
         importance:
           (!lessonLearned && (groundingDropped || parsed.type !== 'decision')) || quotesToolOutput
             ? Math.min(ruleImportance, 1)

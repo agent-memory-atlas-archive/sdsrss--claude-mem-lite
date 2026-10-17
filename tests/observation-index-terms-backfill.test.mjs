@@ -499,8 +499,8 @@ describe('the pass and the rows it cannot see as derived', () => {
 // D#413. The pass is marked done once, but an older build can go on writing the same store for as
 // long as a session started before the update lives (this maintainer's machine, sessions
 // 2026-09-05 to 2026-10-17, start to last activity: p50 0.65 h, p99 39 h, 4 of 540 past 7 days),
-// and it inserts rows without these terms (live store 2026-10-17: 8 of the 36 rows the 6.27.0
-// hooks wrote after the fill) or rewrites a filled row's text without them (6.28.x mem_update).
+// and it inserts rows without these terms (live store 2026-10-17: 8 of the 36 rows its 6.27.0
+// code wrote after the fill) or rewrites a filled row's text without them (6.28.x mem_update).
 // The daily maintain worker walks the store again, on a cursor of its own, for 7 days from its
 // first run.
 describe('rows an older build writes after the pass is done (D#413)', () => {

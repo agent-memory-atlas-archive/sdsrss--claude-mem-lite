@@ -1407,7 +1407,7 @@ const OBS_TERMS_RECHECK = 'recheck-cjk-index-terms';
  * from the auto-maintain worker, for OBS_TERMS_RECHECK_WINDOW_MS from this function's first run on
  * the store, then mark itself done. The open-time pass is marked done once, but an older build can
  * go on writing the store for as long as a session started before the update lives: it inserts
- * rows without these terms (live store 2026-10-17: 8 of the 36 rows the 6.27.0 hooks wrote after
+ * rows without these terms (live store 2026-10-17: 8 of the 36 rows its 6.27.0 code wrote after
  * the fill) and rewrites a filled row's text without them (6.28.x mem_update), and no column says
  * which rows a writer touched. The window starts at the first run, not at the open-time pass's
  * marker, so a store whose pass finished long before this build arrived still gets a whole walk.
@@ -1819,9 +1819,10 @@ export { isFtsCorruptionError };
 
 /**
  * Whether a process other than this one holds a lock on any of `paths`, read from Linux's
- * /proc/locks. Every WAL-mode connection holds a shared lock on the database file and a read lock
- * on byte 128 of the -shm file for as long as it is open (2026-10-17: a better-sqlite3 holder
- * showed both, with its pid, and neither once it closed). Matched by inode alone, so a lock on a
+ * /proc/locks. A WAL-mode connection that has read the database holds a shared lock on the
+ * database file, and in the default locking mode a read lock on byte 128 of the -shm file, until it
+ * closes (2026-10-17: a better-sqlite3 holder showed both, with its pid, and neither once it closed;
+ * in locking_mode=EXCLUSIVE only a write lock on the database file, which is matched as well). Matched by inode alone, so a lock on a
  * file with the same inode number on another device reads as held: the answer errs towards held.
  * A path that does not exist is skipped (a store without a -shm file). Only from the initial PID
  * namespace: the kernel leaves out of /proc/locks every lock whose holder the reader's PID
@@ -1922,10 +1923,11 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
     }
     if (!isDbCorruptionError(firstErr)) throw firstErr;
     // D#427: retry once with the files untouched before deleting anything. A corruption error
-    // that does not repeat exists (3 of 43 first opens of intact copies on one host, D#424), and
+    // that does not come from the file exists (3 of 43 first opens by 6.28.1 of fresh copies of one
+    // intact store threw one on one host, D#424; the other 40 did not), and
     // for it the delete below is the only thing that loses data: with another connection open
-    // (the MCP server keeps one all session) it discards every transaction that connection
-    // committed since its last checkpoint, and what it commits after, until it closes.
+    // (the MCP server keeps one all session) it discards what that connection committed since its
+    // last checkpoint, and until it closes the two connections overwrite each other's pages.
     warn?.(`DB corruption reported, retrying the open with the WAL kept: ${firstErr.message}`);
     let walErr;
     try {

@@ -12,7 +12,8 @@
 //            Usable = the gate handleLLMEpisode enriches on: an object, not an array, with a
 //            usable title or hasEnrichmentContent. Population: the sub-episodes
 //            episode-flush-replay.mjs says the shipped flush hands the llm-episode worker,
-//            from this machine's transcripts since --since, --n of them evenly spaced in time.
+//            from this machine's transcripts since --since, --n of them at even intervals in
+//            their time order (by position, not by clock time).
 //   rewrite  rewriteQuery(query) with its shipped provider and retry. Usable = >= 2 variants
 //            (the original plus one real rewrite). Population: the three fixture query sets,
 //            --n of them evenly spaced.

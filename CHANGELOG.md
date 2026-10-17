@@ -2,6 +2,274 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.28.0 — Chinese text in events is searchable, four MCP tool descriptions corrected, install no longer empties the marketplace clone's hooks
+
+**Upgrade note: the first database open after the update migrates the events index, and some
+commands that exited 0 now exit non-zero.** The `events` table gets a `search_terms` column (the
+Chinese segmentation) and `events_fts` is rebuilt with it on that open; the schema version stays 49.
+The same open adds the Latin identifiers glued to Chinese text to existing observations' index text,
+once. Existing events get their `search_terms` after that, newest first, from a partial index of the
+events still to fill: about 250 ms per database open (checked after each row it segments), in
+batches that each commit, so an open that is killed keeps what it wrote, an open under another
+writer's lock fills nothing and does not wait, and once nothing is left an open reads an empty index
+(3–4 ms). Until an event is filled, a Chinese query misses it as on 6.27.0. On this machine's store
+(6963 events, 470 observations; fresh copies) the first three opens took 295–327, 80–102 and 4 ms,
+and the file grew from 14 to 15 MB. On a CJK-heavy synthetic store of 200,000 events the first open
+takes 964 ms, a 5 s hook opening it first exits normally, the fill completes over 79 opens of about
+300 ms each (node's startup included), and the file grows from 93 to 273 MB; with 4000-character
+bodies an open takes about 290 ms. (Candidates of this release filled every event inside the
+migration, 24.4–25.5 s on that store with every 5 s hook opening it first killed with nothing
+committed, and then read the rows to fill by a scan once planner statistics had been sampled
+mid-fill, about 49 ms per open after the fill.) **Going back works**: pinning
+`claude-mem-lite@6.27.0` opens, searches and writes a store this release migrated, whether or not
+the fill had finished (checked on such copies: 6.27.0's `activity save`, `activity search` and
+`fts-check check` exit 0, and `fts-check check` reads healthy under both), and an event 6.27.0
+writes is filled the next time this release opens the store. Exit codes: `install` exits 3 when all
+but the MCP registration succeeded, where it printed "Done!" and exited 0; `repair` reads that as a
+completed resync with a warning (a 6.27.0 code home's own repair, which downloads this release,
+still reports it as "Repair failed" although the files were synced). These now exit 1 where they
+exited 0: `save`, `update`, `defer add` and `activity save` given a flag they do not take; `update`,
+`defer add` and `activity save` given a title of invisible characters only (`save` derives one from
+the content); the mutating runs (`compress`, `maintain`, `optimize`, `delete`, `activity
+promote`/`delete`) given a filter flag they do not read; `save` and `defer add` given a mistyped
+project; `delete`, `activity show`/`delete` and `--min-importance` given an id or number with a
+malformed part (`delete 1,abc --confirm` deleted #1, `--min-importance 2x` read 2; a wholly
+malformed one already exited 1); `adopt` given a damaged sentinel line, and `adopt` and `unadopt`
+given an unknown flag or a directory argument; `self-update` when it checked nothing; and
+`import-jsonl` on a file it may not read (a missing one already exited 1) or on lines none of which
+is a transcript event (an empty input still exits 0). Read commands still warn about an unknown flag
+or a project with no rows and exit 0, and `--supersedes` skips a malformed token with a warning.
+`install` no longer empties the marketplace clone's `hooks/hooks.json`, which stopped plugin
+updates: it still clears the duplicate hooks in the plugin cache, where Claude Code loads them, and
+restores the clone's file where an earlier install emptied it. The cost, with both install kinds: a
+plugin version Claude Code materializes after the SessionStart self-heal has run registers its hooks
+beside `settings.json` for one session. The unattended cluster merge, re-enrich (narrow and wide)
+and save-time enrichment send stored rows to the model as data: the instructions and
+`MEMORY_INPUT_GUARD` go in the system role on the keyed API legs, and on `claude -p` ahead of a
+per-call boundary marker that precedes the rows; the rows sat inside the instructions. The alias,
+scope and concept backfills and smart-compress still put rows inside their instructions. Measured
+through `claude -p`, 2 repetitions, with `benchmark/prompt-guard-ab.mjs` (not in the npm package):
+benign rows parsed and complete 20/20 in both arms of each pass. Cluster merge (claude-sonnet-5-5):
+`should_merge` agreement 20/20, merged lesson equal to the injected one-liner 3/12 before, 1/12
+after. Re-enrich (claude-haiku-5-5): hostile rows stored above their input importance 3/12 before,
+0/12 after (benign control 5/20 and 6/20); no reply in either arm obeyed the injected lesson.
+Save-time enrichment (claude-haiku-5-5): a stored lesson carrying the injected one-liner 2/12 before
+(both refusals that quote it), 0/12 after.
+
+**Search**
+
+- **Fix: Chinese text in events, and Latin identifiers glued to it, are searchable** (the Han ranges
+  U+4E00–9FFF and U+3400–4DBF; kana, Hangul and the rarer Han extensions are not segmented).
+  `activity search` and the events leg of `search` missed a CJK event even by its exact title;
+  queries made of a whole CJK run now find their event 1.000 of the time, 0.144 before (n=139, same
+  store copy), once its events are filled (see the upgrade note). `修复了redis连接池泄漏` is found by
+  `redis`. Rows without CJK are indexed as before.
+- **Fix: search says which operators it ignored** ("Search operators are not supported and were
+  ignored: NOT (nothing is excluded)"): `NOT`, `-term`, `OR`, `prefix*` and `column:` were dropped
+  without a word. For OR it names `--or` / `or=true`.
+- **Fix: the listings shown after a miss** (mem_search's `obs_type` fallback, the timeline without
+  an anchor) list the current project, or the one named, not every project's rows.
+- **Fix: deep search** scrubs a secret in the query before the model sees it, escalation included.
+  A query with nothing searchable (`***`) no longer returns the whole store, and mem_search no
+  longer reports a failed rewrite as run.
+- **Fix: `timeline 1` anchors on #1** (any id form that resolves, inside `--project` if given; else
+  a query), and `--anchor N --project P` shows P's rows around N's time.
+- **Fix: a SessionStart Recent row from another UTC day shows its date.**
+- **Change: `context --json` keys the Recent table `recent`**, with a top-level `date`, instead of
+  `recent_(2026-10-16)`, a key that changed every day; a script matching `recent_` must read
+  `recent`.
+
+**Save, update, get, delete and CLI input**
+
+- **Fix: the 5-minute near-duplicate check** no longer skips a `supersedes` correction as a
+  duplicate of the row it retires, and catches a CJK save that repeats a recent one under another
+  title, or differs from it by one character in a longer text; a CJK save naming another Latin
+  identifier or number (`修复了redis…` / `修复了mysql…`, in ASCII or full-width form) is stored.
+- **Fix: an invisible title** (spaces, zero-width, bidi and other default-ignorable characters) is
+  derived from the content by `save` and refused by the six other writers that take a title from
+  you (update, mem_update, defer add, mem_defer, activity save, /verify).
+- **Fix: project names.** A save or deferral naming a mistyped project is refused with the near
+  names (`otherr-api` beside `work--other-api` made a stray project), and a CLI read says the
+  project has no rows. A new name is written, "(new project …)"; a short name for your own
+  directory gets its full id. The MCP server resolves names on every call, mem_optimize included.
+- **Fix: setting the importance or a lesson on a row maintenance hid shows it again**: "visible
+  again (maintenance had hidden it)". A title or narrative edit leaves it hidden.
+- **Fix: `delete`, `update`, `maintain execute` and `activity delete` wait for another writer**
+  instead of failing at once while a hook writes (1–4 of 40 deletes right after a save).
+- **Fix: malformed ids** refuse a delete batch (`delete 1,2x --confirm` deleted #1) and a numeric
+  flag (`--min-importance 2x` read as 2); `--supersedes` skips a malformed token with a warning
+  (`1e1` retired #10). `--supersedes` takes `#N`, `activity show`/`delete` `E#N`; `delete E#1`
+  names `activity delete`, which now snapshots first.
+- **Fix: `save`, `update`, `defer add` and `activity save` refuse a flag they do not take**, and
+  the mutating runs (`compress`, `maintain`, `optimize`, `delete`, `activity promote`/`delete`) a
+  filter flag they do not read, exit 1 (`compress --execute --type change` compressed every type).
+- **Fix: text that starts with `-`.** A bare `--` ends the options; a value such as `--lesson
+  "--no-verify"` is no longer reported as an ignored unknown flag: the refusal says it was read as
+  a flag and names the `--lesson="…"` form, or `defer add -- "…"`.
+- **Fix: messages.** `get` marks a superseded event as not live and says `--fields` selects
+  observation fields; a save under a project-level plugin disable no longer claims enrichment was
+  queued; a deferral drop prints `D#N "title"`; `search` and `get` take both `--source` spellings.
+
+**MCP tools**
+
+- **Fix: mem_search's `query` description no longer claims FTS5 syntax.** It now reads "Search
+  keywords; every word must match (see `or`). Operators and quotes are ignored: NOT, -term, prefix*,
+  column:, "phrase"", and `or`'s text names the automatic AND→OR fallback (a `column:` prefix's
+  column name is still searched as a word, which the text does not say). On a prompt that invites an
+  exclusion and one that lists word variants, Sonnet 5.5 wrote `refresh token NOT expiry …` /
+  `migrate OR migrated …` in 10 of 10 calls under the old text and 0 of 10 under the new one; a
+  plain search was 5/5 under both (`benchmark/tool-text-ab.mjs`; a first run through a scratch copy,
+  without its per-call self-checks, read the same). A prompt inviting `prefix*` was not probed.
+- **Fix: three descriptions say what their tool does.** mem_get no longer tells the model to pass
+  `source` for S#/P# hits (each prefix routes itself, and `source` re-reads every id), mem_recent
+  no longer says it does no filtering (it filters by type and date, not by words), and
+  mem_defer_list points one item's full detail at `mem_get ids=["D#N"]`. On their probes the model
+  called the same tools and every probe scored the same under both texts (5/5 each), so these are
+  corrections, not measured improvements.
+- **Fix: mem_save takes `lesson` and mem_timeline takes `id`**, as declared aliases of
+  `lesson_learned` and `anchor`; both were dropped as unknown keys without a word (mem_save's
+  description prints the CLI's `--lesson`). Sonnet 5.5 passed `lesson_learned` and `anchor` in
+  every probe call, so the aliases did not change those runs.
+- **Fix: mem_get and `get` say when `source` re-read an id that had its own prefix** ("Note:
+  source="prompt" read #2 as P#2; it applies to every id …"). The precedence is unchanged.
+- **Fix: array arguments** take the serialised forms some MCP bridges send (a JSON-array string
+  everywhere; `#N` in `supersedes` and mem_delete's `ids`); a blank string or `"[]"` is refused
+  with "must not be empty" instead of "expected array, received string". `merge_ids` strings must
+  be whole numbers (`"10.9"` merged #10). These array fixes change no advertised JSON schema; the
+  `lesson` and `id` aliases above are this release's only additions to one.
+- **Fix: on a damaged FTS index mem_search names the CLI by its absolute path.**
+- **Fix: the MCP server waits out another writer's lock at startup** (retrying for 15 s, inside
+  Claude Code's 30 s MCP startup timeout) instead of exiting 1 for the session with "FATAL: Database
+  cannot be opened: database is locked". Only an open that has to write waits for the lock, so what
+  hit it was the first open after an update meeting another writer (another process migrating the
+  same store, a long maintain).
+
+**Hooks, sessions and adopt**
+
+- **Fix: a held write lock** (a long vacuum, FTS rebuild, import or restore) got UserPromptSubmit
+  and Stop killed at their 5 s timeout and left SessionStart silent. A hook now waits for another
+  writer only until 3.5 s after it started (SessionStart 11 s): each connection it opens gets the
+  time left. A lock that ends before then is waited out as before (under a 2.5 s lock the prompt row
+  and Stop's turn are recorded); under a longer one UserPromptSubmit exits at about 3.5 s with its
+  context, Stop with three sessions' work buffered in 3.8 s, and SessionStart after `/compact` with
+  buffered and orphaned episodes in 11.2 s with its context, where each was killed. The price: a
+  lock ending between 3.5 s and the kill, which 6.27.0 waited out, now drops the write (under a 4.0
+  or 4.5 s lock 6.27.0 stored the prompt row at 4.1 / 4.6 s; this release exits at 3.5 s without
+  it). Two waits are outside the budget: a statement meeting a lock after another statement on the
+  same connection has already waited can wait the connection's time again, and on the first open
+  after the update the migration waits up to 5 s for the lock, as 6.27.0 did.
+- **Fix: a plugin switched off stops every hook**, including those a direct install writes into
+  `settings.json`, and the check follows Claude Code's merge of user, project and local
+  `enabledPlugins` (an unparseable file sets nothing). `status` and `doctor` name a project's own
+  switch when it differs.
+- **Fix: handoffs.** After `/clear` the handoff arrives once, not twice, with no "Continuation
+  available" pointer to the session itself; another live session's handoff is not resumed.
+- **Fix: after `/compact` a file's lessons are recalled again**, and error recall repeats the same
+  memories to a thread at most once per 30 minutes, not on every failing run.
+- **Fix: a PostToolUse payload past 256 KB** (an Edit of a file over ~250 KB) was dropped; up to 8
+  MB is read now, a larger one kept by path and marked not read, its Bash command scrubbed before
+  the cut.
+- **Fix: per-project runtime files no longer collide** for non-ASCII project ids (one project's
+  Stop nudges showed in another's SessionStart) or ASCII ids past 64 characters.
+- **Fix: the launcher's post-SessionStart repair and binding heal run**; `hook.mjs` exited first.
+- **Fix: adopt.** A damaged sentinel line is refused by line number with nothing written (it
+  appended a second block), and SessionStart adds no second copy beside it. An unknown flag or a
+  directory argument is refused (`adopt --dryrun` wrote CLAUDE.md), an inherited `$PWD` no longer
+  beats the real cwd, a no-op re-run leaves the sidecar alone, and install adopts only its own
+  clone.
+
+**Install, doctor, status, uninstall, self-update**
+
+- **Fix: an update killed between two file renames no longer leaves the repair path unable to
+  load.** The update renames the files into place one at a time in the order the new release lists
+  them, and that list put entry points before what they import: a kill inside the swap from 6.27.0
+  to this release would have left `install.mjs` (the repair the launcher's self-heal runs) failing
+  to load at 77 of its 168 split points, `hook.mjs` at 142 and the `scripts/` hooks at up to 119
+  (counting static imports: 8 of 13 entry points failed somewhere, 11 with the lazily imported
+  modules; in the shipped 6.26.0 → 6.27.0 swap `hook.mjs` and the memory CLI failed too, the repair
+  path did not). Every file now follows what it imports, lazily imported ones included, and at every
+  split point of that swap all 13 entry points load (`scripts/swap-mixed-tree.mjs`, a dev-only
+  script run by hand before a release; `tests/source-files-swap-order.test.mjs` holds the order in
+  CI). `package.json`, where a direct install's daily update check reads the installed version, is
+  now renamed last, so a swap killed while it renames those files is replayed by the next check
+  rather than left mixed until the next release (it was 25th: 25 of the 168 split points; now 167).
+  A kill after it, while `scripts/` and `node_modules/` are renamed, is still left for the next
+  release or a manual install.
+- **Change: `install` no longer edits the marketplace clone** (see the upgrade note). Its one
+  remaining write puts back, with `git checkout`, a `hooks/hooks.json` that an earlier install
+  emptied, and `doctor` names that edit instead of "Inspect: git status".
+- **Fix: a failed MCP registration no longer ends on "Done!"**: it says the server is NOT
+  registered and exits 3, unless a `mem-lite` entry already runs this install's server.
+- **Fix: hooks that only look like ours are kept.** `install`, `uninstall`, `cleanup-hooks` and the
+  update's prune deleted a user's own `post-tool-use.sh` or `hook-launcher.mjs` hooks; a launcher-
+  or prefilter-shaped hook is now ours only when the product's root or one of our entries anchors
+  it (a path through a `claude-mem-lite*` directory still counts by its name). `cleanup-hooks` and
+  `uninstall` list what they removed; `doctor` lists dead look-alikes for you to delete.
+- **Fix: an unwritable config home**, or a symlinked `settings.json`'s target directory, is refused
+  before `install`, `uninstall` or `cleanup-hooks` does anything. `uninstall` names an MCP removal
+  it could not do, with the command, and the CLAUDE.local.md blocks it leaves behind.
+- **Fix: the CLI.** `install` and `uninstall` leave a command link they do not own, and `install`
+  says when the link is off PATH (a literal `~` counts as home). A bare `npx claude-mem-lite`
+  reinstalls when memories exist; a bare `claude-mem-lite` under an npx-started Claude Code does
+  not.
+- **Fix: a broken install is told its own repair** (npx, `/plugin` reinstall or git, not `npm -g`),
+  by the memory commands too, and a module cut before its exports is named, not the module
+  importing it; `install` warns over a database a newer release wrote; `self-update` exits 1 when
+  it checked nothing (offline, `CLAUDE_MEM_SKIP_UPDATE`, a dev install) or its install failed.
+- **Fix: `doctor`.** A busy database reads "not checked — the database is in use by another
+  process", also in `fts-check`, not four damaged indexes to rebuild. The orphan-hook repair is
+  `cleanup-hooks` (direct-only: `install`), not `uninstall`. The MCP SDK is checked per code home;
+  a plugin cache awaiting its first `npm install` gets ⚠, not three ✗; a failed one ✗.
+
+**Maintenance and background LLM work**
+
+- **Fix: explicit saves leave the idle GC, daily compression and purge.** A save without a lesson
+  was decayed, hidden and hard-deleted about 41 days after it was written. Those passes skip them
+  now; decay still lowers their importance and unhides one an earlier release hid, and the daily
+  cluster merge can still fold one into a similar row (keeping its lesson and highest importance).
+  `maintain scan` now counts the decay execute applies, stops counting explicit saves as purge
+  candidates, and names the ones execute shows again.
+- **Fix: re-enrich leaves an explicit save's text, type and importance alone**; the narrow pass
+  rewrote or hid it. Cluster merges keep the members' lessons and their highest importance, and
+  skip a cluster whose lessons do not fit in one.
+- **Fix: a caller's timeout bounds the whole LLM call**, fallback included (hung provider and CLI:
+  lesson bridge 5012–5021 → 2504–2505 ms, `search --deep` 48184 → 24201 ms).
+- **Change: the session summary waits for a slow episode**: `CLAUDE_MEM_FLUSH_TIMEOUT`'s default
+  rises from 15 s to 275 s (an episode worker's longest run). A killed episode worker's flush file
+  goes to a new worker once, when a session starts within an hour of the flush (two files per
+  start); a worker that is only paused (a suspended laptop) keeps its file, so the episode is not
+  saved twice.
+- **Fix: save-time enrichment takes an LLM slot** (12 saves ran 13 `claude -p` at once): under a
+  burst a worker waits up to 60 s for one of 2 slots, then leaves the row to the daily backfills,
+  though the save said enrichment was queued. A worker whose data directory was removed exits in 420
+  ms, not 61 s.
+
+**Import, export, README**
+
+- **Fix: `import-jsonl`** caps a string tool result at 4000 characters after scrubbing it whole,
+  exits 1 for an unreadable file or for lines none of which is a transcript event (an export file,
+  say; an empty input still exits 0), and imports a line without a timestamp once however often the
+  file is re-imported (two such lines with the same text in one file are both kept, and a re-import
+  adds neither again).
+- **Fix: mem_export says what a backup leaves out**, as the CLI does, and both export faces read a
+  bare date as the local day, as search does.
+- README: the degraded fallback keeps an error fix only when a command that exited 0 printed the
+  error; the project-scoping line describes what search does; the `CLAUDE_MEM_SKIP_EPISODE_LLM` row
+  says what the switch skips.
+
+**Earlier notes**
+
+- **Correction to the v6.26.0 notes.** Their recipe for staying on Claude Haiku 4.5 on the direct
+  API (`ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5-20251001` with
+  `ANTHROPIC_BASE_URL=https://api.anthropic.com`) said Claude Code's `haiku` alias and the `claude
+  -p` fallback then run 4.5 too. It did not say that the model variable also moves Claude Code's
+  own background functionality to Claude Haiku 4.5: Claude Code's docs
+  (code.claude.com/docs/en/env-vars, read 2026-10-15) give the variable as the model the `haiku`
+  alias resolves to, "also used for background functionality". As for "Claude Code itself runs with
+  a base URL set": `ANTHROPIC_BASE_URL=https://api.anthropic.com` triggers none of the changes
+  those docs tie to a host other than Anthropic's (among them MCP tool search and Remote Control
+  turning off), and whether that literal value is otherwise treated like unset is not documented.
+
 ## v6.27.0 — less hook text per session: the recall framing line once per thread, file-intel off by default
 
 **Upgrade note: the plugin's hooks put less text into each session's context; there is nothing

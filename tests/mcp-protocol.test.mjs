@@ -158,7 +158,9 @@ describe('MCP protocol surface', () => {
     const text = textOf(res);
     expect(text).toMatch(/Saved as observation #\d+/);
     expect(text).toContain('without lesson_learned');
-    expect(text).toMatch(/mem_update\(id=\d+/);
+    // D#448: the follow-up is the CLI command; mem_update is not in tools/list.
+    expect(text).toMatch(/cli\.mjs'? update \d+ --lesson /);
+    expect(text).not.toContain('mem_update');
   });
 
   it('mem_save does NOT nudge with a lesson present or for discovery', async () => {

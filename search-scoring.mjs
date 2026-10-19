@@ -73,10 +73,10 @@ const INSTRUCTIONS_VERBOSE = [
   '  • "what happened recently?" → mem_recent (NOT search with empty query)',
   '  • "what do we know about file.mjs?" → mem_recall (NOT grep + manual search)',
   '  • "show me around observation #42" → mem_timeline (NOT mem_get + manual navigation)',
-  '  • "clean up old/duplicate memories" → mem_maintain (NOT manual mem_delete loop)',
-  '  • "is the search index healthy?" → mem_fts_check (NOT manual COUNT queries)',
-  '  • "overview of memory tiers" → mem_browse (NOT mem_search + manual grouping)',
-  '  • "export for backup" → mem_export (NOT manual SELECT queries)',
+  '  • "clean up old/duplicate memories" → CLI `maintain scan`, then `maintain execute` (NOT deleting rows one by one)',
+  '  • "is the search index healthy?" → CLI `fts-check check` (NOT manual COUNT queries)',
+  '  • "overview of memory tiers" → CLI `browse` (NOT mem_search + manual grouping)',
+  '  • "export for backup" → CLI `export` (NOT manual SELECT queries)',
 ];
 
 export function buildServerInstructions(quiet = false) {

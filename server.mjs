@@ -535,7 +535,7 @@ function formatSearchOutput(
         // skipped the branch on the reasoning that it "never renders the label" — true of
         // the label, false of the echo.
         if (expanded !== args.query) hint.push(`Searched as: ${queryLabel(expanded)}`);
-        hint.push('Tip: check spelling, try broader terms, or use mem_stats to see available data.');
+        hint.push('Tip: check spelling, try broader terms, or use mem_recent to see what is stored.');
       }
     }
     return { content: [{ type: 'text', text: hint.join('\n') }] };

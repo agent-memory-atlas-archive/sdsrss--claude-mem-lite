@@ -5,17 +5,20 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildLessonNudge } from '../lib/save-nudge.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 describe('buildLessonNudge', () => {
-  it('nudges a lessonless bugfix on the MCP face and names the follow-up call with the id', () => {
+  // D#448: the MCP face named mem_update, which tools/list leaves out, so the model could not
+  // make the call; both faces now give the CLI command, by the path a plugin install has.
+  it('nudges a lessonless bugfix on the MCP face and names the follow-up command with the id', () => {
     const out = buildLessonNudge({ type: 'bugfix', id: 42, lessonCaptured: false, surface: 'mcp' });
-    expect(out).toContain('mem_update(id=42');
+    expect(out).toContain(`${CLI_INVOKE} update 42 --lesson`);
     expect(out).toContain('bugfix');
   });
 
   it('nudges a lessonless decision on the CLI face with the CLI update command', () => {
     const out = buildLessonNudge({ type: 'decision', id: 7, lessonCaptured: false, surface: 'cli' });
-    expect(out).toContain('claude-mem-lite update 7 --lesson');
+    expect(out).toContain(`${CLI_INVOKE} update 7 --lesson`);
     expect(out).toContain('decision #7');
   });
 

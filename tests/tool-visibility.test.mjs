@@ -12,6 +12,7 @@ import Database from 'better-sqlite3';
 import { SUBPROCESS_TIMEOUT_MS } from './test-helpers.mjs';
 import { initSchema } from '../schema.mjs';
 import { recordSearch } from '../lib/search-telemetry.mjs';
+import { tools } from '../tool-schemas.mjs';
 
 const SERVER_PATH = resolve(new URL('..', import.meta.url).pathname, 'server.mjs');
 
@@ -176,6 +177,48 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     expect(names).toContain('mem_stats');
     expect(names).toContain('mem_browse');
     expect(names).toContain('mem_maintain');
+  });
+
+  // D#448: the instructions, the listing and two tool replies sent the model to hidden tools
+  // (mem_maintain, mem_fts_check, mem_browse, mem_export, mem_stats, mem_update). Claude Code
+  // offers the model only what tools/list returns, so each of those was a call it could not make.
+  it('the text the model reads names only tools that tools/list gives it', async () => {
+    const hidden = tools.filter((t) => t.hidden === true).map((t) => t.name);
+    proc.stdin.end();
+    proc.kill('SIGTERM');
+    if (proc.exitCode === null && proc.signalCode === null) await new Promise((r) => proc.once('exit', r));
+    // Not adopted and auto-adopt off: the one shape that gets the verbose instructions.
+    proc = startServer(tmp, { MEM_QUIET_HOOKS: '0', MEM_NO_AUTO_ADOPT: '1', CLAUDE_PROJECT_DIR: tmp });
+    const init = await rpc(proc, 1, 'initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'tool-visibility-test', version: '0' },
+    });
+    const list = await rpc(proc, 2, 'tools/list', {});
+    const search = await rpc(proc, 3, 'tools/call', {
+      name: 'mem_search',
+      arguments: { query: 'qzxv nothing stored matches this' },
+    });
+    const save = await rpc(proc, 4, 'tools/call', {
+      name: 'mem_save',
+      arguments: { type: 'bugfix', title: 'Fixture bugfix', content: 'saved without a lesson' },
+    });
+    const texts = {
+      instructions: init.result.instructions,
+      'tools/list': JSON.stringify(list.result.tools),
+      'mem_search, no results': search.result.content.map((c) => c.text).join('\n'),
+      'mem_save, no lesson': save.result.content.map((c) => c.text).join('\n'),
+    };
+    expect(texts.instructions, 'premise: the verbose instructions').toContain('WHEN TO USE');
+    expect(texts['mem_search, no results'], 'premise: the empty-result hint').toContain('Tip:');
+    expect(texts['mem_save, no lesson'], 'premise: the lesson nudge').toContain('without lesson_learned');
+
+    const named = Object.entries(texts).flatMap(([where, text]) =>
+      hidden
+        .filter((name) => new RegExp(`(?<![A-Za-z0-9])${name}(?![A-Za-z0-9_])`).test(text))
+        .map((name) => `${where}: ${name}`),
+    );
+    expect(named, 'the model is told to call a tool it does not have').toEqual([]);
   });
 
   it('tools/call on a hidden tool (mem_stats) still succeeds', async () => {

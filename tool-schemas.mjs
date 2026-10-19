@@ -780,7 +780,7 @@ export const tools = [
       '\n' +
       'DO NOT use when:\n' +
       '  - You only want one record (use mem_get)\n' +
-      '  - You have no anchor in mind and are just browsing (use mem_recent or mem_browse)\n' +
+      '  - You have no anchor in mind and are just browsing (use mem_recent)\n' +
       '  - The sequence is obvious from commit history (use git log)\n' +
       '  - You want "recent activity around X" (use mem_recent or mem_search sort="time")\n' +
       '\n' +
@@ -802,7 +802,7 @@ export const tools = [
       'DO NOT use when:\n' +
       '  - You have not seen the ID referenced anywhere (use mem_search first)\n' +
       '  - You only need title/type — that is already in the search result line\n' +
-      '  - You are speculatively paging through IDs (use mem_recent / mem_browse)\n' +
+      '  - You are speculatively paging through IDs (use mem_recent)\n' +
       '\n' +
       'USE when:\n' +
       '  - Hook-injected context shows #NN and you need the full narrative/lesson\n' +

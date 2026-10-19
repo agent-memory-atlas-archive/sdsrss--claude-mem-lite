@@ -9,6 +9,7 @@ import { readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tools } from '../tool-schemas.mjs';
+import { walkShipped, relShipped, sourceWithoutComments } from './shipped-tree.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const COMMANDS = readdirSync(join(REPO, 'commands')).filter((f) => f.endsWith('.md'));
@@ -91,11 +92,24 @@ describe('B2 — slash-command references use the plugin namespace', () => {
     expect(clashing).toEqual(expect.arrayContaining(['bug', 'memory']));
   });
 
+  // Every text that tells someone what to type: the command files, both READMEs, skill.md, and
+  // the shipped modules' code (CLI help and replies the model reads), whole-line comments out.
+  const texts = () => [
+    ...COMMANDS.map((f) => [`commands/${f}`, read(f)]),
+    ...['README.md', 'README.zh-CN.md', 'skill.md'].map((f) => [f, readFileSync(join(REPO, f), 'utf8')]),
+    ...walkShipped().map((f) => [relShipped(f), sourceWithoutComments(f)]),
+  ];
+
+  it('premise: the sweep reads the CLI help, where /lesson is named', () => {
+    const help = texts().find(([f]) => f === 'mem-cli.mjs');
+    expect(help?.[1]).toMatch(/\/lesson\b/);
+  });
+
   it('a command whose name Claude Code also uses is written with the plugin namespace', () => {
-    const bare = COMMANDS.flatMap((f) =>
-      [...read(f).matchAll(/(?<![\w/:.${}-])\/([a-z][a-z0-9-]*)(?![a-z0-9-])/g)]
+    const bare = texts().flatMap(([f, text]) =>
+      [...text.matchAll(/(?<![\w/:.${}*-])\/([a-z][a-z0-9-]*)(?![a-z0-9/-])/g)]
         .filter((m) => clashing.includes(m[1]))
-        .map((m) => `commands/${f}: ${m[0]} → /${plugin}:${m[1]}`),
+        .map((m) => `${f}: ${m[0]} → /${plugin}:${m[1]}`),
     );
     expect(bare, 'these run the Claude Code command, not this plugin’s').toEqual([]);
   });

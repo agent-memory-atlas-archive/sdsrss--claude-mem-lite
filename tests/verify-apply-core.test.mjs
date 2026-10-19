@@ -718,7 +718,7 @@ describe('re-review of dcc8f72 — the remaining gaps', () => {
   it('get names the cause of a /verify retirement instead of "auto-dedup or merge"', async () => {
     const { supersededNotice } = await import('../lib/get-core.mjs');
     const notice = (by) => supersededNotice({ superseded_at: 1, superseded_by: by, compressed_into: 0 });
-    expect(notice(VERIFY_RETIRED_MARKER)).toMatch(/\/verify/);
+    expect(notice(VERIFY_RETIRED_MARKER)).toMatch(/\/claude-mem-lite:verify/);
     expect(notice('verify-undone')).toMatch(/undo/);
     expect(notice('auto-dedup')).toMatch(/auto-dedup or merge/);
   });

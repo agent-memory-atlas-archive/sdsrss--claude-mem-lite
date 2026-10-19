@@ -3384,7 +3384,7 @@ Commands:
     --project P         Override the restored project for every row
     --dry-run           Preview what would be restored without writing
 
-  verify-apply <file>   Apply agent-verified memory corrections (/verify writes these).
+  verify-apply <file>   Apply agent-verified memory corrections (/claude-mem-lite:verify writes these).
                         Dry run by default: prints the changes and a plan digest.
     --apply             Back up the target rows, apply in one transaction, read back
     --digest D          Required with --apply: the digest the approved dry run printed
@@ -3477,7 +3477,7 @@ Commands:
 
     Valid types: bugfix, lesson, bug, discovery, refactor, feature, observation, decision
     --files (plural, comma-split) preferred; --file (singular) kept for back-compat.
-    Use /lesson or /bug slash commands for faster capture (T8).
+    Use /lesson or /claude-mem-lite:bug slash commands for faster capture (T8).
 
   adopt                 Put the claude-mem-lite managed block into this project's
                         CLAUDE.md (normally committed, so the team gets it) + a

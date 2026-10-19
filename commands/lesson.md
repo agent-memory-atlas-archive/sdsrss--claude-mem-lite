@@ -9,8 +9,8 @@ Record a lesson / gotcha / workaround. Writes a searchable **observation**
 (`type=discovery` with the text as `lesson_learned`) so future sessions can
 find it via `mem_search` and the PreToolUse recall hooks surface it on the
 relevant files. Does NOT touch memdir — so lessons never end up in the L1
-system-prompt memory section and do not conflict with the `WHAT_NOT_TO_SAVE`
-semantics sdscc enforces.
+system-prompt memory section and do not conflict with Claude Code's auto-memory
+rules on what not to save there.
 
 ## When to use
 

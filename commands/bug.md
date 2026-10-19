@@ -3,7 +3,7 @@ name: bug
 description: "Use when: logging a known bug + repro steps you can't fix right now. Writes a searchable observation (findable via mem_search + surfaced by recall hooks; still NOT memdir). Skip for bugs you're actively fixing in the current turn — just fix them."
 ---
 
-# /bug
+# /claude-mem-lite:bug
 
 Record a known bug + reproduction steps. Writes a searchable **observation**
 (`type=bugfix`, description in `lesson_learned`) so future sessions can find it
@@ -59,5 +59,5 @@ Confirm to user with: `Bug logged: #<id>`.
 
 ## Examples
 
-- `/bug intermittent test flake when DB is under load --repro "run pnpm test -- --retry=0; fails ~1 in 20 runs when CPU is busy"`.
-- `/bug --file src/auth.mjs --severity high "session refresh drops the X-Forwarded-For header"` — no repro steps, just a high-severity note.
+- `/claude-mem-lite:bug intermittent test flake when DB is under load --repro "run pnpm test -- --retry=0; fails ~1 in 20 runs when CPU is busy"`.
+- `/claude-mem-lite:bug --file src/auth.mjs --severity high "session refresh drops the X-Forwarded-For header"` — no repro steps, just a high-severity note.

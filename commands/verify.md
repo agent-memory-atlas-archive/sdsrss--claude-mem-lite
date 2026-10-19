@@ -1,9 +1,9 @@
 ---
 name: verify
-description: "Use when: the user explicitly asks to verify, audit or correct their stored memories against the current code (e.g. \"check my memories for stale ones\", /verify). You check each memory with read-only repo tools and propose corrections; nothing is written until the user approves the exact plan. Not for routine recall or saving."
+description: "Use when: the user explicitly asks to verify, audit or correct their stored memories against the current code (e.g. \"check my memories for stale ones\", /claude-mem-lite:verify). You check each memory with read-only repo tools and propose corrections; nothing is written until the user approves the exact plan. Not for routine recall or saving."
 ---
 
-# /verify — check memories against the code, then correct the stale ones
+# /claude-mem-lite:verify — check memories against the code, then correct the stale ones
 
 Memories go stale: a bug recorded as open gets fixed, a measurement gets retracted, a
 mechanism is replaced. Measured on 118 live memories across 7 repos, ~10% were STALE and
@@ -11,8 +11,6 @@ mechanism is replaced. Measured on 118 live memories across 7 repos, ~10% were S
 this — cheap single-shot models misjudged it (precision 0.36) and model-written corrections
 were false in 28 of 72 cases. What works is YOU reading the code: you propose, the user
 approves the exact plan, and `verify-apply` is the only thing that writes.
-
-(If another plugin also defines `/verify`, this one is `/claude-mem-lite:verify`.)
 
 ## Arguments
 

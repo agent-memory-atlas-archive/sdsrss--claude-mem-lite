@@ -1,7 +1,8 @@
 // The 2026-10-17 prompt audit of commands/*.md. These files are prompts: the model reads them
 // and does what they say, so each finding is a behaviour. B1 and B2 take their rule from the
-// code the prompt has to agree with (the hidden tool set, the plugin name); B3 and B5 are text
-// patterns and catch only the spelling they name. B4 (an undefined term) has no guard.
+// code the prompt has to agree with (the hidden tool set, the plugin name); B2's built-in check
+// reads a hand-kept copy of Claude Code's command table; B3 and B5 are text patterns and catch
+// only the spelling they name. B4 (an undefined term) has no guard.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
@@ -61,6 +62,42 @@ describe('B2 — slash-command references use the plugin namespace', () => {
       .filter((r) => r.ns !== plugin || !names.has(r.name))
       .map((r) => `commands/${r.f}: ${r.ref}`);
     expect(wrong, `references that resolve to no command of plugin "${plugin}"`).toEqual([]);
+  });
+
+  // D#454: typed bare, a name Claude Code also uses runs Claude Code's command — `/bug` opens
+  // its bug report to Anthropic. The names and aliases of the command table at
+  // code.claude.com/docs/en/commands, read 2026-10-19. Hand-kept: a built-in added later is
+  // missed until it is added here.
+  const BUILTIN = new Set(
+    `add-dir advisor agents artifact-capabilities artifact-diagramming artifacts auto-mode-setup
+    autocompact autofix-pr background batch branch btw bug cd chrome claude-api claude-in-chrome
+    clear code-review color compact config context copy cost dataviz debug deep-research design
+    design-login design-sync desktop diff doctor effort exit export fast feedback
+    fewer-permission-prompts focus fork goal heapdump help hooks ide import init insights
+    install-github-app install-slack-app keybindings list-agents login logout loop mcp memory mobile
+    model output-style passes permissions plan plugin plugin-authoring powerup pr-comments
+    privacy-settings radio rate-limit-options recap release-notes reload-plugins reload-skills
+    remote-control remote-env rename resume review rewind run run-skill-generator sandbox schedule
+    scroll-speed security-review setup-bedrock setup-vertex simplify skill-doctor skills slides
+    stats status statusline stickers stop subtask tasks team-onboarding teleport terminal-setup
+    theme tui ultraplan ultrareview update-config upgrade usage usage-credits verify vim voice
+    web-setup workflow-authoring workflows
+    allowed-tools android app bg checkpoint checkup continue ios new proactive quit rc reset
+    routines settings share undo`.split(/\s+/),
+  );
+  const clashing = [...names].filter((n) => BUILTIN.has(n));
+
+  it('premise: some of this plugin’s command names are Claude Code’s too', () => {
+    expect(clashing).toEqual(expect.arrayContaining(['bug', 'memory']));
+  });
+
+  it('a command whose name Claude Code also uses is written with the plugin namespace', () => {
+    const bare = COMMANDS.flatMap((f) =>
+      [...read(f).matchAll(/(?<![\w/:.${}-])\/([a-z][a-z0-9-]*)(?![a-z0-9-])/g)]
+        .filter((m) => clashing.includes(m[1]))
+        .map((m) => `commands/${f}: ${m[0]} → /${plugin}:${m[1]}`),
+    );
+    expect(bare, 'these run the Claude Code command, not this plugin’s').toEqual([]);
   });
 });
 

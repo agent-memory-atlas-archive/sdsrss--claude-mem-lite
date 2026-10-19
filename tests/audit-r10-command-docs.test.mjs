@@ -9,10 +9,15 @@
 // the retain days are floored at 7, so `/mem cleanup 3d` is rejected.
 //
 // Both commands now purge through the CLI (`maintain execute --ops purge_stale`), because
-// mem_maintain is hidden from tools/list and the model is not given it
+// mem_maintain is left out of tools/list unless CLAUDE_MEM_ALL_TOOLS=1
 // (tests/audit-prompts-20261019.test.mjs). So this guard reads the CLI: its confirm flag is
-// `--confirm`, and the range is whatever `--retain-days` accepts when probed — not restated
-// here, since a guard that hardcodes 7 and 365 goes stale the same way the docs did.
+// `--confirm`, and the range the docs must state is whatever `--retain-days` accepts when
+// probed, since a guard that only restates 7 and 365 goes stale the same way the docs did
+// (the 7/365 pins below are the premise the earlier guard kept, checked against the probe).
+//
+// /update also has to purge BEFORE its `maintain execute` step: decay there queues more rows,
+// and a purge run afterwards deletes them too, so the user would approve one count and lose
+// more (lib/maintain-core.mjs runs purge first inside one execute for the same reason).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
@@ -83,7 +88,7 @@ async function retainDaysBounds() {
 
 /** Inline code spans, so two commands on one line are checked one by one. */
 const codeSpans = (line) => line.split('`').filter((_, i) => i % 2 === 1);
-const CONFIRM = /(^|\s)--confirm(\s|$|`)/;
+const CONFIRM = /(^|\s)--confirm(?=$|[\s`.,;:)])/;
 
 describe('R10 P2-4 — the purge instruction the model reads actually purges', () => {
   beforeEach(() => {
@@ -132,6 +137,18 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
       }
     });
   }
+
+  it('commands/update.md purges before the step that queues more rows for purge', () => {
+    const lines = read('commands/update.md').split('\n');
+    const purge = lines.findIndex((l) => /--ops purge_stale --confirm/.test(l));
+    // The default-set run: `maintain execute` with no --ops, whose decay queues rows.
+    const execute = lines.findIndex((l) => /cli\.mjs" maintain execute`/.test(l));
+    expect(purge, 'no confirmed purge step').toBeGreaterThan(-1);
+    expect(execute, 'no default-set maintain execute step').toBeGreaterThan(-1);
+    expect(purge, 'the purge runs after decay has queued more rows than the user approved').toBeLessThan(
+      execute,
+    );
+  });
 
   it('commands/mem.md and commands/update.md state the --retain-days range the CLI actually enforces', async () => {
     const { min, max } = await retainDaysBounds();

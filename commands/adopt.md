@@ -74,7 +74,7 @@ doc). Other plugins' blocks (e.g. `code-graph-mcp:*`) and your own prose survive
 Adoption does NOT remove the hook-based injection (SessionStart context,
 UserPromptSubmit related-memory). Those remain as fallback. Post-adopt the MCP
 `WHEN TO USE` section + the `File Lessons` / `Key Context` sections auto-trim,
-since the CLAUDE.md block already carries the triggers at higher authority.
+since the CLAUDE.md block already carries the triggers.
 
 ## Restart caveat for the MCP-instructions trim
 

@@ -548,10 +548,12 @@ README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 
 ### Invited Memory（邀请式记忆，v2.32+）
 
-Opt-in 机制——向项目 memdir（`~/.claude/projects/<encoded>/memory/MEMORY.md`）
-注入单行 sentinel 包围的插件契约，Claude Code 会把它作为 **user-memory** 加载
-到系统提示——比 MCP server instructions（被框定为 tool metadata）具有更高的
-instruction-following 权威。
+Opt-in 机制——在项目自己的 `CLAUDE.md` 里写入一个按 slug 限定的托管块（外加 `.claude/` 下
+按需读取的详情文档），让 Claude Code 把插件的 MCP 工具触发规则作为**项目指令**加载——比
+MCP server instructions（被框定为 tool metadata）具有更高的 instruction-following 权威。
+Claude Code 以同等权重加载 `CLAUDE.md` 和 memdir 的 `MEMORY.md`，所以引导放在 `CLAUDE.md`
+（项目指令的正规位置），不去占用留给用户自己记忆的 `MEMORY.md`。v3.13 之前的方案写入
+`MEMORY.md`；下一次 SessionStart 会自动迁走。
 
 ```bash
 claude-mem-lite adopt              # 当前项目注入
@@ -566,16 +568,19 @@ claude-mem-lite unadopt            # 移除 CLAUDE.md 托管块和详情文档�
 Slash 命令 `/adopt` 和 `/unadopt` 是上述 CLI 的包装。
 
 **Adopt 后会发生什么：**
-- `MEMORY.md` 新增一段 `<!-- claude-mem-lite:begin v1 -->…<!-- claude-mem-lite:end -->`
-  包裹的 `## 插件契约`，含一行 ≤150 字符、指向 `mem_recall` / `mem_save` 关键参数
-  的动作锚条目。
-- 生成 `plugin_claude_mem_lite.md` 详情文件（按需读取，不自动加载）。
+- `<cwd>/CLAUDE.md` 新增一段 `<!-- claude-mem-lite:begin v1 -->…<!-- claude-mem-lite:end -->`
+  包裹、带独立 `## claude-mem-lite — persistent memory` 标题的托管块，内含指向
+  `mem_recall` / `mem_save` / `mem_defer` 及其关键参数的触发表。只管理这一段，`CLAUDE.md`
+  其余内容原样保留，可与其他插件（如 `code-graph-mcp`）的托管块共存于同一文件。
+- 生成 `<cwd>/.claude/plugin_claude_mem_lite.md` 详情文件（不自动加载；`CLAUDE.md` 托管块
+  指向它时按需读取）。出货内容变化（版本升级或模板变更）时托管块自动刷新，除非设
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。
 - 保守 hook 层自动瘦身：MCP server instructions 去掉 `WHEN TO USE` 段，
   SessionStart 注入去掉 `File Lessons` / `Key Context`。`#ID` 引用与 `Recent`
   表保留，`mem_get` 仍可随时展开。
 
 **什么时候生效？**
-- MEMORY.md sentinel 和 hook 层瘦身（`File Lessons` / `Key Context` / lesson
+- `CLAUDE.md` 托管块和 hook 层瘦身（`File Lessons` / `Key Context` / lesson
   后缀）**下一次 SessionStart** 生效（adopt 的项目下任一新会话）。
 - MCP server instructions 是**服务启动时构建一次**，MCP 协议无 "push" 机制，
   所以 `WHEN TO USE` / `Decision rules` 两段的瘦身**只在 Claude Code 重启后**

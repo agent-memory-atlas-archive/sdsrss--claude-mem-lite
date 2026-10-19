@@ -7,9 +7,9 @@ description: "Use when: user asks to put the claude-mem-lite steering block into
 
 Install the claude-mem-lite **steering block** into the current project's
 `CLAUDE.md` (the canonical home for project instructions — loaded by Claude Code
-at system-prompt authority). This replaces the pre-v3.13 scheme that seeded the
-project's memory-dir `MEMORY.md`; that polluted an index meant for the user's own
-memories, and `MEMORY.md` carries no more weight than `CLAUDE.md` anyway.
+at system-prompt authority). It does not go in the project's memory-dir
+`MEMORY.md`: that index belongs to the user's own memories, and it carries no
+more weight than `CLAUDE.md`.
 
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
 in `CLAUDE.local.md` at the repository root, excluded from git through `.git/info/exclude`.

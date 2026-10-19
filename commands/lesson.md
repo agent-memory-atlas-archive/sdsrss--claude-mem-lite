@@ -10,8 +10,7 @@ Record a lesson / gotcha / workaround. Writes a searchable **observation**
 find it via `mem_search` and the PreToolUse recall hooks surface it on the
 relevant files. Does NOT touch memdir — so lessons never end up in the L1
 system-prompt memory section and do not conflict with the `WHAT_NOT_TO_SAVE`
-semantics sdscc enforces. (Redirected v3.39: was the `events` table, which
-`mem_search` never read.)
+semantics sdscc enforces.
 
 ## When to use
 

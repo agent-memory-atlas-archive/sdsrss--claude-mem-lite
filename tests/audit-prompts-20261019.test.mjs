@@ -60,3 +60,14 @@ describe('B2 — slash-command references use the plugin namespace', () => {
     expect(wrong, `references that resolve to no command of plugin "${plugin}"`).toEqual([]);
   });
 });
+
+describe('B3 — commands carry no release history', () => {
+  // How a command used to work is CHANGELOG material. The model running it needs the rule as it
+  // is now, plus the reason when the rule needs one, said in the present tense.
+  it('no command cites a release version', () => {
+    const cited = COMMANDS.flatMap((f) =>
+      [...read(f).matchAll(/\bv\d+\.\d+\S*/g)].map((m) => `commands/${f}: ${m[0]}`),
+    );
+    expect(cited).toEqual([]);
+  });
+});

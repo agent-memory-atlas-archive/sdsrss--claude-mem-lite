@@ -10,8 +10,7 @@ Record a known bug + reproduction steps. Writes a searchable **observation**
 via `mem_search` and the PreToolUse recall hooks warn when the affected files
 are edited. Does NOT touch memdir. Useful for bugs you can't fix immediately
 but want future sessions (or yourself after `/clear`) to know about and avoid
-re-investigating. (Redirected v3.39: was the `events` table, which `mem_search`
-never read.)
+re-investigating.
 
 ## When to use
 

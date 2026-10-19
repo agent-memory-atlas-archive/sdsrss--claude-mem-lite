@@ -161,6 +161,9 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
       expect(line, `${rel}: the purge is not previewed before the user is asked`).toMatch(
         /without `--confirm`/,
       );
+      // Defects review r1: gated on the scan's pending count, a preview of 0 rows still went to
+      // the user for approval.
+      expect(line, `${rel}: says nothing about a preview that would delete no rows`).toMatch(/count is 0/);
     });
   }
 

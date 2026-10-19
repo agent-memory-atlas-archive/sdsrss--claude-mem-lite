@@ -2936,7 +2936,11 @@ describe('CLI stats --quality command', () => {
     const output = await captureStdout(() => run(['stats', '--quality']));
     expect(output).toMatch(/Pending purge ≤ 10%.*currently 50\.0%/);
     expect(output).toContain('🔴');
-    expect(output).toContain('maintain execute --ops purge_stale --confirm');
+    // D#450 shape: the hint used to say `--confirm` straight away, deleting without the preview
+    // the user approves from, and named a bare `claude-mem-lite` a plugin install lacks.
+    const { CLI_INVOKE } = await import('../cli-path.mjs');
+    expect(output).toContain(`preview: ${CLI_INVOKE} maintain execute --ops purge_stale,`);
+    expect(output).not.toContain('purge_stale --confirm');
   });
 
   it('renders pending-purge watchdog with ✅ at low ratio', async () => {

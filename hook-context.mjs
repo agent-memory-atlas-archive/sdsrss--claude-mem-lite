@@ -690,8 +690,8 @@ export function buildSessionContextLines(
 
     // Phase A (QUIET_HOOKS) + Phase D (adopted sentinel): drop descriptive
     // File Lessons / Key Context sections when the user has opted into low-noise
-    // hooks OR adopted invited-memory (MEMORY.md sentinel carries the triggers
-    // at higher system-prompt authority). The Recent table still fires so #IDs
+    // hooks OR adopted invited-memory (the steering block carries the triggers
+    // in the project's instructions). The Recent table still fires so #IDs
     // remain reachable via mem_get. The collector sees only rows that survive
     // BOTH the quiet gate and the per-section slice — rendered rows, nothing else.
     const quiet = effectiveQuiet();

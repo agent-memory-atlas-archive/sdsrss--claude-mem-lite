@@ -2371,6 +2371,24 @@ describe('CLI maintain command', () => {
     expect(output).toContain('Pinned-but-uncited (inj>=8, cited=0, above floor): 1');
   });
 
+  // D#449: a plugin install has no `claude-mem-lite` on PATH, so the line the scan offers to
+  // paste has to name the CLI the way every other hint does.
+  it('scan prints the auto-merge command with a runnable CLI invocation', async () => {
+    const { CLI_INVOKE } = await import('../cli-path.mjs');
+    for (const importance of [2, 1]) {
+      insertObs(testDb, {
+        sessionId: 'mem-s1',
+        project: 'test--project',
+        type: 'discovery',
+        title: 'Same title written twice by a hook',
+        text: 'x',
+        importance,
+      });
+    }
+    const output = await captureStdout(() => run(['maintain', 'scan']));
+    expect(output).toContain(`Ready-to-use: ${CLI_INVOKE} maintain execute --ops dedup --merge-ids 1:2`);
+  });
+
   it('execute runs dedup with --merge-ids', async () => {
     insertObs(testDb, {
       sessionId: 'mem-s1',

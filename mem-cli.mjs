@@ -2796,7 +2796,7 @@ function cmdMaintain(db, args) {
           const remove = keep === d.a ? d.b : d.a;
           return `${keep.id}:${remove.id}`;
         });
-        out(`  Ready-to-use: claude-mem-lite maintain execute --ops dedup --merge-ids ${mergeIds.join(',')}`);
+        out(`  Ready-to-use: ${CLI_INVOKE} maintain execute --ops dedup --merge-ids ${mergeIds.join(',')}`);
       }
 
       if (manualReview.length > 0) {

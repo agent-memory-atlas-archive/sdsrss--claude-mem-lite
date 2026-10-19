@@ -123,6 +123,18 @@ describe('B5 — commands leave the reply language to the user', () => {
   });
 });
 
+describe('/update reads a pair before merging it', () => {
+  // D#452: the scan prints a Needs-review pair as ids and titles cut to 40 characters, which two
+  // different memories can share. Text pattern: catches this spelling only.
+  it('the dedup step has the model read both rows with `get` first', () => {
+    const step = read('update.md')
+      .split('\n')
+      .find((l) => l.includes('--ops dedup'));
+    expect(step, 'commands/update.md lost its dedup step').toBeTruthy();
+    expect(step).toMatch(/cli\.mjs" get /);
+  });
+});
+
 describe('/update is started by a person, not by the model', () => {
   // /update applies cleanup (a hard delete), decay, boost, dedup and `compress --execute` across
   // every project without asking, and that compress folds explicit saves, which

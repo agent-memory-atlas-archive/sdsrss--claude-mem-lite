@@ -71,3 +71,14 @@ describe('B3 — commands carry no release history', () => {
     expect(cited).toEqual([]);
   });
 });
+
+describe('B5 — commands leave the reply language to the user', () => {
+  // A locale written into a command overrides the language the user speaks and the one their
+  // own settings ask for, for every user at once.
+  it('no command fixes a locale', () => {
+    const fixed = COMMANDS.flatMap((f) =>
+      [...read(f).matchAll(/\b[a-z]{2}-[A-Z]{2}\b/g)].map((m) => `commands/${f}: ${m[0]}`),
+    );
+    expect(fixed).toEqual([]);
+  });
+});

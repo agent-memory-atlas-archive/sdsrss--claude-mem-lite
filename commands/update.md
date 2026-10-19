@@ -28,6 +28,6 @@ Run each command below via Bash. The maintenance tools are not in your tool list
 
 ### Phase 2: Summary
 
-Summarize all maintenance actions taken in zh-CN:
+Summarize all maintenance actions taken in the user's language:
 - Memory: observations cleaned, decayed, boosted, demoted, deduplicated, compressed
 - Overall health assessment

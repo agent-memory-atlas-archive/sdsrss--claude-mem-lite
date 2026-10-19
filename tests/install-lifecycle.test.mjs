@@ -549,6 +549,13 @@ describe('install lifecycle checks', () => {
         ].join('\n'),
       );
       execFileSync('chmod', ['+x', fakeClaude]);
+      // D#439: install's dependency step runs `npm install` in the sandbox HOME, which reached
+      // the repo's own node_modules through the link above and, now and then, rebuilt
+      // better-sqlite3 with node-gyp and timed out fetching headers from nodejs.org. The
+      // dependencies are already in place, so the step has nothing to do here.
+      const fakeNpm = join(binDir, 'npm');
+      writeFileSync(fakeNpm, '#!/usr/bin/env bash\nexit 0\n');
+      execFileSync('chmod', ['+x', fakeNpm]);
 
       const output = execFileSync(process.execPath, [INSTALL_PATH, 'install'], {
         encoding: 'utf8',

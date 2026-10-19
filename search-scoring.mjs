@@ -33,8 +33,8 @@ import { PINNED_INJ_THRESHOLD } from './lib/maintain-core.mjs';
 // ─── MCP Server Instructions Builder ───────────────────────────────────────
 // Phase A (v2.31.3+): when quiet=true, drops WHEN-TO-USE proactive-trigger and
 // Decision-rules sections; keeps the irreducible CLI/MCP tool list. Intended
-// for users who adopted invited-memory (MEMORY.md sentinel carries the same
-// triggers at higher authority). Default false preserves v2.31.2 behavior.
+// for users who adopted invited-memory (the steering block carries the same
+// triggers). Default false preserves v2.31.2 behavior.
 // The CLI-vs-MCP round-trip routing rule lives in BASE (not VERBOSE) on purpose:
 // it must reach adopted (quiet) projects too, where tool-heavy sessions defer the
 // mem_* tools behind ToolSearch (CLI via Bash = 1 model round-trip; ToolSearch +

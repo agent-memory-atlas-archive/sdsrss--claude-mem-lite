@@ -66,7 +66,7 @@ describe('B2 — slash-command references use the plugin namespace', () => {
   });
 
   // D#454: typed bare, a name Claude Code also uses runs Claude Code's command — `/bug` opens
-  // its bug report to Anthropic. The names and aliases of the command table at
+  // Claude Code's bug-report dialog. The names and aliases of the command table at
   // code.claude.com/docs/en/commands ("Alias" and "Also available as"), read 2026-10-19. Hand-kept: a built-in added later is
   // missed until it is added here.
   const BUILTIN = new Set(
@@ -107,7 +107,7 @@ describe('B2 — slash-command references use the plugin namespace', () => {
 
   it('a command whose name Claude Code also uses is written with the plugin namespace', () => {
     const bare = texts().flatMap(([f, text]) =>
-      [...text.matchAll(/(?<![\w/:.${}*-])\/([a-z][a-z0-9-]*)(?![a-z0-9/-])/g)]
+      [...text.matchAll(/(?<![\w/:.${}>-])\/([a-z][a-z0-9-]*)(?![a-z0-9/-])/g)]
         .filter((m) => clashing.includes(m[1]))
         .map((m) => `${f}: ${m[0]} → /${plugin}:${m[1]}`),
     );

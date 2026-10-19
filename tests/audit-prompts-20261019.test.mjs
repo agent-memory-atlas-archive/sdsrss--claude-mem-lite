@@ -85,3 +85,16 @@ describe('B5 — commands leave the reply language to the user', () => {
     expect(fixed).toEqual([]);
   });
 });
+
+describe('/update is started by a person, not by the model', () => {
+  // /update applies cleanup (a hard delete), decay, boost, dedup and `compress --execute` across
+  // every project without asking, and that compress folds explicit saves, which
+  // lib/compress-core.mjs leaves to "a person running compress" (the daily worker skips them).
+  // Claude Code lets the model start a command on its own unless its frontmatter sets
+  // `disable-model-invocation: true` (code.claude.com/docs/en/slash-commands).
+  it('commands/update.md sets disable-model-invocation: true', () => {
+    const front = read('update.md').match(/^---\n([\s\S]*?)\n---\n/);
+    expect(front, 'commands/update.md lost its frontmatter').not.toBeNull();
+    expect(front[1]).toMatch(/^disable-model-invocation:\s*true\s*$/m);
+  });
+});

@@ -1,6 +1,7 @@
 ---
 name: update
 description: "Use when: search results seem noisy or for periodic memory maintenance"
+disable-model-invocation: true
 ---
 
 # Memory Maintenance

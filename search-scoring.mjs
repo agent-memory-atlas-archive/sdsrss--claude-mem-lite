@@ -73,7 +73,7 @@ const INSTRUCTIONS_VERBOSE = [
   '  • "what happened recently?" → mem_recent (NOT search with empty query)',
   '  • "what do we know about file.mjs?" → mem_recall (NOT grep + manual search)',
   '  • "show me around observation #42" → mem_timeline (NOT mem_get + manual navigation)',
-  '  • "clean up old/duplicate memories" → CLI `maintain scan`, then `maintain execute` (NOT deleting rows one by one)',
+  '  • "clean up old/duplicate memories" → CLI `maintain scan` to preview; the cleanup itself is /claude-mem-lite:update, which the user starts (NOT deleting rows one by one)',
   '  • "is the search index healthy?" → CLI `fts-check check` (NOT manual COUNT queries)',
   '  • "overview of memory tiers" → CLI `browse` (NOT mem_search + manual grouping)',
   '  • "export for backup" → CLI `export` (NOT manual SELECT queries)',

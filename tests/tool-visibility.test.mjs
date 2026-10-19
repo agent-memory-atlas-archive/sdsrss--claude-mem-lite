@@ -233,6 +233,17 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     expect(named, 'the model is told to call a tool it does not have').toEqual([]);
   });
 
+  // Defects review r1: the rewritten rule sent "clean up old/duplicate memories" to `maintain
+  // execute`, which deletes broken rows and decays, boosts and demotes across every project —
+  // the set /update runs only when a person starts it (disable-model-invocation).
+  it('the instructions leave maintain execute to the person who starts /update', async () => {
+    const { buildServerInstructions } = await import('../search-scoring.mjs');
+    const verbose = buildServerInstructions(false);
+    expect(verbose, 'premise: the verbose instructions').toContain('Decision rules');
+    expect(verbose).not.toMatch(/maintain execute/);
+    expect(verbose).toContain('/claude-mem-lite:update');
+  });
+
   it('tools/call on a hidden tool (mem_stats) still succeeds', async () => {
     await rpc(proc, 1, 'initialize', {
       protocolVersion: '2024-11-05',

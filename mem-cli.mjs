@@ -63,6 +63,7 @@ import {
   PINNED_INJ_THRESHOLD,
   resolveDefaultMaintainOps,
   ALL_MAINTAIN_OPS,
+  DEFAULT_RETAIN_DAYS,
 } from './lib/maintain-core.mjs';
 // snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
 // (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
@@ -2773,7 +2774,7 @@ function cmdMaintain(db, args) {
       `  Pinned-but-uncited (inj>=${PINNED_INJ_THRESHOLD}, cited=0, above floor): ${stats.pinned} — floored by the default maintain set since v3.76.0, no lesson → 1, lesson → 2 (opt out: CLAUDE_MEM_SKIP_DEMOTE_PINNED=1)`,
     );
     out(formatHiddenLine(stats.hidden));
-    out(formatPendingPurgeLine(stats.pendingPurge));
+    out(formatPendingPurgeLine(stats.pendingPurge, stats.pendingPurgeDue, DEFAULT_RETAIN_DAYS));
     if (stats.explicitToShowAgain > 0)
       out(
         `  Explicit saves an earlier release hid (the next execute that runs decay — the default set does — shows them again): ${stats.explicitToShowAgain}`,
@@ -2832,7 +2833,7 @@ function cmdMaintain(db, args) {
   // whole command atomically. The old code validated inside db.transaction() with a bare
   // `return`, so an earlier op (cleanup hard-delete / decay / boost) had already mutated and
   // the transaction COMMITTED despite the exit-1 error (audit MED-2 atomicity).
-  let retainDays = 30;
+  let retainDays = DEFAULT_RETAIN_DAYS;
   if (ops.includes('purge_stale') && flags['retain-days'] !== undefined) {
     // Number + isInteger (not parseInt) so "7.5"/"30x" are rejected rather than silently
     // truncated — parity with the mem_maintain zod .int().min(7).max(365) bound.

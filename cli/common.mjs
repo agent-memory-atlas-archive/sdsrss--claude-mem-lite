@@ -596,11 +596,16 @@ export function obsFieldLabel(field) {
  * 2026-08-14 A4). Say what the rows are and what deletes them — and say nothing about
  * compression, which is a different sentinel with a different lifecycle.
  *
+ * purge_stale deletes only the queued rows older than its retain window (D#450), so the line
+ * also gives the number a purge at the default window deletes now.
+ *
  * @param {number} n stats.pendingPurge
+ * @param {number} due stats.pendingPurgeDue
+ * @param {number} retainDays the default retain window `due` was counted at
  * @returns {string} the full indented line, identical on both surfaces.
  */
-export function formatPendingPurgeLine(n) {
-  return `  Pending purge (idle-marked): ${n} (rows maintenance queued: hidden and still idle 7 days later, or queued by an earlier version — purge_stale deletes them)`;
+export function formatPendingPurgeLine(n, due, retainDays) {
+  return `  Pending purge (idle-marked): ${n} (rows maintenance queued: hidden and still idle 7 days later, or queued by an earlier version — purge_stale deletes those older than its retain window: ${due} at the default ${retainDays} days)`;
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   maintenanceStats,
   hardDeleteCandidateCount,
   sweepDeferredWorkOrphans,
+  DEFAULT_RETAIN_DAYS,
 } from '../lib/maintain-core.mjs';
 
 const DAY = 86400000;
@@ -393,6 +394,19 @@ describe('maintenanceStats (scan preview must match what execute does)', () => {
     // Parity: scan forecast == what execute actually touches.
     expect(decayAndMarkIdle(db, ctx(Date.now() - 30 * DAY)).idleHidden).toBe(stats.stale);
     expect(cleanupBroken(db, ctx(0))).toBe(stats.broken);
+  });
+
+  // D#450: the scan counted every queued row, and /mem cleanup asked the user to approve that
+  // number, but purge_stale deletes only the queued rows older than its retain window.
+  test('pendingPurgeDue is what a purge at the default retain window deletes', () => {
+    const db = freshDb();
+    add(db, { title: 'queued long ago', compressedInto: COMPRESSED_PENDING_PURGE }); // 40 days old
+    add(db, { title: 'queued recently', compressedInto: COMPRESSED_PENDING_PURGE, epochOffset: -5 * DAY });
+
+    const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
+    expect(stats.pendingPurge).toBe(2);
+    expect(stats.pendingPurgeDue).toBe(1);
+    expect(purgeStale(db, ctx(), Date.now() - DEFAULT_RETAIN_DAYS * DAY)).toBe(stats.pendingPurgeDue);
   });
 });
 

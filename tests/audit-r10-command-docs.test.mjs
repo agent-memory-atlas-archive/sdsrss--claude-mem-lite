@@ -150,6 +150,20 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
     );
   });
 
+  // D#450: the scan's pending count includes rows too recent to purge, so the number the user
+  // approves has to come from the purge's own preview. Text pattern: catches this spelling only.
+  for (const rel of ['commands/mem.md', 'commands/update.md']) {
+    it(`${rel} previews the purge before asking, so the user approves what gets deleted`, () => {
+      const line = read(rel)
+        .split('\n')
+        .find((l) => /--ops purge_stale --confirm/.test(l));
+      expect(line, `${rel}: no confirmed purge instruction`).toBeTruthy();
+      expect(line, `${rel}: the purge is not previewed before the user is asked`).toMatch(
+        /without `--confirm`/,
+      );
+    });
+  }
+
   it('commands/mem.md and commands/update.md state the --retain-days range the CLI actually enforces', async () => {
     const { min, max } = await retainDaysBounds();
     expect(min).toBe(7);

@@ -55,6 +55,7 @@ import {
   STALE_AGE_MS,
   resolveDefaultMaintainOps,
   DEFAULT_MAINTAIN_OPS,
+  DEFAULT_RETAIN_DAYS,
 } from './lib/maintain-core.mjs';
 // snapshotDb left with maintain-core: the pre-maintain snapshot is part of the op ORDER
 // (it must see the pre-existing pending rows), so it moved into runMaintainOps (P1-5).
@@ -1742,7 +1743,7 @@ server.registerTool(
         `  Decayable (imp>1, never accessed or injected, past the stale age): ${stats.decayable}`,
         `  Boostable (accessed>3, imp<3): ${stats.boostable}`,
         formatHiddenLine(stats.hidden),
-        formatPendingPurgeLine(stats.pendingPurge),
+        formatPendingPurgeLine(stats.pendingPurge, stats.pendingPurgeDue, DEFAULT_RETAIN_DAYS),
         ...(stats.explicitToShowAgain > 0
           ? [
               `  Explicit saves an earlier release hid (the next execute that runs decay — the default set does — shows them again): ${stats.explicitToShowAgain}`,
@@ -1825,8 +1826,8 @@ server.registerTool(
       // preview tells the caller to type next. Before the extraction this block rendered
       // `inj>=8` as a literal while the CLI twin interpolated PINNED_INJ_THRESHOLD.
       const results = runMaintainOps(db, mctx, ops, {
-        retainDays: args.retain_days ?? 30,
-        retainCutoff: Date.now() - (args.retain_days ?? 30) * DAY_MS,
+        retainDays: args.retain_days ?? DEFAULT_RETAIN_DAYS,
+        retainCutoff: Date.now() - (args.retain_days ?? DEFAULT_RETAIN_DAYS) * DAY_MS,
         confirmed: purgeConfirmed,
         mergeGroups: args.merge_ids || null,
         mergeIdsProvided: Boolean(args.merge_ids),

@@ -67,7 +67,7 @@ describe('B2 — slash-command references use the plugin namespace', () => {
 
   // D#454: typed bare, a name Claude Code also uses runs Claude Code's command — `/bug` opens
   // its bug report to Anthropic. The names and aliases of the command table at
-  // code.claude.com/docs/en/commands, read 2026-10-19. Hand-kept: a built-in added later is
+  // code.claude.com/docs/en/commands ("Alias" and "Also available as"), read 2026-10-19. Hand-kept: a built-in added later is
   // missed until it is added here.
   const BUILTIN = new Set(
     `add-dir advisor agents artifact-capabilities artifact-diagramming artifacts auto-mode-setup
@@ -84,7 +84,7 @@ describe('B2 — slash-command references use the plugin namespace', () => {
     theme tui ultraplan ultrareview update-config upgrade usage usage-credits verify vim voice
     web-setup workflow-authoring workflows
     allowed-tools android app bg checkpoint checkup continue ios new proactive quit rc reset
-    routines settings share undo`.split(/\s+/),
+    routines settings share undo bashes peers tp`.split(/\s+/),
   );
   const clashing = [...names].filter((n) => BUILTIN.has(n));
 

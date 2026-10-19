@@ -398,15 +398,29 @@ describe('maintenanceStats (scan preview must match what execute does)', () => {
 
   // D#450: the scan counted every queued row, and /mem cleanup asked the user to approve that
   // number, but purge_stale deletes only the queued rows older than its retain window.
+  // Ages on both sides of 7, 30 and 35 days, an explicit save, and a second project, so a wrong
+  // window, a dropped explicit-save guard or a dropped project filter each changes a count.
   test('pendingPurgeDue is what a purge at the default retain window deletes', () => {
     const db = freshDb();
-    add(db, { title: 'queued long ago', compressedInto: COMPRESSED_PENDING_PURGE }); // 40 days old
-    add(db, { title: 'queued recently', compressedInto: COMPRESSED_PENDING_PURGE, epochOffset: -5 * DAY });
+    insertSession(db, { id: 'manual-a', project: 'proj-a' });
+    insertSession(db, { id: 'sess-b', project: 'proj-b' });
+    const queued = (o) => add(db, { compressedInto: COMPRESSED_PENDING_PURGE, ...o });
+    queued({ title: '40 days' });
+    queued({ title: '32 days', epochOffset: -32 * DAY });
+    queued({ title: '25 days', epochOffset: -25 * DAY });
+    queued({ title: '5 days', epochOffset: -5 * DAY });
+    queued({ title: 'explicit save, 40 days', sessionId: 'manual-a' });
+    queued({ title: 'other project, 40 days', sessionId: 'sess-b', project: 'proj-b' });
 
-    const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
-    expect(stats.pendingPurge).toBe(2);
-    expect(stats.pendingPurgeDue).toBe(1);
-    expect(purgeStale(db, ctx(), Date.now() - DEFAULT_RETAIN_DAYS * DAY)).toBe(stats.pendingPurgeDue);
+    const all = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
+    expect(all.pendingPurge).toBe(5);
+    expect(all.pendingPurgeDue).toBe(3);
+    const projA = { ...ctx(Date.now() - 30 * DAY), projectFilter: 'AND project = ?', baseParams: ['proj-a'] };
+    expect(maintenanceStats(db, projA).pendingPurgeDue).toBe(2);
+
+    const cutoff = Date.now() - DEFAULT_RETAIN_DAYS * DAY;
+    expect(purgeStale(db, projA, cutoff)).toBe(2);
+    expect(purgeStale(db, ctx(), cutoff)).toBe(1);
   });
 });
 

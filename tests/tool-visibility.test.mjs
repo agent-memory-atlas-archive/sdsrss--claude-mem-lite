@@ -74,6 +74,16 @@ function rpc(proc, id, method, params) {
   });
 }
 
+/** Every string value inside a JSON value, in order. */
+const stringsIn = (v) =>
+  typeof v === 'string'
+    ? [v]
+    : Array.isArray(v)
+      ? v.flatMap(stringsIn)
+      : v && typeof v === 'object'
+        ? Object.values(v).flatMap(stringsIn)
+        : [];
+
 describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
   let tmp, proc;
 
@@ -205,7 +215,9 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     });
     const texts = {
       instructions: init.result.instructions,
-      'tools/list': JSON.stringify(list.result.tools),
+      // Every string in the listing, raw: JSON.stringify would turn a newline into `\n`, and the
+      // name after it would follow a word character the boundary below does not count.
+      'tools/list': stringsIn(list.result.tools).join('\n'),
       'mem_search, no results': search.result.content.map((c) => c.text).join('\n'),
       'mem_save, no lesson': save.result.content.map((c) => c.text).join('\n'),
     };

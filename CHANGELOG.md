@@ -2,6 +2,42 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.29.2 — /update and /mem cleanup run maintenance through the CLI, and the slash commands name /memory and /update by the plugin's namespace
+
+**Upgrade note: nothing to run; the schema version stays 49.** Only the slash-command text
+changes, but `/update` now runs where it could not before, and only you can start it (first
+item). Going back is pinning
+`claude-mem-lite@6.29.1`. The five fixes come from a prompt audit
+of the commands as 6.27.0 shipped them (2026-10-17); all five were still present in 6.29.1.
+
+- **`/claude-mem-lite:update` and `/mem cleanup` run maintenance through the CLI.** `/update`
+  told the model to call `mem_maintain` and `mem_compress`, and `/mem cleanup` to call
+  `mem_maintain`. Those tools are left out of the tool list so they do not fill every session's
+  starting context (`CLAUDE_MEM_ALL_TOOLS=1` lists them), and Claude Code hands the model only
+  listed tools, so unless that variable was set, following either command failed. Both now run
+  `node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" maintain …` via Bash, and `/update` also runs
+  `compress --execute`. A purge still asks you first, and a purge run without `--confirm` is
+  still only a preview. A `--retain-days` outside 7–365 is refused, and the model is told to say
+  so rather than use the default. `/update`'s execute step runs the default set, which adds
+  `demote_pinned` after `boost`, as the daily maintenance already does;
+  `CLAUDE_MEM_SKIP_DEMOTE_PINNED=1` leaves it out. So `/update` now changes the store, across
+  every project and without asking: it deletes broken rows (cleanup), applies decay, boost and
+  demote_pinned, merges the duplicate pairs the model picks, and compresses old low-value rows into weekly
+  summaries (the rows stay, folded; explicit saves included). It asks before the purge, with the
+  count the purge's own preview prints, and purges before its decay step queues more rows, so
+  what is deleted is what you approved. Because of all that, only you start it: its frontmatter
+  sets `disable-model-invocation: true`, so the model neither sees nor starts it on its own.
+  Routine maintenance stays with the daily worker.
+- **`/memory` and `/update` are named by the plugin's namespace.** Their text, and `/lesson`'s
+  pointer to `/memory`, said `/mem:memory` and `/mem:update`, a namespace that does not exist. A
+  plugin command's namespace is the plugin's name: `/claude-mem-lite:memory`,
+  `/claude-mem-lite:update`. The full form always works, and `/memory` on its own is a Claude
+  Code built-in.
+- **Command text the model had no use for is gone.** Release history in `/bug`, `/lesson` and
+  `/adopt` (the reason `/adopt` writes `CLAUDE.md` rather than the memory-dir `MEMORY.md` stays,
+  in the present tense), and the undefined term "sdscc" in `/lesson`, now said in plain words.
+- **`/update` reports in your language.** Its summary step was fixed to zh-CN.
+
 ## v6.29.1 — a corruption error on open is retried before the WAL is deleted, the index terms older builds leave out are filled for a week, the model no longer lifts an automatic episode to importance 3
 
 **Upgrade note: nothing to run; the schema version stays 49.** One default changes: the model's

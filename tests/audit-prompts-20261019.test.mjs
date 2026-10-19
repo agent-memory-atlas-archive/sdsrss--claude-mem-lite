@@ -1,6 +1,7 @@
 // The 2026-10-17 prompt audit of commands/*.md. These files are prompts: the model reads them
-// and does what they say, so each finding is a behaviour. Each guard takes its rule from the
-// code the prompt has to agree with, not from a hand-kept word list.
+// and does what they say, so each finding is a behaviour. B1 and B2 take their rule from the
+// code the prompt has to agree with (the hidden tool set, the plugin name); B3 and B5 are text
+// patterns and catch only the spelling they name. B4 (an undefined term) has no guard.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
@@ -27,7 +28,9 @@ describe('B1 — commands name only tools the model can call', () => {
   it('no command names a hidden tool', () => {
     const named = COMMANDS.flatMap((f) =>
       hidden
-        .filter((name) => new RegExp(`\\b${name}\\b`).test(read(f)))
+        // Not `\\b`: `_` is a word character, so `\\bmem_compress` misses the qualified
+        // `mcp__plugin_claude-mem-lite_mem-lite__mem_compress`.
+        .filter((name) => new RegExp(`(?<![A-Za-z0-9])${name}(?![A-Za-z0-9_])`).test(read(f)))
         .map((name) => `commands/${f}: ${name}`),
     );
     expect(named, 'these commands tell the model to use a tool tools/list does not give it').toEqual([]);
@@ -73,8 +76,8 @@ describe('B3 — commands carry no release history', () => {
 });
 
 describe('B5 — commands leave the reply language to the user', () => {
-  // A locale written into a command overrides the language the user speaks and the one their
-  // own settings ask for, for every user at once.
+  // A locale written into a command tells the model to answer in it whatever language the user
+  // writes in or their settings ask for, for every user at once.
   it('no command fixes a locale', () => {
     const fixed = COMMANDS.flatMap((f) =>
       [...read(f).matchAll(/\b[a-z]{2}-[A-Z]{2}\b/g)].map((m) => `commands/${f}: ${m[0]}`),

@@ -9,7 +9,7 @@
 // the retain days are floored at 7, so `/mem cleanup 3d` is rejected.
 //
 // Both commands now purge through the CLI (`maintain execute --ops purge_stale`), because
-// mem_maintain is hidden from tools/list and the model cannot call it
+// mem_maintain is hidden from tools/list and the model is not given it
 // (tests/audit-prompts-20261019.test.mjs). So this guard reads the CLI: its confirm flag is
 // `--confirm`, and the range is whatever `--retain-days` accepts when probed — not restated
 // here, since a guard that hardcodes 7 and 365 goes stale the same way the docs did.
@@ -81,8 +81,9 @@ async function retainDaysBounds() {
   return { min, max };
 }
 
-/** Inline code spans: the commands the model copies, as opposed to the prose around them. */
-const codeSpans = (src) => src.split('\n').flatMap((line) => line.split('`').filter((_, i) => i % 2 === 1));
+/** Inline code spans, so two commands on one line are checked one by one. */
+const codeSpans = (line) => line.split('`').filter((_, i) => i % 2 === 1);
+const CONFIRM = /(^|\s)--confirm(\s|$|`)/;
 
 describe('R10 P2-4 — the purge instruction the model reads actually purges', () => {
   beforeEach(() => {
@@ -116,13 +117,18 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
   });
 
   for (const rel of ['commands/mem.md', 'commands/update.md']) {
-    it(`${rel} pairs every purge_stale command with --confirm`, () => {
-      const spans = codeSpans(read(rel)).filter((s) => s.includes('purge_stale'));
-      expect(spans.length, `${rel} no longer gives a purge_stale command at all`).toBeGreaterThan(0);
-      for (const span of spans) {
-        expect(span, `${rel}: purge_stale command without --confirm → silent no-op`).toMatch(
-          /(^|\s)--confirm(\s|$)/,
-        );
+    it(`${rel} pairs every purge_stale instruction with --confirm`, () => {
+      // Every LINE, as the guard always did: a fenced or indented block, or a command written
+      // in prose, is as much an instruction as an inline code span.
+      const lines = read(rel)
+        .split('\n')
+        .filter((l) => l.includes('purge_stale'));
+      expect(lines.length, `${rel} no longer mentions purge_stale at all`).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line, `${rel}: purge_stale instruction without --confirm → silent no-op`).toMatch(CONFIRM);
+        for (const span of codeSpans(line).filter((s) => s.includes('purge_stale'))) {
+          expect(span, `${rel}: purge_stale command without --confirm → silent no-op`).toMatch(CONFIRM);
+        }
       }
     });
   }
@@ -135,7 +141,7 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
       expect(
         read(rel),
         `${rel}: the --retain-days bounds are not written down where the model reads them`,
-      ).toMatch(new RegExp(`--retain-days[^\\n]*${min}[^\\n]*${max}`));
+      ).toMatch(new RegExp(`--retain-days[^\\n]*\\b${min}\\b[^\\n]*\\b${max}\\b`));
     }
   });
 });

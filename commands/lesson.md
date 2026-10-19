@@ -8,9 +8,9 @@ description: "Use when: capturing a non-obvious lesson/gotcha/workaround after a
 Record a lesson / gotcha / workaround. Writes a searchable **observation**
 (`type=discovery` with the text as `lesson_learned`) so future sessions can
 find it via `mem_search` and the PreToolUse recall hooks surface it on the
-relevant files. Does NOT touch memdir — so lessons never end up in the L1
-system-prompt memory section and do not conflict with Claude Code's auto-memory
-rules on what not to save there.
+relevant files. Does NOT touch memdir — so lessons never end up in the
+auto-memory index Claude Code loads into every session, and do not conflict with
+Claude Code's auto-memory rules on what not to save there.
 
 ## When to use
 

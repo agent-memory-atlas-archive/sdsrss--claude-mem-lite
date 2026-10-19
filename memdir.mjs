@@ -2,7 +2,7 @@
 // Claude Code memdir at ~/.claude/projects/<encoded>/memory/.
 //
 // The public API lets a plugin install a single sentinel-wrapped line into
-// MEMORY.md (auto-loaded by Claude Code into the system prompt) plus an
+// MEMORY.md (loaded by Claude Code at the start of every session) plus an
 // on-demand `plugin_<slug>.md` detail file. Writes are idempotent, hash-guarded
 // against manual user edits, and capped by a 180-line budget so the injection
 // block never gets truncated by Claude Code's 200-line MEMORY.md cap.

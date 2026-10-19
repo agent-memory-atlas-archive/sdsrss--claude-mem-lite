@@ -522,7 +522,7 @@ describe('install lifecycle checks', () => {
       mkdirSync(projectDir, { recursive: true });
       mkdirSync(binDir, { recursive: true });
       mkdirSync(join(home, '.claude-mem-lite'), { recursive: true });
-      // Real node_modules, so `install` has no npm work to do and the case stays fast.
+      // Real node_modules, so install's better-sqlite3 check finds a working binding.
       symlinkSync(resolve('node_modules'), join(home, '.claude-mem-lite', 'node_modules'));
 
       const mcpPath = join(projectDir, '.mcp.json');

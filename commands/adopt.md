@@ -7,7 +7,7 @@ description: "Use when: user asks to put the claude-mem-lite steering block into
 
 Install the claude-mem-lite **steering block** into the current project's
 `CLAUDE.md` (the canonical home for project instructions — Claude Code loads it
-into every session, in a message right after the system prompt). It does not go
+into every session, in a message after the system prompt). It does not go
 in the project's memory-dir `MEMORY.md`: that index belongs to the user's own
 memories, and it carries no more weight than `CLAUDE.md`.
 

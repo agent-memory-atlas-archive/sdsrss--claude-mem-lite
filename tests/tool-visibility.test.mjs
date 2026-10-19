@@ -187,7 +187,7 @@ describe('MCP tools/list filter (v2.34.0 hidden-but-callable)', () => {
     proc.stdin.end();
     proc.kill('SIGTERM');
     if (proc.exitCode === null && proc.signalCode === null) await new Promise((r) => proc.once('exit', r));
-    // Not adopted and auto-adopt off: the one shape that gets the verbose instructions.
+    // Not adopted and auto-adopt off: the shape that normally gets the verbose instructions.
     proc = startServer(tmp, { MEM_QUIET_HOOKS: '0', MEM_NO_AUTO_ADOPT: '1', CLAUDE_PROJECT_DIR: tmp });
     const init = await rpc(proc, 1, 'initialize', {
       protocolVersion: '2024-11-05',

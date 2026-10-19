@@ -23,7 +23,7 @@ After you (or the user) solve a tricky bug or discover a non-obvious behavior:
 
 Don't use for trivial fixes (typos, renames), for rules that belong in memdir
 (user preferences, project-wide conventions), or for general project notes
-(use `/mem:memory` or `mem_save` instead).
+(use `/claude-mem-lite:memory` or `mem_save` instead).
 
 ## Arguments
 

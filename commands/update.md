@@ -9,11 +9,11 @@ Run intelligent maintenance on the memory database.
 
 ## Usage
 
-- `/mem:update` — Run full maintenance cycle
+- `/claude-mem-lite:update` — Run full maintenance cycle
 
 ## Instructions
 
-When the user invokes `/mem:update`, perform the following maintenance cycle:
+When the user invokes `/claude-mem-lite:update`, perform the following maintenance cycle:
 
 ### Phase 1: Memory Maintenance
 

@@ -9,12 +9,12 @@ Save important content to your long-term memory database.
 
 ## Commands
 
-- `/mem:memory <content>` — Save the given content directly to memory
-- `/mem:memory` (no args) — Auto-summarize recent session highlights and save key findings
+- `/claude-mem-lite:memory <content>` — Save the given content directly to memory
+- `/claude-mem-lite:memory` (no args) — Auto-summarize recent session highlights and save key findings
 
 ## Instructions
 
-When the user invokes `/mem:memory`, determine the intent:
+When the user invokes `/claude-mem-lite:memory`, determine the intent:
 
 ### With explicit content
 

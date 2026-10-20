@@ -3932,12 +3932,14 @@ const MUTATING_FILTER_READS = {
 // A command not in MUTATING_FILTER_READS names here when its run writes (round-2 pre-tag review
 // P3-2: defer drop and fts-check rebuild ignored --dry-run silently; verify-apply --apply is left
 // to its digest, since --apply is verify-apply's own flag and the dispatcher may not read it).
+// A preview is the same command without the flag that makes it write (the user's other flags stay),
+// or another command (`preview`).
 const DRY_RUN_UNREAD = {
-  compress: { preview: 'compress' },
+  compress: { without: '--execute' },
   maintain: { preview: 'maintain scan' },
-  optimize: { preview: 'optimize' },
+  optimize: { without: '--run or --run-all' },
   delete: { preview: null },
-  'activity promote': { preview: 'activity promote' },
+  'activity promote': { without: '--execute' },
   'activity delete': { preview: null },
   'import-jsonl': { preview: null, writes: () => true },
   'defer drop': { preview: null, writes: () => true },
@@ -4062,11 +4064,11 @@ async function runDispatch(argv) {
 
   if (Object.hasOwn(DRY_RUN_UNREAD, mutatingKey)) {
     const parsed = parseArgs(cmdArgs, { track: false });
-    const { preview, writes } = DRY_RUN_UNREAD[mutatingKey];
+    const { preview, without, writes } = DRY_RUN_UNREAD[mutatingKey];
     if ((mutating ? mutating.writes(parsed) : writes(parsed)) && asksDryRun(parsed.flags['dry-run'])) {
       fail(
         `[mem] ${mutatingKey} does not read --dry-run — nothing was changed, since the run would have ` +
-          `written. ${preview ? `Preview with: \`${CLI_INVOKE} ${preview}\`.` : 'It has no preview.'}`,
+          `written. ${without ? `Run it again without ${without} to preview.` : preview ? `Preview with: \`${CLI_INVOKE} ${preview}\`.` : 'It has no preview.'}`,
       );
       return;
     }

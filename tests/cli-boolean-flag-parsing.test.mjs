@@ -230,12 +230,20 @@ describe('the CLI with a boolean flag before its positional (D#385)', () => {
   // (`compress without --execute`) after the CLI's path.
   it.each([
     [['maintain', 'execute', '--dry-run'], 'maintain scan'],
-    [['compress', '--dry-run', '--execute'], 'compress'],
     [['fts-check', 'rebuild', '--dry-run'], 'fts-check check'],
   ])('%j names a preview command that runs as printed', (args, preview) => {
     expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
     const r = run(...args);
     expect(r.stderr).toContain(`Preview with: \`${CLI_INVOKE} ${preview}\`.`);
+  });
+  // A writer that writes under a flag previews as the same command without it, so the user's other
+  // flags (`--project`) stay; a bare `activity promote` previewed every project (v6.30.1 r2 P3-3).
+  it.each([
+    [['compress', '--dry-run', '--execute'], '--execute'],
+    [['activity', 'promote', '--execute', '--project', 'x', '--dry-run'], '--execute'],
+  ])('%j says to drop the writing flag', (args, flag) => {
+    const r = run(...args);
+    expect(r.stderr).toContain(`Run it again without ${flag} to preview.`);
   });
 
   it('defer drop --dry-run refuses and leaves the item open', () => {

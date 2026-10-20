@@ -2944,6 +2944,36 @@ describe('CLI stats --quality command', () => {
     expect(output).not.toContain('purge_stale --confirm');
   });
 
+  // D#467: the report counts one project, but `maintain` without --project purges every one, so
+  // following a hint printed for one project purged all of them.
+  it('the purge hint carries the --project the report was scoped to', async () => {
+    testDb.prepare("UPDATE observations SET compressed_into = 99 WHERE title = 'Modified auth.mjs'").run();
+    testDb.prepare("UPDATE observations SET compressed_into = -2 WHERE title = 'Modified server.mjs'").run();
+    const { CLI_INVOKE } = await import('../cli-path.mjs');
+    const scoped = await captureStdout(() => run(['stats', '--quality', '--project', 'test--project']));
+    expect(scoped).toContain(
+      `preview: ${CLI_INVOKE} maintain execute --ops purge_stale --project test--project (add --confirm`,
+    );
+    const all = await captureStdout(() => run(['stats', '--quality']));
+    expect(all).toContain(`preview: ${CLI_INVOKE} maintain execute --ops purge_stale (add --confirm`);
+  });
+
+  // D#466: purge_stale never deletes an explicit save, so one queued for purge (by an earlier
+  // version) is not waiting for deletion and does not count toward the ratio.
+  it('the pending-purge ratio leaves out explicit saves', async () => {
+    insertSession(testDb, { id: 's-manual', project: 'test--project', memoryId: 'manual-x' });
+    insertObs(testDb, { sessionId: 'manual-x', project: 'test--project', title: 'An explicit save' });
+    testDb.prepare("UPDATE observations SET compressed_into = 99 WHERE title = 'Modified auth.mjs'").run();
+    testDb
+      .prepare(
+        "UPDATE observations SET compressed_into = -2 WHERE title IN ('Modified server.mjs', 'An explicit save')",
+      )
+      .run();
+    // 3 compressed; 1 of them waits for deletion → 33.3%, not 2/3.
+    const output = await captureStdout(() => run(['stats', '--quality']));
+    expect(output).toMatch(/Pending purge ≤ 10%.*currently 33\.3% \(1\/3\)/);
+  });
+
   it('renders pending-purge watchdog with ✅ at low ratio', async () => {
     testDb
       .prepare(

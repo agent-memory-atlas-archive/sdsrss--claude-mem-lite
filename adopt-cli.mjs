@@ -655,7 +655,7 @@ function localSteeringStatus(cwd) {
   // in a git work tree or not (pre-tag delta review of the D#212 repairs, D11).
   if (blockIn(cwd) || (root && !samePath(root, cwd) && blockAbove(cwd, root))) {
     if (userInstructionFiles() === 'managed-only')
-      return '⚠ CLAUDE.md carries the block, but Project instructions is set to managed-only, which does not load it (steering is injected at session start)';
+      return '⚠ CLAUDE.md carries the block, but Project instructions is set to managed-only, which does not load it';
     const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
     if (cur === null || cur.body === null) return '— none: CLAUDE.md carries the block';
     const kept = localFileLinked(root, cur.path)

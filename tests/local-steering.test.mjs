@@ -1363,6 +1363,13 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
     const status = withCwd(app(), () => captureLog(() => cmdAdopt(['--status'])));
     expect(status).toMatch(/local: .*managed-only/);
     expect(status).not.toMatch(/— none: CLAUDE\.md carries the block/);
+    // Switched off for the project, SessionStart injects nothing, so the line promises no injection
+    // (v6.30.0 pre-tag defects review r2 F2).
+    captureLog(() => withCwd(app(), () => cmdAdopt(['--disable'])));
+    expect(silentAutoAdopt({ cwd: app() }), 'premise').toMatchObject({ action: 'disabled' });
+    const off = withCwd(app(), () => captureLog(() => cmdAdopt(['--status'])));
+    expect(off).toMatch(/local: .*managed-only/);
+    expect(off).not.toMatch(/injected/);
   });
 
   // A damaged begin line leaves the block's text in a CLAUDE.md that managed-only does not load.

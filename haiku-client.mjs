@@ -832,7 +832,11 @@ function claudeArgs(modelName) {
  * their output tokens and latency (measured above, 2026-09-29; the model the CLI ran then was
  * not recorded). Claude Code 2.1.301 does not change its request for Claude Haiku 5.5 on this
  * variable: the body carries adaptive thinking either way (D#334). Earlier versions were not
- * checked.
+ * checked. CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 drops Claude Code's auto-memory section, 2.25 KB
+ * of every system prompt that tells the model about a memory directory these calls never use
+ * (stub-probed on 2.1.304: system 8,964 -> 6,688 B). The 2026-10-20 A/B on the cli leg, gate set
+ * before the run (D#483): usable 8/8, 8/8, 7/8 against the same without it; kept lessons 3 vs 4
+ * at n=8, inside floor(0.9 x 4).
  */
 function cliSpawnEnv() {
   return {
@@ -840,6 +844,7 @@ function cliSpawnEnv() {
     CLAUDE_MEM_HOOK_RUNNING: '1',
     DISABLE_CLAUDEMD_HOOKS: '1',
     MAX_THINKING_TOKENS: '0',
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
   };
 }
 

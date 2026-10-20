@@ -178,7 +178,8 @@ describe('haiku-client.mjs', () => {
           // injection surface on any shared host. Pinned by shape, not by the exact path,
           // because the path is env-dependent (CLAUDE_MEM_DIR / CLAUDE_MEM_RUNTIME_DIR).
           cwd: expect.stringMatching(/[/\\]cli-cwd$/),
-          env: expect.objectContaining({ DISABLE_CLAUDEMD_HOOKS: '1' }),
+          // D#483: and without Claude Code's auto-memory section (2.25 KB of every system prompt).
+          env: expect.objectContaining({ DISABLE_CLAUDEMD_HOOKS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }),
         }),
       );
       expect(child.stdin.write).toHaveBeenCalledWith('the prompt');
@@ -699,7 +700,9 @@ describe('haiku-client.mjs', () => {
         await callLLMWithModel('p', 'haiku');
         expect(vi.mocked(execFileSync).mock.calls[0][1]).toEqual(FIRST('haiku'));
         expect(vi.mocked(execFileSync).mock.calls[0][2]).toEqual(
-          expect.objectContaining({ env: expect.objectContaining({ MAX_THINKING_TOKENS: '0' }) }),
+          expect.objectContaining({
+            env: expect.objectContaining({ MAX_THINKING_TOKENS: '0', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }),
+          }),
         );
       });
 

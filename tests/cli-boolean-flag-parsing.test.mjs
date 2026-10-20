@@ -19,6 +19,7 @@ import { spawnSync } from 'child_process';
 import Database from 'better-sqlite3';
 import { parseArgs, BOOLEAN_CLI_FLAGS } from '../cli/common.mjs';
 import { initSchema } from '../schema.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(REPO, 'cli.mjs');
@@ -222,6 +223,19 @@ describe('the CLI with a boolean flag before its positional (D#385)', () => {
     const r = run(...args);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/does not read --dry-run/);
+  });
+
+  // v6.30.1 pre-tag defects review: the preview was printed as `Preview with: <cli> maintain scan.`,
+  // so a copied command ended in the sentence's period, and three previews were prose
+  // (`compress without --execute`) after the CLI's path.
+  it.each([
+    [['maintain', 'execute', '--dry-run'], 'maintain scan'],
+    [['compress', '--dry-run', '--execute'], 'compress'],
+    [['fts-check', 'rebuild', '--dry-run'], 'fts-check check'],
+  ])('%j names a preview command that runs as printed', (args, preview) => {
+    expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
+    const r = run(...args);
+    expect(r.stderr).toContain(`Preview with: \`${CLI_INVOKE} ${preview}\`.`);
   });
 
   it('defer drop --dry-run refuses and leaves the item open', () => {

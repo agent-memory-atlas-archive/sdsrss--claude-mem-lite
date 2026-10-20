@@ -3933,11 +3933,11 @@ const MUTATING_FILTER_READS = {
 // P3-2: defer drop and fts-check rebuild ignored --dry-run silently; verify-apply --apply is left
 // to its digest, since --apply is verify-apply's own flag and the dispatcher may not read it).
 const DRY_RUN_UNREAD = {
-  compress: { preview: 'compress without --execute' },
+  compress: { preview: 'compress' },
   maintain: { preview: 'maintain scan' },
-  optimize: { preview: 'optimize without --run' },
+  optimize: { preview: 'optimize' },
   delete: { preview: null },
-  'activity promote': { preview: 'activity promote without --execute' },
+  'activity promote': { preview: 'activity promote' },
   'activity delete': { preview: null },
   'import-jsonl': { preview: null, writes: () => true },
   'defer drop': { preview: null, writes: () => true },
@@ -4066,7 +4066,7 @@ async function runDispatch(argv) {
     if ((mutating ? mutating.writes(parsed) : writes(parsed)) && asksDryRun(parsed.flags['dry-run'])) {
       fail(
         `[mem] ${mutatingKey} does not read --dry-run — nothing was changed, since the run would have ` +
-          `written. ${preview ? `Preview with: ${CLI_INVOKE} ${preview}.` : 'It has no preview.'}`,
+          `written. ${preview ? `Preview with: \`${CLI_INVOKE} ${preview}\`.` : 'It has no preview.'}`,
       );
       return;
     }
@@ -4280,7 +4280,7 @@ async function runDispatch(argv) {
     out(`[mem] Error: Cannot open database: ${e.message}`);
     out(`[mem] DB path: ${DB_PATH}`);
     // The remedy overwrites the database, so it is doctor's to print, not this line's (D#488).
-    if (isDbUnusableError(e)) out(`[mem] Next: \`${CLI_INVOKE} doctor\` names the remedy.`);
+    if (isDbUnusableError(e)) out(`[mem] Next: run \`${CLI_INVOKE} doctor\`.`);
     process.exitCode = 1;
     return;
   }

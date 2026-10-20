@@ -229,8 +229,8 @@ describe('an unopenable database is logged once, not once per hook fire', () => 
 });
 
 // D#488: every CLI command printed SQLite's sentence and the path, and nothing to do next. The
-// next step names doctor, which carries the remedy; the remedy itself overwrites the database, and
-// this CLI is as often run by an agent with Bash as by the user, so it stays out of this output.
+// next step names doctor; a remedy that overwrites the database stays doctor's to print, since an
+// agent with Bash runs this CLI too.
 describe('the CLI names the next step for a database it cannot use', () => {
   it.each([
     ['not a database', () => corruptDataDir({ withSnapshot: true })],

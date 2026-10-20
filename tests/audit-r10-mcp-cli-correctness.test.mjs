@@ -133,6 +133,9 @@ describe('R10 P2-5 — get flags a row that was merged or compressed away', () =
     expect(auto).toBeTruthy();
     expect(purge).toBeTruthy();
     expect(auto).not.toBe(purge);
+    // D#465: the next purge_stale run deletes only rows past its retain window, and never an
+    // explicit save, so the notice does not promise a time.
+    expect(purge).not.toMatch(/next purge_stale run/);
   });
 
   it('says nothing about an ordinary live row', () => {

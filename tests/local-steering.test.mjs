@@ -1071,6 +1071,28 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
       JSON.stringify({ pluginConfigs: { [id]: { options: { instructionFiles } } } }),
     );
   };
+  const withCwd = (dir, fn) => {
+    const before = process.cwd();
+    process.chdir(dir);
+    process.env.CLAUDE_PROJECT_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      process.chdir(before);
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  };
+  const captureLog = (fn) => {
+    const lines = [];
+    const orig = console.log;
+    console.log = (m) => lines.push(String(m));
+    try {
+      fn();
+    } finally {
+      console.log = orig;
+    }
+    return lines.join('\n');
+  };
   beforeEach(() => initRepo(app()));
 
   it('a repository whose AGENTS.md is its instructions gets the block in .claude/rules, no CLAUDE.local.md', () => {
@@ -1209,13 +1231,40 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
     ['claude-md-and-agents-md', 'cc-plugin-agents-md@builtin', LOCAL_MD],
     ['claude-md-and-agents-md', 'agents-md@builtin', LOCAL_MD],
     ['claude-md', 'cc-plugin-agents-md@builtin', LOCAL_MD],
-    ['managed-only', 'cc-plugin-agents-md@builtin', LOCAL_MD],
     ['claude-md-or-agents-md', 'cc-plugin-agents-md@builtin', RULES_MD],
     ['a-value-from-a-later-version', 'cc-plugin-agents-md@builtin', RULES_MD],
   ])('instructionFiles=%s under %s in the user settings → %s', (value, id, file) => {
     agentsMd(app());
     userSettings(join(home, '.claude'), value, id);
     expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file });
+  });
+
+  // D#219: managed-only loads neither CLAUDE.local.md nor the rules file (code.claude.com/docs/en/
+  // memory, read 2026-10-20), so a file there steers nothing: none is written and the session
+  // injects. (This row used to expect CLAUDE.local.md.)
+  it.each([
+    ['beside an AGENTS.md', true],
+    ['with no AGENTS.md', false],
+  ])('instructionFiles=managed-only → inject and no file, %s', (_name, withAgents) => {
+    if (withAgents) agentsMd(app());
+    userSettings(join(home, '.claude'), 'managed-only');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-managed-only' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    expect(existsSync(join(app(), RULES_MD))).toBe(false);
+  });
+
+  // Not removed either: the plugin would then remember a removal and not write the block back when
+  // the setting changes again.
+  it('managed-only leaves a block already in CLAUDE.local.md as it is, and says why at --status', () => {
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local', file: LOCAL_MD });
+    const before = readFileSync(join(app(), LOCAL_MD), 'utf8');
+    userSettings(join(home, '.claude'), 'managed-only');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject' });
+    expect(readFileSync(join(app(), LOCAL_MD), 'utf8')).toBe(before);
+    const status = withCwd(app(), () => captureLog(() => cmdAdopt(['--status'])));
+    expect(status).toMatch(/managed-only/);
+    expect(status).not.toMatch(/next session removes it/);
+    expect(status).not.toMatch(/undefined/);
   });
 
   it('the user settings are read from CLAUDE_CONFIG_DIR when it is set', () => {

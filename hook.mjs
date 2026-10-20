@@ -3421,7 +3421,8 @@ async function handleSessionStart() {
       const steering = await buildInjectedSteering();
       if (steering) stdoutParts.push(steering);
       if (adoptReason === 'local-agents-md') await noteAgentsMdOnce(project, adoptAgentsInfo ?? {});
-      else offerAdoptOnce(project);
+      // managed-only loads no project CLAUDE.md either, so /adopt would not help (D#219).
+      else if (adoptReason !== 'local-managed-only') offerAdoptOnce(project);
     } else if (adoptAction === 'local') {
       // Claude Code read CLAUDE.local.md before this hook ran, so the session that CREATES it
       // does not load it (release-tree sandbox: first sessions had no steering, 0/4). Inject

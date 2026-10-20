@@ -690,6 +690,9 @@ function currentLocalLine(root, cwd, cur, runs) {
     return `✓ ${cur.path} (behind a symbolic link; the plugin leaves it as it is)`;
   if (trackedByGit(root, rel)) return `✓ ${cur.path} (tracked by git; the plugin leaves it as it is)`;
   const plan = runs ? planLocalSteering(root, PLUGIN_SLUG, cwd) : null;
+  // Left in place under managed-only (writeLocalSteering, D#219), not removed.
+  if (plan?.refusal === 'managed-only')
+    return `⚠ ${cur.path} (auto-written, but CLAUDE.local.md ${LOCAL_REFUSAL_TEXT['managed-only']}; the steering is injected, and the file stays for when the setting changes)`;
   if (plan?.refusal) {
     const why =
       plan.file === LOCAL_MD

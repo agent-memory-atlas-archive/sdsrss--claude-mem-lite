@@ -385,6 +385,34 @@ const PGP_CRC_RE = /^=[A-Za-z0-9+/]{4}$/;
 // under a PGP header, a secret-key packet in the old or new format (`lQ…`, `xc…`/`xV…`).
 const KEY_MAGIC_RE = /^(?:MII|MIG|MC4C|MHcC|b3BlbnNzaC1rZXktdjE)/;
 const PGP_MAGIC_RE = /^(?:lQ|x[cV])/;
+const B64_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * Whether base64 `s` starts the way a DER private key starts: a SEQUENCE holding an INTEGER 0 or 1
+ * (PKCS#1, PKCS#8, SEC1, DSA) or a SEQUENCE and an OID (encrypted PKCS#8). The prefix list above
+ * missed every key whose length byte gives another second character: secp256k1 `MHQC`, P-521
+ * `MIHc`/`MIHu`, Ed448 `MEcC`, X448 `MEYC`, the 192/224-bit curves (D#504 F1).
+ */
+function isDerKeyStart(s) {
+  if (s.length < 12) return false;
+  const b = [];
+  for (let i = 0; i < 12; i += 4) {
+    let n = 0;
+    for (let k = 0; k < 4; k++) {
+      const v = B64_DIGITS.indexOf(s[i + k]);
+      if (v < 0) return false;
+      n = n * 64 + v;
+    }
+    b.push(n >> 16, (n >> 8) & 255, n & 255);
+  }
+  if (b[0] !== 0x30) return false;
+  const o = b[1] < 0x80 ? 2 : b[1] <= 0x83 ? b[1] - 0x7e : -1;
+  if (o < 0) return false;
+  if (b[o] === 0x02 && b[o + 1] === 0x01 && b[o + 2] <= 1) return true;
+  return b[o] === 0x30 && b[o + (b[o + 1] === 0x81 ? 3 : 2)] === 0x06;
+}
+
+const startsLikeKey = (s) => KEY_MAGIC_RE.test(s) || isDerKeyStart(s);
 // RFC 1421 / RFC 4880 armor headers, before the body. Named, not any `Word:`: a `Note:` line is
 // prose, and taking it for a header made the lone base64 line under it a key.
 // RFC 1421's full set and tool-written `X-` headers count too (v6.19.2 pre-tag delta review F4:
@@ -684,7 +712,7 @@ function cutOffKeyEnd(text, b, be) {
   // Under an opener whose prefix does not match the diff lines below it (`'+`, `rb'+`,
   // `+KEY = '''`) the line still starts with its `+`; the magic is tested without it (D#167).
   const body = first.replace(/^[-+]/, '');
-  const magic = KEY_MAGIC_RE.test(body) || (text.slice(b, be).includes('PGP') && PGP_MAGIC_RE.test(body));
+  const magic = startsLikeKey(body) || (text.slice(b, be).includes('PGP') && PGP_MAGIC_RE.test(body));
   return longs >= 2 || armors > 0 || longest >= 40 || magic ? end : -1;
 }
 
@@ -797,7 +825,7 @@ function keyTailSpan(text, e, ee, floor) {
   // 16-39 characters over an END named in prose is not (F7).
   if (longs === 0) return null;
   const b64ish = /[0-9+]|=$/.test(topCore);
-  if (!(longs >= 2 || longest >= 40 || crc || (clean && b64ish) || KEY_MAGIC_RE.test(topCore))) return null;
+  if (!(longs >= 2 || longest >= 40 || crc || (clean && b64ish) || startsLikeKey(topCore))) return null;
   return [top, sentence ? bottom : ee];
 }
 

@@ -589,6 +589,46 @@ describe('a short first key line under a quote-plus opener', () => {
   });
 });
 
+// D#504 F1: one cut key line of 16-39 characters counts as key material only when it starts the
+// way a key encoding starts, and that test was a list of five prefixes. The DER headers below are
+// from keys OpenSSL 3.5.5 generated on 2026-10-20 (`openssl ecparam -genkey`, `openssl genpkey`,
+// `openssl pkcs8 -topk8`); none of them is on the list, so `head -c 60` of any of these keys stored
+// up to 22 bytes of the private key.
+describe('a short first key line of a key type the prefix list missed', () => {
+  it.each([
+    ['secp256k1 SEC1', 'MHQCAQEEI'],
+    ['P-521 SEC1', 'MIHcAgEBBEI'],
+    ['P-521 PKCS#8', 'MIHuAgEAMBA'],
+    ['brainpoolP512r1 SEC1', 'MIHaAgEBBEA'],
+    ['brainpoolP256r1 SEC1', 'MHgCAQEEI'],
+    ['secp224r1 SEC1', 'MGgCAQEEH'],
+    ['secp224r1 PKCS#8', 'MHgCAQAwEAY'],
+    ['prime192v1 SEC1', 'MF8CAQEEG'],
+    ['Ed448 PKCS#8', 'MEcCAQAwBQY'],
+    ['X448 PKCS#8', 'MEYCAQAwBQY'],
+  ])('%s', (_name, header) => {
+    for (const len of [16, 28, 39]) {
+      const line = header + b64(len - header.length);
+      for (const begin of ['-----BEGIN EC PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----']) {
+        expect(scrubSecrets(`$ head -c 60 k.pem\n${begin}\n${line}`), `${len} chars`).not.toContain(line);
+        expect(scrubSecrets(`${begin}\n${line}…`), `${len} chars, cut mark`).not.toContain(line);
+        expect(scrubSecrets(`+${begin}\n+${line}`), `${len} chars, diff`).not.toContain(line.slice(0, 16));
+      }
+      // The key-tail reading asks the same question of the top line over an END that words follow.
+      const tail = `${line}\n-----END EC PRIVATE KEY----- (see above)`;
+      expect(scrubSecrets(tail), `${len} chars over an END`).not.toContain(line);
+    }
+  });
+  // The other direction: words in the base64 alphabet that start with M and are no DER header stay.
+  it.each(['MaintenanceWindowConfig', 'MHQCAndOtherNotes', 'MEYCHANGELOGENTRY2026', 'MAXRETRIESEXCEEDED'])(
+    'keeps %s',
+    (word) => {
+      const text = `-----BEGIN EC PRIVATE KEY-----\n${word}\nmore notes`;
+      expect(scrubSecrets(text)).toContain(word);
+    },
+  );
+});
+
 // D#169 (a crafted run of blank lines after armor-header BEGINs read slowly) was attempted twice for
 // v6.30.0 and withdrawn: each attempt stopped reading after 16 blank lines in some case, and a cut key
 // below 17 or more blank lines was stored where v6.29.3 erased it (pre-tag reviews r1 and r2). These

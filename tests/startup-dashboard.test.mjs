@@ -348,8 +348,8 @@ describe('startup dashboard (T10c)', () => {
     expect(Date.now() - t0).toBeLessThan(200);
   });
 
-  // D#501(1): `adopt` writes CLAUDE.md, and Project instructions = managed-only loads no project
-  // CLAUDE.md, so the hint would offer a block that steers nothing.
+  // D#501(1): `adopt` writes CLAUDE.md, and Project instructions = managed-only leaves the project's
+  // CLAUDE.md out at launch, so the hint would offer a block that steers nothing.
   test('no adopt hint under Project instructions = managed-only', () => {
     const saved = Object.fromEntries(
       ['MEM_NO_ADOPT_HINT', 'MEM_QUIET_HOOKS', 'CLAUDE_CONFIG_DIR'].map((k) => [k, process.env[k]]),

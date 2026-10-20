@@ -124,8 +124,8 @@ describe('isAdoptedHere / effectiveQuiet', () => {
     expect(effectiveQuiet()).toBe(true);
   });
 
-  // D#501(2): Project instructions = managed-only loads no CLAUDE.md or CLAUDE.local.md, so a block
-  // in one steers nothing. With auto-adopt off nothing is injected either, and going quiet left the
+  // D#501(2): Project instructions = managed-only leaves the project's CLAUDE.md and CLAUDE.local.md
+  // out at launch, so a block in one steers nothing. With auto-adopt off nothing is injected either, and going quiet left the
   // session with neither the steering nor the verbose sections.
   describe('under Project instructions = managed-only', () => {
     let origConfig;

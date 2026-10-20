@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
+import { parseArgs } from '../cli/common.mjs';
 import { createTestDb, insertObs, insertSession, makeFixtureTracker } from './test-helpers.mjs';
 import {
   legacyProjectNameFromDir,
@@ -216,11 +217,15 @@ describe('at SessionStart', () => {
       { title: 'shop cart lesson', project: OLD },
     ]);
     expect(first).toContain('projects--博客');
-    expect(first).toContain(`--project ${OLD}`);
+    // `--project=`: an old id of dashes alone (`------`) read as two flags after `--project `, and the
+    // command listed every project (v6.30.0 review leftover, D#499(1)).
+    expect(first).toContain(`--project=${OLD}`);
+    expect(parseArgs(['--project=------'], { track: false }).flags.project).toBe('------');
+    expect(parseArgs(['--project', '------'], { track: false }).flags.project).toBe(true);
     expect(
       readdirSync(join(home, '.claude-mem-lite', 'runtime')).some((f) => f.startsWith('.project-rekeyed-')),
     ).toBe(true);
-    expect(start()).not.toContain(`--project ${OLD}`);
+    expect(start()).not.toContain(`--project=${OLD}`);
   });
 
   // Delta review P2-1: 博客 moves its path-proven rows first, which removes the only path evidence
@@ -266,7 +271,7 @@ describe('at SessionStart', () => {
     ro.close();
     expect(left).toEqual([0, 0, 0]);
     expect(out).toContain('projects--博客');
-    expect(out).not.toContain(`--project ${OLD}`); // nothing stayed behind to point at
+    expect(out).not.toContain(`--project=${OLD}`); // nothing stayed behind to point at
 
     // A sibling that opens afterwards finds its old id empty: nothing moved, so no notice
     // (it used to say "Moved everything stored under the old id (0 memories …)").

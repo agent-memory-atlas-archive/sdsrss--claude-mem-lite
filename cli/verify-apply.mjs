@@ -153,7 +153,7 @@ export function cmdVerifyApply(db, args) {
     out(`[mem] Plan digest: ${digest}`);
     out('[mem] Dry run — nothing written. After the user approves exactly this plan, run:');
     out(
-      `  ${SELF} verify-apply ${shellWord(file)} --project ${shellWord(project)} --apply --digest ${digest}`,
+      `  ${SELF} verify-apply ${shellWord(file)} --project=${shellWord(project)} --apply --digest ${digest}`,
     );
     return;
   }

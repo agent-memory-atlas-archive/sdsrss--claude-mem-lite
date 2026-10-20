@@ -3004,9 +3004,9 @@ function rekeyProjectOnce(db, project) {
         ? ''
         : left === 1
           ? " 1 other stays under the old id (another directory's, or nothing shows whose); " +
-            `list it with \`${CLI_INVOKE} recent 50 --project ${legacy}\`.`
+            `list it with \`${CLI_INVOKE} recent 50 --project=${legacy}\`.`
           : ` ${left} others stay under the old id (another directory's, or nothing shows whose); ` +
-            `list them with \`${CLI_INVOKE} recent 50 --project ${legacy}\`.`;
+            `list them with \`${CLI_INVOKE} recent 50 --project=${legacy}\`.`;
     queueHookSystemMessage(
       `claude-mem-lite: this project's memory now has its own id, ${project}. Its old id, ${legacy}, ` +
         'could be shared with other directories whose names are not plain ASCII. ' +

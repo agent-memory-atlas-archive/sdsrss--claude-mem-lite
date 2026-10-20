@@ -2996,7 +2996,7 @@ describe('CLI stats --quality command', () => {
     const { CLI_INVOKE } = await import('../cli-path.mjs');
     const scoped = await captureStdout(() => run(['stats', '--quality', '--project', 'test--project']));
     expect(scoped).toContain(
-      `preview: ${CLI_INVOKE} maintain execute --ops purge_stale --project test--project (add --confirm`,
+      `preview: ${CLI_INVOKE} maintain execute --ops purge_stale --project=test--project (add --confirm`,
     );
     const all = await captureStdout(() => run(['stats', '--quality']));
     expect(all).toContain(`preview: ${CLI_INVOKE} maintain execute --ops purge_stale (add --confirm`);

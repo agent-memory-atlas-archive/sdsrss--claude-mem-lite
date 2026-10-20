@@ -100,7 +100,7 @@ import {
   schemaSkewRemedy,
   formatSchemaSkewNotice,
 } from './lib/schema-skew.mjs';
-import { CLI_PATH, CLI_INVOKE } from './cli-path.mjs';
+import { CLI_PATH, CLI_INVOKE, shellWord } from './cli-path.mjs';
 import {
   parseArgs,
   out,
@@ -3640,7 +3640,7 @@ async function cmdImportJsonl(db, argv) {
     // — an orphan-only first import must not fall through to the "already imported"
     // no-op branch below.
     if (projectCheck.note) out(`[mem] Imported${projectCheck.note}.`);
-    out(`[mem] Try: ${CLI_INVOKE} recent 5 --project ${project}`);
+    out(`[mem] Try: ${CLI_INVOKE} recent 5 --project=${shellWord(project)}`);
   } else if (totalRecognized > 0) {
     // Lines WERE Claude Code transcript events but produced no new rows — the file
     // was already imported (idempotent re-run) or carried no extractable content.

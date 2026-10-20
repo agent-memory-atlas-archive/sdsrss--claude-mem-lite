@@ -124,7 +124,7 @@ describe('verify-apply CLI', () => {
     // The user approves what they SEE: the new text itself, not a length or a field name.
     expect(r.stdout).toContain('The bug was fixed in abc123.');
     expect(digestOf(r.stdout)).toMatch(/^[0-9a-f]{16}$/);
-    expect(r.stdout).toContain(`--project ${PROJECT} --apply --digest ${digestOf(r.stdout)}`);
+    expect(r.stdout).toContain(`--project=${PROJECT} --apply --digest ${digestOf(r.stdout)}`);
     expect(r.stderr).not.toMatch(/Unknown flag/);
     expect(snapshot()).toBe(before);
     expect(existsSync(backupsDir())).toBe(false);
@@ -340,7 +340,7 @@ describe('verify-apply CLI', () => {
     const a = seed();
     const file = writeProposals([{ id: a, action: 'retire', verdict: 'STALE', evidence: 'x' }]);
     const r = runCli(['verify-apply', file]);
-    expect(r.stdout).toContain(`node ${CLI_PATH} verify-apply ${file} --project ${PROJECT} --apply --digest`);
+    expect(r.stdout).toContain(`node ${CLI_PATH} verify-apply ${file} --project=${PROJECT} --apply --digest`);
   });
 
   it('an undo whose backup cannot be marked still succeeds, warns, and cannot run a second time', () => {

@@ -476,6 +476,24 @@ describe('SessionStart end to end', () => {
     expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
   });
 
+  // Defects review P3-4: the git work tree's reason (local-managed-only) had no SessionStart case.
+  it('in a git work tree under managed-only, the steering is injected and /adopt is not offered', () => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({
+        pluginConfigs: { 'cc-plugin-agents-md@builtin': { options: { instructionFiles: 'managed-only' } } },
+      }),
+    );
+    const out = sessionStart(app);
+    expect(out.hookSpecificOutput.additionalContext).toContain(HEADING);
+    expect(existsSync(join(app, LOCAL_MD))).toBe(false);
+    expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
+    // With the block in CLAUDE.md, which managed-only does not load either (defects review P2-2).
+    writeManaged(app, { slug: SLUG, version: V, block: buildClaudeMdBlock(), doc: getDetailDoc() });
+    expect(sessionStart(app).hookSpecificOutput?.additionalContext ?? '').toContain(HEADING);
+  });
+
   it('outside git the steering is still injected', () => {
     const plain = join(home, 'work', 'plain');
     mkdirSync(plain, { recursive: true });
@@ -1327,6 +1345,37 @@ describe('AGENTS.md: auto-adopt does not switch it off', () => {
     expect(status).toMatch(/managed-only/);
     expect(status).not.toMatch(/next session removes it/);
     expect(status).not.toMatch(/undefined/);
+  });
+
+  // v6.30.0 pre-tag defects review P2-2: managed-only loads no project CLAUDE.md either, and a block
+  // there returned already-adopted, so the session had no steering at all. The file stays as it is.
+  it('managed-only where CLAUDE.md carries the block: injected, CLAUDE.md left as it is', () => {
+    captureLog(() => withCwd(app(), () => cmdAdopt([])));
+    const before = readFileSync(join(app(), 'CLAUDE.md'), 'utf8');
+    expect(before, 'premise: adopt wrote the block').toContain('claude-mem-lite:begin');
+    userSettings(join(home, '.claude'), 'managed-only');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-managed-only' });
+    const sub = join(app(), 'packages', 'web');
+    mkdirSync(sub, { recursive: true });
+    expect(silentAutoAdopt({ cwd: sub })).toMatchObject({ action: 'inject', reason: 'local-managed-only' });
+    expect(readFileSync(join(app(), 'CLAUDE.md'), 'utf8')).toBe(before);
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+    const status = withCwd(app(), () => captureLog(() => cmdAdopt(['--status'])));
+    expect(status).toMatch(/local: .*managed-only/);
+    expect(status).not.toMatch(/— none: CLAUDE\.md carries the block/);
+  });
+
+  // A damaged begin line leaves the block's text in a CLAUDE.md that managed-only does not load.
+  it('managed-only where CLAUDE.md holds a damaged block: injected, not reported as damaged', () => {
+    captureLog(() => withCwd(app(), () => cmdAdopt([])));
+    const md = join(app(), 'CLAUDE.md');
+    writeFileSync(
+      md,
+      readFileSync(md, 'utf8').replace(/(<!-- claude-mem-lite:begin v\d+ -->)\n/, '$1 (team note)\n'),
+    );
+    expect(silentAutoAdopt({ cwd: app() }), 'premise').toMatchObject({ action: 'damaged' });
+    userSettings(join(home, '.claude'), 'managed-only');
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'inject', reason: 'local-managed-only' });
   });
 
   it('the user settings are read from CLAUDE_CONFIG_DIR when it is set', () => {

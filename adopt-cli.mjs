@@ -380,13 +380,17 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
     // cost most of the proactive memory writes (1.5 vs 5.25 per trajectory) and never reached
     // subagents (0/12). Inside a git work tree the block now goes to CLAUDE.local.md, which the
     // host loads like CLAUDE.md and info/exclude keeps out of commits (5.25 writes, 12/12).
-    const hasBlock = blockIn(cwd);
+    // managed-only loads no project CLAUDE.md either (code.claude.com/docs/en/memory): a block in
+    // one steers nothing, so the session goes on to the refused local file and injects, and the
+    // file stays as it is (v6.30.0 pre-tag defects review P2-2).
+    const managedOnly = userInstructionFiles() === 'managed-only';
+    const hasBlock = !managedOnly && blockIn(cwd);
     if (!hasBlock) {
       if (markerDir && markerKey) writeMarker(markerDir, markerKey);
       // A damaged sentinel line (`… --> (team note)`) leaves the block's text in CLAUDE.md, which
       // the host loads, while the block no longer parses: a copy written to CLAUDE.local.md or
       // injected here was a second one. Neither; `adopt` names the line and the fix (D#369 B14).
-      const stray = straySentinelLines(claudeMdPath(cwd), PLUGIN_SLUG);
+      const stray = managedOnly ? [] : straySentinelLines(claudeMdPath(cwd), PLUGIN_SLUG);
       if (stray.length > 0) return { ok: true, action: 'damaged', reason: 'stray-sentinel', lines: stray };
       const root = localSteeringRoot(cwd);
       if (root) {
@@ -394,7 +398,7 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
         // loads the root's CLAUDE.md as an ancestor, so a block there already steers this
         // session; and an opt-out recorded for the root covers the file that lives there.
         if (!samePath(root, cwd)) {
-          const above = blockAbove(cwd, root);
+          const above = managedOnly ? null : blockAbove(cwd, root);
           if (above)
             return {
               ok: true,
@@ -436,7 +440,7 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
       }
       // managed-only loads no project CLAUDE.md, so the hook does not offer /adopt (v6.30.0 pre-tag
       // claims review P2-5; inside a git work tree the reason is local-managed-only).
-      return userInstructionFiles() === 'managed-only'
+      return managedOnly
         ? { ok: true, action: 'inject', reason: 'managed-only' }
         : { ok: true, action: 'inject' };
     }
@@ -650,6 +654,8 @@ function localSteeringStatus(cwd) {
   // CLAUDE.md first: where it carries the block, no local file is written and nothing is injected,
   // in a git work tree or not (pre-tag delta review of the D#212 repairs, D11).
   if (blockIn(cwd) || (root && !samePath(root, cwd) && blockAbove(cwd, root))) {
+    if (userInstructionFiles() === 'managed-only')
+      return '⚠ CLAUDE.md carries the block, but Project instructions is set to managed-only, which does not load it (steering is injected at session start)';
     const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
     if (cur === null || cur.body === null) return '— none: CLAUDE.md carries the block';
     const kept = localFileLinked(root, cur.path)

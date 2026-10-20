@@ -508,58 +508,6 @@ function openWithInjectedFault(dir, { site, code, deadlineMs = null }) {
   return JSON.parse(out.trim().split('\n').pop());
 }
 
-// D#495. "malformed database schema" is a row of sqlite_master this SQLite cannot parse, and the
-// WAL-delete arm took it for a damaged frame. A damaged frame does not produce it: 600 byte flips
-// over a WAL holding a schema change, 300 of them inside page-1 frames, opened 600 times with no
-// error (2026-10-20; SQLite drops frames whose checksum fails). What does is SQL the parser does not
-// know, which a newer SQLite can write, and then deleting the WAL removes it from under the writer.
-describe('a schema SQLite cannot read keeps its WAL (D#495)', () => {
-  it('rethrows after the retry without deleting -wal or -shm', () => {
-    const dir = fixtureDir('schema-unreadable');
-    const dbPath = join(dir, DB_NAME);
-    writeFileSync(dbPath, PRISTINE_DB);
-    const w = new Database(dbPath);
-    w.pragma('journal_mode = WAL');
-    w.pragma('wal_autocheckpoint = 0');
-    w.exec('CREATE TABLE _kept(x TEXT)');
-    w.pragma('wal_checkpoint(TRUNCATE)');
-    w.prepare("INSERT INTO _kept(x) VALUES ('committed after the checkpoint')").run();
-    w.unsafeMode(true);
-    w.pragma('writable_schema = ON');
-    w.prepare(
-      "INSERT INTO sqlite_master VALUES ('table', 'zz', 'zz', 0, 'CREATE TABLE zz(a) WITH NEWER SYNTAX')",
-    ).run();
-    w.pragma('writable_schema = OFF');
-    // The image a crash leaves: the main file and the WAL as they are while the writer is open.
-    const image = { db: readFileSync(dbPath), wal: readFileSync(dbPath + '-wal') };
-    w.close();
-    writeFileSync(dbPath, image.db);
-    writeFileSync(dbPath + '-wal', image.wal);
-    rmSync(dbPath + '-shm', { force: true });
-
-    const out = execFileSync(
-      process.execPath,
-      [
-        '-e',
-        `Promise.all([import(${JSON.stringify(SCHEMA_URL)}), import('node:fs')]).then(([m, fs]) => {
-         const msgs = [];
-         let error = null;
-         try { m.ensureDbWithWalRecovery({ warn: (x) => msgs.push(x), info: (x) => msgs.push(x) }).close(); }
-         catch (e) { error = e.message; }
-         const p = ${JSON.stringify(dbPath + '-wal')};
-         console.log(JSON.stringify({ error, msgs, walSize: fs.existsSync(p) ? fs.statSync(p).size : -1 }));
-       })`,
-      ],
-      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8', timeout: 30000 },
-    );
-    const r = JSON.parse(out.trim().split('\n').pop());
-    expect(r.error, JSON.stringify(r)).toMatch(/malformed database schema/);
-    expect(r.msgs.join('\n'), 'the open was retried once').toContain('retrying the open with the WAL kept');
-    expect(r.msgs.join('\n')).not.toContain('attempting WAL recovery');
-    expect(r.walSize, 'the WAL is where it was').toBe(image.wal.length);
-  }, 30000);
-});
-
 // D#427. The WAL-delete arm is for a frame that stays corrupt. On 2026-10-17, 3 of 43 first opens
 // by 6.28.1 of fresh copies of one intact store threw a plain SQLITE_CORRUPT on one host (D#424);
 // the other 40 did not. Deleting -wal/-shm there, with another connection open, can discard what

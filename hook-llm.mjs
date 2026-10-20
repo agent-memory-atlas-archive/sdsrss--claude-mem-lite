@@ -93,15 +93,19 @@ export function retractPreSavedObs(db, obsId, where) {
   // Both statements run in one transaction so a crash between them cannot leave that state
   // either; nesting under persistHaikuSummary's transaction is safe (better-sqlite3 uses
   // savepoints).
-  return db.transaction(() => {
-    const live = db.prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`).get(obsId);
-    if (!live) {
-      debugLog('DEBUG', 'llm-episode', `${where}: pre-saved obs #${obsId} no longer live — left in place`);
-      return false;
-    }
-    recoverChildrenOf(db, [obsId]);
-    return db.prepare('DELETE FROM observations WHERE id = ?').run(obsId).changes > 0;
-  })();
+  return db
+    .transaction(() => {
+      const live = db
+        .prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`)
+        .get(obsId);
+      if (!live) {
+        debugLog('DEBUG', 'llm-episode', `${where}: pre-saved obs #${obsId} no longer live — left in place`);
+        return false;
+      }
+      recoverChildrenOf(db, [obsId]);
+      return db.prepare('DELETE FROM observations WHERE id = ?').run(obsId).changes > 0;
+    })
+    .immediate();
 }
 // T9: memdir-incompatible types live in the `events` table, not `observations`.
 // Set lookup is O(1) — authoritative source is lib/activity.mjs::EVENT_TYPES.
@@ -544,13 +548,15 @@ export function persistHaikuSummary(db, summary, ctx) {
       });
 
     if (ctx.preSavedObsId) {
-      const id = db.transaction(() => {
-        // Same live-row guard as the in-place upgrade (FLOW-7); the event gets written
-        // either way. Shared helper since audit 2026-09-02 P0-6 — this was the only one
-        // of the three retraction sites that carried the guard.
-        retractPreSavedObs(db, ctx.preSavedObsId, 'upgrade-delete');
-        return insertEvent();
-      })();
+      const id = db
+        .transaction(() => {
+          // Same live-row guard as the in-place upgrade (FLOW-7); the event gets written
+          // either way. Shared helper since audit 2026-09-02 P0-6 — this was the only one
+          // of the three retraction sites that carried the guard.
+          retractPreSavedObs(db, ctx.preSavedObsId, 'upgrade-delete');
+          return insertEvent();
+        })
+        .immediate();
       return { table: 'events', id };
     }
 

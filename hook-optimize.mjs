@@ -1383,104 +1383,106 @@ ${obsDescriptions}`;
       text: textField,
       lesson_learned: lessonLearned,
     });
-    const mergeApplied = db.transaction(() => {
-      // Re-check the keeper's liveness INSIDE the transaction (audit 2026-09-02 P0-3).
-      // findMergeCandidates selected live rows, but a Sonnet round-trip sits between that
-      // SELECT and this write (:617, BG_LLM_TIMEOUT_MS), and a concurrent SessionStart
-      // auto-dedup or `save --supersedes` can tombstone the keeper in that window. Pointing
-      // the other members at a tombstoned keeper is precisely the "buried behind a hidden
-      // parent" loss that mergeDuplicates' docblock enumerates (lib/maintain-core.mjs), and
-      // it is what that function's own isLive gate exists to prevent. Same predicate here.
-      const keeperLive = db
-        .prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`)
-        .get(keeper.id);
-      if (!keeperLive) return false;
-      // findMergeCandidates selects only live rows with optimized_at NULL. A member stamped
-      // since then was edited through /verify (or rewritten by another pass) during the model
-      // call; a member no longer live was retired or replaced (a /verify retire or replace
-      // supersedes the original without stamping it), or superseded by another writer. The
-      // merged text was written from all of them as they were, so folding it in would bring
-      // a withdrawn claim back inside the keeper (tests/verify-reenrich-race.test.mjs).
-      // Abort the whole cluster rather than merge part.
-      const clusterIds = cluster.map((o) => o.id);
-      const unchanged = db
-        .prepare(
-          `SELECT COUNT(*) AS n FROM observations WHERE id IN (${clusterIds.map(() => '?').join(',')}) AND optimized_at IS NULL AND ${liveObsFilterSql('')}`,
-        )
-        .get(...clusterIds).n;
-      if (unchanged !== clusterIds.length) return false;
+    const mergeApplied = db
+      .transaction(() => {
+        // Re-check the keeper's liveness INSIDE the transaction (audit 2026-09-02 P0-3).
+        // findMergeCandidates selected live rows, but a Sonnet round-trip sits between that
+        // SELECT and this write (:617, BG_LLM_TIMEOUT_MS), and a concurrent SessionStart
+        // auto-dedup or `save --supersedes` can tombstone the keeper in that window. Pointing
+        // the other members at a tombstoned keeper is precisely the "buried behind a hidden
+        // parent" loss that mergeDuplicates' docblock enumerates (lib/maintain-core.mjs), and
+        // it is what that function's own isLive gate exists to prevent. Same predicate here.
+        const keeperLive = db
+          .prepare(`SELECT 1 FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`)
+          .get(keeper.id);
+        if (!keeperLive) return false;
+        // findMergeCandidates selects only live rows with optimized_at NULL. A member stamped
+        // since then was edited through /verify (or rewritten by another pass) during the model
+        // call; a member no longer live was retired or replaced (a /verify retire or replace
+        // supersedes the original without stamping it), or superseded by another writer. The
+        // merged text was written from all of them as they were, so folding it in would bring
+        // a withdrawn claim back inside the keeper (tests/verify-reenrich-race.test.mjs).
+        // Abort the whole cluster rather than merge part.
+        const clusterIds = cluster.map((o) => o.id);
+        const unchanged = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM observations WHERE id IN (${clusterIds.map(() => '?').join(',')}) AND optimized_at IS NULL AND ${liveObsFilterSql('')}`,
+          )
+          .get(...clusterIds).n;
+        if (unchanged !== clusterIds.length) return false;
 
-      // Snapshot the keeper's pre-merge row BEFORE overwriting it, so its original
-      // full text survives as a recoverable compressed_into child (mirroring
-      // compressGroup / recoverChildrenOf). The keeper is the cluster's most-
-      // important member; an in-place overwrite by the LLM's ≤800-char summary
-      // would otherwise destroy its original text irreversibly (HIGH-3 data loss).
-      // Column list is derived from the live schema (minus id/compressed_into) so
-      // it stays correct as migrations add columns; names are internal identifiers.
-      const snapCols = db
-        .prepare(`PRAGMA table_info(observations)`)
-        .all()
-        .map((c) => c.name)
-        .filter((c) => c !== 'id' && c !== 'compressed_into');
-      const snapColList = snapCols.join(', ');
-      db.prepare(
-        `INSERT INTO observations (${snapColList}, compressed_into)
+        // Snapshot the keeper's pre-merge row BEFORE overwriting it, so its original
+        // full text survives as a recoverable compressed_into child (mirroring
+        // compressGroup / recoverChildrenOf). The keeper is the cluster's most-
+        // important member; an in-place overwrite by the LLM's ≤800-char summary
+        // would otherwise destroy its original text irreversibly (HIGH-3 data loss).
+        // Column list is derived from the live schema (minus id/compressed_into) so
+        // it stays correct as migrations add columns; names are internal identifiers.
+        const snapCols = db
+          .prepare(`PRAGMA table_info(observations)`)
+          .all()
+          .map((c) => c.name)
+          .filter((c) => c !== 'id' && c !== 'compressed_into');
+        const snapColList = snapCols.join(', ');
+        db.prepare(
+          `INSERT INTO observations (${snapColList}, compressed_into)
          SELECT ${snapColList}, ? FROM observations WHERE id = ?`,
-      ).run(keeper.id, keeper.id);
+        ).run(keeper.id, keeper.id);
 
-      // The keeper now holds model text. Search reads authorship from memory_session_id, so an
-      // explicit save's `manual-` id would mark it as one (D#138); it moves to the compression
-      // writer's id. A machine-written keeper keeps its id, and so does the snapshot above, which
-      // is the original save. writerSessionId keeps the id out of the uuid shape sdk_sessions
-      // refuses (D#147); the row stays best-effort, so no refusal can fail the merge (v6.19.1
-      // pre-tag F5a).
-      let rewriteSessionId = null;
-      const keeperSession = db
-        .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
-        .get(keeper.id);
-      if (keeperSession?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
-        const compressSessionId = writerSessionId('compress-', keeper.project);
-        try {
-          db.prepare(
-            `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
+        // The keeper now holds model text. Search reads authorship from memory_session_id, so an
+        // explicit save's `manual-` id would mark it as one (D#138); it moves to the compression
+        // writer's id. A machine-written keeper keeps its id, and so does the snapshot above, which
+        // is the original save. writerSessionId keeps the id out of the uuid shape sdk_sessions
+        // refuses (D#147); the row stays best-effort, so no refusal can fail the merge (v6.19.1
+        // pre-tag F5a).
+        let rewriteSessionId = null;
+        const keeperSession = db
+          .prepare('SELECT memory_session_id FROM observations WHERE id = ?')
+          .get(keeper.id);
+        if (keeperSession?.memory_session_id?.startsWith(MANUAL_SESSION_ID_PREFIX)) {
+          const compressSessionId = writerSessionId('compress-', keeper.project);
+          try {
+            db.prepare(
+              `INSERT OR IGNORE INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
              VALUES (?, ?, ?, ?, ?, 'active')`,
-          ).run(compressSessionId, compressSessionId, keeper.project, new Date().toISOString(), Date.now());
-          rewriteSessionId = compressSessionId;
-        } catch (e) {
-          debugCatch(e, 'cluster-merge writer session');
+            ).run(compressSessionId, compressSessionId, keeper.project, new Date().toISOString(), Date.now());
+            rewriteSessionId = compressSessionId;
+          } catch (e) {
+            debugCatch(e, 'cluster-merge writer session');
+          }
         }
-      }
-      db.prepare(
-        `
+        db.prepare(
+          `
         UPDATE observations SET title=?, narrative=?, concepts=?, facts=?, text=?,
           importance = CASE WHEN importance_set_at IS NOT NULL THEN importance ELSE ? END,
           lesson_learned=?, minhash_sig=?, optimized_at=?,
           memory_session_id = COALESCE(?, memory_session_id)
         WHERE id = ?
       `,
-      ).run(
-        safe.title,
-        safe.narrative,
-        safe.concepts,
-        safe.facts,
-        safe.text,
-        importance,
-        safe.lesson_learned,
-        minhashSig,
-        Date.now(),
-        rewriteSessionId,
-        keeper.id,
-      );
+        ).run(
+          safe.title,
+          safe.narrative,
+          safe.concepts,
+          safe.facts,
+          safe.text,
+          importance,
+          safe.lesson_learned,
+          minhashSig,
+          Date.now(),
+          rewriteSessionId,
+          keeper.id,
+        );
 
-      const otherIds = others.map((o) => o.id);
-      const ph = otherIds.map(() => '?').join(',');
-      // Live guard on the members too: one already compressed into ANOTHER summary S during
-      // the LLM window would be re-pointed here, silently dropping a row out of S's child set.
-      db.prepare(
-        `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
-      ).run(keeper.id, ...otherIds);
-      return true;
-    })();
+        const otherIds = others.map((o) => o.id);
+        const ph = otherIds.map(() => '?').join(',');
+        // Live guard on the members too: one already compressed into ANOTHER summary S during
+        // the LLM window would be re-pointed here, silently dropping a row out of S's child set.
+        db.prepare(
+          `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
+        ).run(keeper.id, ...otherIds);
+        return true;
+      })
+      .immediate();
     if (!mergeApplied) {
       debugLog(
         'DEBUG',
@@ -1689,97 +1691,99 @@ export async function executeSmartCompressCluster(db, observations, project) {
     const epochs = observations.map((o) => o.created_at_epoch).sort((a, b) => a - b);
     const medianEpoch = epochs[Math.floor(epochs.length / 2)];
 
-    const summaryId = db.transaction(() => {
-      // The summary was written from the members as they were BEFORE the Sonnet call. A member
-      // whose stamp changed since was edited through /verify (or rewritten by another pass);
-      // a member no longer live was retired or replaced (neither stamps the original) or
-      // superseded by another writer. A summary of their earlier text would put the withdrawn
-      // claim back as a live row and hide the rest behind it (pre-ship review of 9786874,
-      // P2-1; delta review of the first repair). Abort the whole cluster, as cluster-merge does.
-      // Callers pass rows as findSmartCompressCandidates selects them, optimized_at included:
-      // a row without the column reads as unstamped, so a stamped member would abort (safe).
-      const nowRow = db.prepare(
-        `SELECT optimized_at FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
-      );
-      if (
-        observations.some((o) => {
-          const cur = nowRow.get(o.id);
-          return !cur || (cur.optimized_at ?? null) !== (o.optimized_at ?? null);
-        })
-      ) {
-        return null;
-      }
-      const sessionId = writerSessionId('compress-', project);
-      const now = new Date();
-      db.prepare(
-        `INSERT OR IGNORE INTO sdk_sessions
+    const summaryId = db
+      .transaction(() => {
+        // The summary was written from the members as they were BEFORE the Sonnet call. A member
+        // whose stamp changed since was edited through /verify (or rewritten by another pass);
+        // a member no longer live was retired or replaced (neither stamps the original) or
+        // superseded by another writer. A summary of their earlier text would put the withdrawn
+        // claim back as a live row and hide the rest behind it (pre-ship review of 9786874,
+        // P2-1; delta review of the first repair). Abort the whole cluster, as cluster-merge does.
+        // Callers pass rows as findSmartCompressCandidates selects them, optimized_at included:
+        // a row without the column reads as unstamped, so a stamped member would abort (safe).
+        const nowRow = db.prepare(
+          `SELECT optimized_at FROM observations WHERE id = ? AND ${liveObsFilterSql('')}`,
+        );
+        if (
+          observations.some((o) => {
+            const cur = nowRow.get(o.id);
+            return !cur || (cur.optimized_at ?? null) !== (o.optimized_at ?? null);
+          })
+        ) {
+          return null;
+        }
+        const sessionId = writerSessionId('compress-', project);
+        const now = new Date();
+        db.prepare(
+          `INSERT OR IGNORE INTO sdk_sessions
         (content_session_id, memory_session_id, project, started_at, started_at_epoch, status)
         VALUES (?,?,?,?,?,'active')`,
-      ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
+        ).run(sessionId, sessionId, project, now.toISOString(), now.getTime());
 
-      // Defense-in-depth: title/narrative/etc. are LLM-generated compression
-      // output; scrub at the persistence boundary regardless of upstream trust.
-      const safe = scrubRecord('observations', {
-        text: textField,
-        title,
-        narrative,
-        concepts: conceptsText,
-        facts: factsText,
-        lesson_learned: lessonLearned,
-        search_aliases: searchAliases,
-      });
-      // R10 P3-8: through the shared writer, not a fourth hand-spelled INSERT. The copy
-      // this replaces had already drifted from OBS_COLUMNS in three ways — no minhash_sig
-      // (so the summary was invisible to the MinHash prefilter that findDuplicates and
-      // selectFuzzyDedupeIds run, and could never be deduplicated against anything), no
-      // branch, and subtitle written as '' instead of the schema's NULL. That is exactly
-      // the drift lib/observation-write.mjs's docblock says the shared column list exists
-      // to make impossible.
-      //
-      // optimized_at is not in OBS_COLUMNS, so it stays a separate UPDATE below — the
-      // summary must be marked processed so the re-enrich pools do not pick it up.
-      //
-      // R11 C-P3-2 read the three-item list above as a completeness claim and asked why
-      // the fourth OBS_COLUMNS entry, `scope`, is absent. It is absent on purpose: the
-      // merge prompt does not ask for one, so there is no value to pass, and NULL is the
-      // `scopes` backfill pool's own predicate (findReenrichCandidates, scope==='scopes')
-      // — which is deliberately NOT gated on optimized_at, so stamping this row processed
-      // does not evict it. Writing a guessed scope here would.
-      const newId = insertObservationRow(db, {
-        memory_session_id: sessionId,
-        project,
-        text: safe.text,
-        type: 'discovery',
-        title: safe.title,
-        narrative: safe.narrative,
-        concepts: safe.concepts,
-        facts: safe.facts,
-        importance: 2,
-        minhash_sig: computeMinHash(`${title || ''} ${narrative || ''}`),
-        lesson_learned: safe.lesson_learned,
-        search_aliases: safe.search_aliases,
-        branch: getCurrentBranch(),
-        created_at: new Date(medianEpoch).toISOString(),
-        created_at_epoch: medianEpoch,
-      });
-      db.prepare('UPDATE observations SET optimized_at = ? WHERE id = ?').run(Date.now(), newId);
-      const result = { lastInsertRowid: newId };
+        // Defense-in-depth: title/narrative/etc. are LLM-generated compression
+        // output; scrub at the persistence boundary regardless of upstream trust.
+        const safe = scrubRecord('observations', {
+          text: textField,
+          title,
+          narrative,
+          concepts: conceptsText,
+          facts: factsText,
+          lesson_learned: lessonLearned,
+          search_aliases: searchAliases,
+        });
+        // R10 P3-8: through the shared writer, not a fourth hand-spelled INSERT. The copy
+        // this replaces had already drifted from OBS_COLUMNS in three ways — no minhash_sig
+        // (so the summary was invisible to the MinHash prefilter that findDuplicates and
+        // selectFuzzyDedupeIds run, and could never be deduplicated against anything), no
+        // branch, and subtitle written as '' instead of the schema's NULL. That is exactly
+        // the drift lib/observation-write.mjs's docblock says the shared column list exists
+        // to make impossible.
+        //
+        // optimized_at is not in OBS_COLUMNS, so it stays a separate UPDATE below — the
+        // summary must be marked processed so the re-enrich pools do not pick it up.
+        //
+        // R11 C-P3-2 read the three-item list above as a completeness claim and asked why
+        // the fourth OBS_COLUMNS entry, `scope`, is absent. It is absent on purpose: the
+        // merge prompt does not ask for one, so there is no value to pass, and NULL is the
+        // `scopes` backfill pool's own predicate (findReenrichCandidates, scope==='scopes')
+        // — which is deliberately NOT gated on optimized_at, so stamping this row processed
+        // does not evict it. Writing a guessed scope here would.
+        const newId = insertObservationRow(db, {
+          memory_session_id: sessionId,
+          project,
+          text: safe.text,
+          type: 'discovery',
+          title: safe.title,
+          narrative: safe.narrative,
+          concepts: safe.concepts,
+          facts: safe.facts,
+          importance: 2,
+          minhash_sig: computeMinHash(`${title || ''} ${narrative || ''}`),
+          lesson_learned: safe.lesson_learned,
+          search_aliases: safe.search_aliases,
+          branch: getCurrentBranch(),
+          created_at: new Date(medianEpoch).toISOString(),
+          created_at_epoch: medianEpoch,
+        });
+        db.prepare('UPDATE observations SET optimized_at = ? WHERE id = ?').run(Date.now(), newId);
+        const result = { lastInsertRowid: newId };
 
-      const sId = Number(result.lastInsertRowid);
+        const sId = Number(result.lastInsertRowid);
 
-      const obsIds = observations.map((o) => o.id);
-      const ph = obsIds.map(() => '?').join(',');
-      // Live guard (audit 2026-09-02 P0-3): the candidate SELECT is separated from this write
-      // by a Sonnet round-trip, so a member may already be compressed into another summary or
-      // tombstoned. Re-pointing it here would silently remove a row from that summary's child
-      // set. The check at the top of this transaction now aborts in that case; the guard stays
-      // so this UPDATE can never re-point a dead row on its own.
-      db.prepare(
-        `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
-      ).run(sId, ...obsIds);
+        const obsIds = observations.map((o) => o.id);
+        const ph = obsIds.map(() => '?').join(',');
+        // Live guard (audit 2026-09-02 P0-3): the candidate SELECT is separated from this write
+        // by a Sonnet round-trip, so a member may already be compressed into another summary or
+        // tombstoned. Re-pointing it here would silently remove a row from that summary's child
+        // set. The check at the top of this transaction now aborts in that case; the guard stays
+        // so this UPDATE can never re-point a dead row on its own.
+        db.prepare(
+          `UPDATE observations SET compressed_into = ? WHERE id IN (${ph}) AND ${liveObsFilterSql('')}`,
+        ).run(sId, ...obsIds);
 
-      return sId;
-    })();
+        return sId;
+      })
+      .immediate();
 
     if (summaryId === null) {
       debugLog('DEBUG', 'llm-optimize', 'smart-compress aborted: a member changed during the call');

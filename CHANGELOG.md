@@ -2,6 +2,40 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.1 — cut first lines of more private-key types are erased, and the stale-hook warning no longer says to uninstall the plugin
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.0`.
+
+- **Secret scrubber: cut first lines of more key types** (D#504). A private key cut inside its
+  first line (`head -c 60 key.pem`) leaves one base64 line of 16-39 characters, which counted as key
+  material only when it began with one of five prefixes. Keys whose encoding begins otherwise
+  (among them secp256k1 and brainpoolP256r1 in SEC1 form, P-521, brainpoolP512r1, the 192- and
+  224-bit curves, Ed448 and X448) had that line stored. The scrubber now also reads the line's DER
+  header: a SEQUENCE holding an INTEGER 0 or 1, or a SEQUENCE and an OID, which is how an encrypted
+  key starts and also how a public key starts, so a public-key line under a PRIVATE KEY marker is
+  erased too. On the first lines of 32 keys OpenSSL 3.5.5 generated, cut to 16, 24 and 39
+  characters, 6.30.0 kept 45 of 96 and this keeps none.
+- **The stale-hook warning** that setup.sh prints when a direct install left hooks in a profile's
+  `settings.json` named `claude-mem-lite uninstall`, which also removes the MCP registration and
+  the plugin. It now prints `CLAUDE_CONFIG_DIR=<profile> node <plugin root>/cli.mjs cleanup-hooks`,
+  which removes only those hook entries from that profile.
+- **The CLI names a next step for a database it cannot use** (D#488): after SQLite's message and the
+  path it prints `Next: run <cli> doctor.` The memory-off notice says the file "cannot be used"
+  rather than "cannot be opened", which was wrong for a schema SQLite cannot read.
+- **Project instructions = `managed-only`** (D#501). That setting leaves the project's
+  `CLAUDE.md`, `CLAUDE.local.md` and rules files out at launch, so a block in one no longer quiets
+  the File Lessons and Key Context sections when auto-adopt is off and nothing is injected, and the
+  startup dashboard no longer offers `adopt` there. Where the adopt hint still shows, it no longer
+  claims a context saving and an MCP call gain.
+- **Printed commands.** Commands printed with a project id write `--project=<id>`: after
+  `--project `, an id made only of dashes (the old id of a directory whose path names were not
+  ASCII) read as flags, and the command listed every project (D#499).
+- **`maintain scan`'s Needs-review lines show each row's importance** (D#497), which `/update`'s
+  dedup step asks about.
+- For maintainers: `install --dev` links the `node_modules` that better-sqlite3 resolves from, so
+  it works in a worktree nested in the main checkout (D#489).
+
 ## v6.30.0 — background `claude -p` calls drop Claude Code's auto-memory section, and a database schema SQLite cannot read says memory is off
 
 **Upgrade note: nothing to run; the schema version stays 49.** Every headless `claude -p` call

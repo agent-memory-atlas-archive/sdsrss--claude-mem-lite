@@ -23,11 +23,15 @@ function cliCommands() {
 }
 
 // adopt-content.mjs writes `${CLI} <cmd>` on purpose, under a header that maps the name to the
-// absolute path in the MCP instructions (audit R7 P2-1).
-const ALLOWED = ['adopt-content.mjs'];
+// absolute path in the MCP instructions (audit R7 P2-1). install.mjs prints each command's own
+// heading as a line `\nclaude-mem-lite <command>…\n`, which is a title, not a hint.
+const ALLOWED_FILE = 'adopt-content.mjs';
+const HEADING = { file: 'install.mjs', re: /console\.log\(['`]\\nclaude-mem-lite / };
 
+// A `\n` or `\t` escape in the source starts a word too: `'…\nclaude-mem-lite doctor'` is a hint
+// on a line of its own (v6.30.0 pre-tag defects review P3-7).
 const bareRe = (cmds) =>
-  new RegExp(`(?<![\\w/.-])(?<!npx )claude-mem-lite (?:${[...cmds].join('|')})(?![\\w-])`);
+  new RegExp(`(?:(?<=\\\\[nt])|(?<![\\w/.-]))(?<!npx )claude-mem-lite (?:${[...cmds].join('|')})(?![\\w-])`);
 
 function bareHits() {
   const cmds = cliCommands();
@@ -35,9 +39,11 @@ function bareHits() {
   const hits = [];
   for (const file of walkShipped()) {
     const rel = relShipped(file);
-    if (ALLOWED.includes(rel)) continue;
+    if (rel === ALLOWED_FILE) continue;
     for (const line of sourceWithoutComments(file).split('\n')) {
-      if (re.test(line)) hits.push(`${rel}: ${line.trim().slice(0, 140)}`);
+      if (!re.test(line)) continue;
+      if (rel === HEADING.file && HEADING.re.test(line)) continue;
+      hits.push(`${rel}: ${line.trim().slice(0, 140)}`);
     }
   }
   return { cmds, hits };
@@ -53,6 +59,19 @@ describe('shipped hints name the CLI by path, not by a bare name a plugin instal
 
   it('no shipped module prints `claude-mem-lite <command>`', () => {
     expect(bareHits().hits).toEqual([]);
+  });
+
+  it('the pattern reads a name after a `\\n` escape, and the heading rule is live', () => {
+    const re = bareRe(cliCommands());
+    expect(re.test("fail('[mem] failed.\\nclaude-mem-lite doctor fixes it')")).toBe(true);
+    expect(HEADING.re.test("fail('[mem] failed.\\nclaude-mem-lite doctor fixes it')")).toBe(false);
+    expect(re.test('run `claude-mem-lite doctor`')).toBe(true);
+    expect(re.test('npx claude-mem-lite doctor')).toBe(false);
+    expect(re.test('/x/claude-mem-lite doctor')).toBe(false);
+    const headings = readFileSync(join(REPO, HEADING.file), 'utf8')
+      .split('\n')
+      .filter((l) => re.test(l) && HEADING.re.test(l));
+    expect(headings.length, 'the heading rule no longer lets anything through').toBeGreaterThan(0);
   });
 
   // The slash commands are read by the model, which runs what they name (v6.30.0 pre-tag claims

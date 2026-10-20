@@ -651,8 +651,8 @@ function cmdEnable(args) {
 function localSteeringStatus(cwd) {
   const root = localSteeringRoot(cwd);
   const runs = autoAdoptRuns(cwd, root);
-  // CLAUDE.md first: where it carries the block, no local file is written and nothing is injected,
-  // in a git work tree or not (pre-tag delta review of the D#212 repairs, D11).
+  // CLAUDE.md first: where it carries the block, no local file is written, in a git work tree or not
+  // (pre-tag delta review of the D#212 repairs, D11).
   if (blockIn(cwd) || (root && !samePath(root, cwd) && blockAbove(cwd, root))) {
     if (userInstructionFiles() === 'managed-only')
       return '⚠ CLAUDE.md carries the block, but Project instructions is set to managed-only, which does not load it';

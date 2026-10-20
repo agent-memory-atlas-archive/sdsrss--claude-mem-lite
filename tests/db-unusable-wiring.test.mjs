@@ -227,3 +227,20 @@ describe('an unopenable database is logged once, not once per hook fire', () => 
     expect(second).toBe(2);
   });
 });
+
+// D#488: every CLI command printed SQLite's sentence and the path, and nothing to do next. The
+// next step names doctor, which carries the remedy; the remedy itself overwrites the database, and
+// this CLI is as often run by an agent with Bash as by the user, so it stays out of this output.
+describe('the CLI names the next step for a database it cannot use', () => {
+  it.each([
+    ['not a database', () => corruptDataDir({ withSnapshot: true })],
+    ['a schema SQLite cannot read', () => damagedSchemaDataDir({ withSnapshot: true })],
+  ])('%s', (_name, makeDir) => {
+    const r = run([join(REPO, 'cli.mjs'), 'recent', '3'], makeDir());
+    const out = `${r.stdout}\n${r.stderr}`;
+    expect(r.status, out).toBe(1);
+    expect(out).toMatch(/Cannot open database/);
+    expect(out).toContain(`${CLI_INVOKE} doctor`);
+    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
+  });
+});

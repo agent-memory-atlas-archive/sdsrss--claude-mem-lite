@@ -5,7 +5,7 @@
 import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
 import { resolveRuntimeDir } from './lib/resolve-data-dir.mjs';
-import { isFtsCorruptionError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError, isDbUnusableError, FTS_CORRUPTION_REMEDY } from './lib/db-unusable.mjs';
 import {
   truncate,
   queryLabel,
@@ -4279,6 +4279,8 @@ async function runDispatch(argv) {
     }
     out(`[mem] Error: Cannot open database: ${e.message}`);
     out(`[mem] DB path: ${DB_PATH}`);
+    // The remedy overwrites the database, so it is doctor's to print, not this line's (D#488).
+    if (isDbUnusableError(e)) out(`[mem] Next: \`${CLI_INVOKE} doctor\` names the remedy.`);
     process.exitCode = 1;
     return;
   }

@@ -50,6 +50,7 @@ import {
 import {
   runMaintainOps,
   findDuplicates,
+  reviewRows,
   maintenanceStats,
   OP_CAP,
   STALE_AGE_MS,
@@ -86,6 +87,7 @@ import {
   obsFieldLabel,
   formatPendingPurgeLine,
   formatHiddenLine,
+  formatReviewSide,
 } from './cli/common.mjs';
 import { countMcpEligibleCorpus, rateSearchResults, recordSearch } from './lib/search-telemetry.mjs';
 import { recordHookError } from './lib/hook-telemetry.mjs';
@@ -1781,9 +1783,16 @@ server.registerTool(
 
         if (manualReview.length > 0) {
           lines.push('', 'Needs review:');
-          for (const d of manualReview.slice(0, DUPLICATE_DISPLAY)) {
+          const shown = manualReview.slice(0, DUPLICATE_DISPLAY);
+          const rows = reviewRows(
+            db,
+            shown.flatMap((d) => [d.a.id, d.b.id]),
+          );
+          for (const d of shown) {
             lines.push(
               `  [${d.a.id}] "${truncate(d.a.title, 40)}" <-> [${d.b.id}] "${truncate(d.b.title, 40)}" (${d.similarity})`,
+              `    ${formatReviewSide(rows.get(d.a.id))}`,
+              `    ${formatReviewSide(rows.get(d.b.id))}`,
             );
           }
         }

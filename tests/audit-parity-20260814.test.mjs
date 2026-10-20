@@ -821,6 +821,20 @@ describe('A4 — the pending-purge line says what the counted rows actually are'
         text: 'compressed',
         compressedInto: -1,
       });
+      // A Needs-review pair (title Jaccard 0.80, between the dedup and auto-merge thresholds), for
+      // the D#461 lines under it.
+      insertObs(db, {
+        sessionId: 'a4-sess',
+        project: PROJECT,
+        title: 'Redis pool exhaustion fixed by sizing the pool per worker',
+        narrative: 'Workers shared one pool and ran it dry under load.',
+      });
+      insertObs(db, {
+        sessionId: 'a4-sess',
+        project: PROJECT,
+        title: 'Redis pool exhaustion fixed by sizing the pool per process',
+        narrative: 'A forked process inherited the parent pool and leaked sockets.',
+      });
     } finally {
       db.close();
     }
@@ -906,6 +920,26 @@ describe('A4 — the pending-purge line says what the counted rows actually are'
   // two independently produced real outputs, so neither can be edited into agreement on its
   // own. (Pre-fix this reds with "Pending purge: 2 (compressed originals awaiting cleanup)"
   // vs "Pending purge (idle-marked): 2".)
+  // D#461: both faces print each side of a Needs-review pair, from the same read.
+  it('both surfaces print the same lines under a Needs-review pair', async () => {
+    const cli = await fire(process.execPath, [CLI_PATH, 'maintain', 'scan', '--project', PROJECT], {
+      cwd,
+      env: { CLAUDE_MEM_DIR: dataDir },
+    });
+    expect(cli.code, cli.stderr).toBe(0);
+    const mcp = textOf(
+      await client.callTool({ name: 'mem_maintain', arguments: { action: 'scan', project: PROJECT } }),
+    );
+    const sides = (text) =>
+      text
+        .split('\n')
+        .filter((l) => /^\s*#\d+ \S+ · /.test(l))
+        .map((l) => l.trim());
+    expect(sides(cli.stdout)).toHaveLength(2);
+    expect(sides(cli.stdout).join('\n')).toContain('Workers shared one pool');
+    expect(sides(mcp)).toEqual(sides(cli.stdout));
+  }, 60000);
+
   it('both surfaces print the same, accurate pending-purge line', async () => {
     const cli = await fire(process.execPath, [CLI_PATH, 'maintain', 'scan', '--project', PROJECT], {
       cwd,

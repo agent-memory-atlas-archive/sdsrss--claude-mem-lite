@@ -2151,6 +2151,42 @@ describe('CLI maintain command', () => {
     expect(output).toContain('Usage');
   });
 
+  // D#461: /update asked the model to judge a Needs-review pair from two 40-char titles, and
+  // reading the rows with `get` counts as an access (it can lift importance 1 -> 2). The scan
+  // prints a line of each row under the pair, from a read that touches no counter.
+  it('scan shows each side of a Needs-review pair, and counts no access', async () => {
+    const add = (title, narrative, lessonLearned) =>
+      Number(
+        insertObs(testDb, {
+          sessionId: 'mem-s1',
+          project: 'test--project',
+          type: 'bugfix',
+          title,
+          narrative,
+          lessonLearned,
+        }).lastInsertRowid,
+      );
+    const a = add(
+      'Redis pool exhaustion fixed by sizing the pool per worker',
+      'Workers shared one pool and ran it dry under load.',
+      'Size connection pools per worker process',
+    );
+    const b = add(
+      'Redis pool exhaustion fixed by sizing the pool per process',
+      'A forked process inherited the parent pool and leaked sockets.',
+      null,
+    );
+    const output = await captureStdout(() => run(['maintain', 'scan']));
+    const review = output.slice(output.indexOf('Needs review:'));
+    expect(output, 'premise: the pair is in the review band').toContain('Needs review:');
+    expect(review).toContain(`[${a}]`);
+    expect(review).toContain('Workers shared one pool');
+    expect(review).toContain('Size connection pools per worker');
+    expect(review).toContain('A forked process inherited');
+    const counts = testDb.prepare('SELECT access_count AS n FROM observations WHERE id IN (?, ?)').all(a, b);
+    expect(counts.map((r) => r.n ?? 0)).toEqual([0, 0]);
+  });
+
   it('shows usage for invalid action', async () => {
     const output = await captureStdout(() => run(['maintain', 'invalid']));
     expect(output).toContain('Usage');

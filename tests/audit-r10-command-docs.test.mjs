@@ -186,6 +186,17 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
     expect(doc.split('\n').find((l) => l.includes('清理过期记忆'))).toContain('/claude-mem-lite:update');
   });
 
+  // D#461: the dedup step had the model judge Needs-review pairs from 40-char titles; the scan now
+  // prints a line of each row under the pair, and `get` would count as an access.
+  it('commands/update.md judges Needs-review pairs from the scan, not with get', () => {
+    const step = read('commands/update.md')
+      .split('\n')
+      .find((l) => /--ops dedup --merge-ids/.test(l));
+    expect(step, 'no dedup step').toBeTruthy();
+    expect(step).toMatch(/Needs review:/);
+    expect(step).toMatch(/do not read them with `get`/);
+  });
+
   it('commands/mem.md and commands/update.md state the --retain-days range the CLI actually enforces', async () => {
     const { min, max } = await retainDaysBounds();
     expect(min).toBe(7);

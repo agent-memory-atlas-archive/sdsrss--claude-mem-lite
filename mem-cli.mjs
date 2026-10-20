@@ -57,6 +57,7 @@ import { selectCompressionCandidates, groupByProjectWeek, compressGroup } from '
 import {
   runMaintainOps,
   findDuplicates,
+  reviewRows,
   maintenanceStats,
   OP_CAP,
   STALE_AGE_MS,
@@ -123,6 +124,7 @@ import {
   obsFieldLabel,
   formatPendingPurgeLine,
   formatHiddenLine,
+  formatReviewSide,
 } from './cli/common.mjs';
 import {
   saveObservation,
@@ -2811,10 +2813,17 @@ function cmdMaintain(db, args) {
 
       if (manualReview.length > 0) {
         out('  Needs review:');
-        for (const d of manualReview.slice(0, 15)) {
+        const shown = manualReview.slice(0, 15);
+        const rows = reviewRows(
+          db,
+          shown.flatMap((d) => [d.a.id, d.b.id]),
+        );
+        for (const d of shown) {
           out(
             `    [${d.a.id}] "${truncate(d.a.title, 40)}" <-> [${d.b.id}] "${truncate(d.b.title, 40)}" (${d.similarity})`,
           );
+          out(`      ${formatReviewSide(rows.get(d.a.id))}`);
+          out(`      ${formatReviewSide(rows.get(d.b.id))}`);
         }
       }
     }

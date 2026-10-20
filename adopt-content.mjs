@@ -159,7 +159,7 @@ PreToolUse hook 在你 Read / Edit / Write 文件前已自动 \`mem_recall\` 该
 
 | 场景 | CLI |
 |------|-----|
-| 清理过期记忆 | \`${CLI} maintain scan\` 预览；清理本身交给用户启动的 \`/claude-mem-lite:update\`（它先预览要删的行，经用户同意才删） |
+| 清理过期记忆 | \`${CLI} maintain scan\` 预览；清理本身交给用户启动的 \`/claude-mem-lite:update\` |
 | 深度优化（Haiku） | \`${CLI} optimize\`（默认 preview；\`--run\` 执行，\`--task re-enrich,normalize,cluster-merge,smart-compress\`） |
 | 压缩旧条目 | \`${CLI} compress\`（默认 preview；\`--execute\` 执行，\`--age-days N\`） |
 | FTS5 索引检查 / 重建 | \`${CLI} fts-check <check\\|rebuild>\` |

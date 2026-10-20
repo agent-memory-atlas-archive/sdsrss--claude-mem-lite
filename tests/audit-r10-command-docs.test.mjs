@@ -153,7 +153,7 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
   // D#450: the scan's pending count includes rows too recent to purge, so the number the user
   // approves has to come from the purge's own preview. Text pattern: catches this spelling only.
   for (const rel of ['commands/mem.md', 'commands/update.md']) {
-    it(`${rel} previews the purge before asking, so the user approves what gets deleted`, () => {
+    it(`${rel} previews the purge before asking, so the user approves the purge's own count`, () => {
       const line = read(rel)
         .split('\n')
         .find((l) => /--ops purge_stale --confirm/.test(l));
@@ -178,7 +178,10 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
       ['detail doc', doc],
       ['CLAUDE.md block', buildClaudeMdBlock()],
     ]) {
-      expect(text, `${name} has the model confirm a purge itself`).not.toMatch(/purge_stale[^\n|]*--confirm/);
+      // Either flag order, and the MCP form (review r3).
+      expect(text, `${name} has the model confirm a purge itself`).not.toMatch(
+        /purge_stale[^\n|]*(--confirm|confirm\s*[=:]\s*true)|--confirm[^\n|]*purge_stale/,
+      );
     }
     expect(doc.split('\n').find((l) => l.includes('清理过期记忆'))).toContain('/claude-mem-lite:update');
   });

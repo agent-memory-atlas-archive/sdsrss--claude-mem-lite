@@ -12,7 +12,7 @@ import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
 import { SCHEMA_SKEW_CODE } from './lib/schema-skew.mjs';
-import { isFtsCorruptionError } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError, isSchemaUnreadableError } from './lib/db-unusable.mjs';
 
 // The three location constants now live in lib/data-paths.mjs — a leaf module with no
 // package imports — and are re-exported here so every existing importer is unchanged.
@@ -1876,6 +1876,10 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
       return db;
     } catch (retryErr) {
       if (!isDbCorruptionError(retryErr)) throw retryErr;
+      // D#495: SQL this SQLite cannot parse. 600 byte flips in a WAL, 300 in page-1 frames, gave no
+      // error at all (SQLite drops a frame whose checksum fails), so this is not a damaged frame, and
+      // deleting the WAL takes the commits from under whoever wrote them.
+      if (isSchemaUnreadableError(retryErr)) throw retryErr;
       walErr = retryErr;
     }
     warn?.(`DB corruption detected, attempting WAL recovery: ${walErr.message}`);

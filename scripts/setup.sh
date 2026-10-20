@@ -425,8 +425,9 @@ fi
 #    hooks remain in the config home's settings.json. A user who installed via global
 #    `claude-mem-lite install` and later switched to the marketplace plugin
 #    will run every hook twice (direct settings.json hooks AND plugin hooks)
-#    until they run `claude-mem-lite uninstall` to clear the settings.json
-#    entries. /plugin uninstall does not touch settings.json.
+#    until they run cleanup-hooks to clear the settings.json entries (not
+#    uninstall, which removes the plugin too). /plugin uninstall does not touch
+#    settings.json.
 # CODE_DIR/runtime, same reason: the residue it warns about is stale hook entries in the config
 # home's settings.json — one warning per config home, regardless of where the data lives.
 RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55$(marker_suffix "$CC_CONFIG_DIR/settings.json" "$CC_DEFAULT_CONFIG_DIR/settings.json")"
@@ -459,7 +460,7 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
           process.stderr.write("\x1b[33m⚠\x1b[0m Legacy direct-install hooks detected in " + process.env.SETTINGS_PATH + "\n");
           process.stderr.write("  Events with stale entries: " + [...new Set(found)].join(", ") + "\n");
           process.stderr.write("  These will fire alongside plugin hooks (each tool call runs twice).\n");
-          process.stderr.write("  Fix: run \x1b[1mclaude-mem-lite uninstall\x1b[0m to clear settings.json,\n");
+          process.stderr.write("  Fix: run \x1b[1mnode \"" + process.env.CLAUDE_PLUGIN_ROOT + "/cli.mjs\" cleanup-hooks\x1b[0m to clear settings.json,\n");
           process.stderr.write("       then keep using the plugin install. (One-time warning.)\n\n");
           process.exit(2);
         }

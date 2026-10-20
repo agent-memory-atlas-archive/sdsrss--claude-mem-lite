@@ -4066,7 +4066,7 @@ async function runDispatch(argv) {
     if ((mutating ? mutating.writes(parsed) : writes(parsed)) && asksDryRun(parsed.flags['dry-run'])) {
       fail(
         `[mem] ${mutatingKey} does not read --dry-run — nothing was changed, since the run would have ` +
-          `written. ${preview ? `Preview with: claude-mem-lite ${preview}.` : 'It has no preview.'}`,
+          `written. ${preview ? `Preview with: ${CLI_INVOKE} ${preview}.` : 'It has no preview.'}`,
       );
       return;
     }

@@ -961,6 +961,11 @@ describe('install lifecycle checks', () => {
         expect(second.stderr, "the first profile's marker skipped this profile's warning").toContain(
           `Legacy direct-install hooks detected in ${join(cfg, 'settings.json')}`,
         );
+        // The fix keeps the plugin: cleanup-hooks, by path. `uninstall` removes the plugin too, and a
+        // plugin install puts no bare claude-mem-lite on PATH (D#501(3)).
+        const root = join(cfg, 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '6.24.0');
+        expect(second.stderr).toContain(`node "${root}/cli.mjs" cleanup-hooks`);
+        expect(second.stderr).not.toMatch(/\buninstall\b/);
 
         // Still one-shot per home: a second start of the same profile does neither again.
         writeFileSync(join(cfg, '.claude.json'), ours);

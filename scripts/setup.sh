@@ -434,7 +434,7 @@ RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55$(marker_suffix "$CC_CONF
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
   SETTINGS="$CC_CONFIG_DIR/settings.json"
   if [[ -f "$SETTINGS" ]]; then
-    SETTINGS_PATH="$SETTINGS" CFG_DIR="$CC_CONFIG_DIR" DEFAULT_CFG_DIR="$CC_DEFAULT_CONFIG_DIR" node -e '
+    SETTINGS_PATH="$SETTINGS" CFG_DIR="$CC_CONFIG_DIR" node -e '
       const fs = require("fs");
       try {
         const raw = fs.readFileSync(process.env.SETTINGS_PATH, "utf8");
@@ -462,8 +462,9 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
           process.stderr.write("  These will fire alongside plugin hooks (each tool call runs twice).\n");
           // A shell word, single-quoted unless plain (cli-path.mjs shellWord); \x27 is a quote here.
           const q = (w) => (/^[\w@%+=:,.\/-]+$/.test(w) ? w : "\x27" + w.split("\x27").join("\x27\\\x27\x27") + "\x27");
-          // The config home this warning is about, which the shell the user types into may not have.
-          const env = process.env.CFG_DIR !== process.env.DEFAULT_CFG_DIR ? "CLAUDE_CONFIG_DIR=" + q(process.env.CFG_DIR) + " " : "";
+          // The config home this warning is about, named even when it is the default one: the shell
+          // the user types into may carry a CLAUDE_CONFIG_DIR that names another profile.
+          const env = "CLAUDE_CONFIG_DIR=" + q(process.env.CFG_DIR) + " ";
           const fix = env + "node " + q(process.env.CLAUDE_PLUGIN_ROOT + "/cli.mjs") + " cleanup-hooks";
           process.stderr.write("  Fix: run \x1b[1m" + fix + "\x1b[0m to clear settings.json,\n");
           process.stderr.write("       then keep using the plugin install. (One-time warning.)\n\n");

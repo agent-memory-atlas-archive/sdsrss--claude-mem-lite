@@ -938,6 +938,23 @@ describe('install lifecycle checks', () => {
       return spawnSync('bash', [SETUP_PATH], { encoding: 'utf8', env, cwd });
     }
 
+    // v6.30.1 delta review P3-4: for the default profile the fix named no config home, so a shell
+    // carrying another profile's CLAUDE_CONFIG_DIR cleaned that profile instead.
+    it("the default profile's fix command names its config home too", () => {
+      const home = profileHome();
+      try {
+        const cfg = join(home, '.claude');
+        mkdirSync(cfg, { recursive: true });
+        writeFileSync(join(cfg, 'settings.json'), legacyHooks);
+        const r = runSetup(home);
+        expect(r.status, r.stderr).toBe(0);
+        const root = join(cfg, 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '6.24.0');
+        expect(r.stderr).toContain(`CLAUDE_CONFIG_DIR=${cfg} node ${root}/cli.mjs cleanup-hooks`);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     it('a second profile gets its own MCP dedup and residue warning', () => {
       const home = profileHome();
       try {

@@ -1077,9 +1077,11 @@ describe('E2E: Dev install mode (git clone --dev)', () => {
     const scriptsLink = join(dataDir, 'scripts');
     expect(existsSync(scriptsLink)).toBe(true);
 
-    // node_modules should be a symlink
+    // node_modules should be a symlink, to a tree that holds the dependencies: in a worktree nested
+    // in the main checkout, with no node_modules of its own, it dangled (D#489).
     const nmLink = join(dataDir, 'node_modules');
     expect(existsSync(nmLink)).toBe(true);
+    expect(existsSync(join(nmLink, 'better-sqlite3', 'package.json'))).toBe(true);
   });
 
   it('--dev hooks point to ~/.claude-mem-lite/ (via symlinks)', () => {

@@ -564,6 +564,15 @@ export function deployLockfile(projectDir, dataDir) {
   return shrinkwrap;
 }
 
+function devNodeModules() {
+  try {
+    const pkg = createRequire(join(PROJECT_DIR, 'package.json')).resolve('better-sqlite3/package.json');
+    return dirname(dirname(pkg));
+  } catch {
+    return join(PROJECT_DIR, 'node_modules');
+  }
+}
+
 export function deployCodeTree(IS_DEV) {
   if (IS_DEV) {
     log('Dev mode — creating symlinks in ~/.claude-mem-lite/...');
@@ -584,10 +593,12 @@ export function deployCodeTree(IS_DEV) {
     const scriptsLink = join(DATA_DIR, 'scripts');
     clearLinkPath(scriptsLink);
     symlinkSync(join(PROJECT_DIR, 'scripts'), scriptsLink);
-    // Symlink node_modules/
+    // Symlink node_modules/: the one this checkout loads its dependencies from. A worktree nested in
+    // the main checkout has none of its own and Node finds the one above it; linking
+    // PROJECT_DIR/node_modules left the link dangling there (D#489).
     const nmLink = join(DATA_DIR, 'node_modules');
     clearLinkPath(nmLink);
-    symlinkSync(join(PROJECT_DIR, 'node_modules'), nmLink);
+    symlinkSync(devNodeModules(), nmLink);
     // R10 P3-28: the registry/ symlink is gone. The directory left with the skill registry
     // in v5.0.0, so the existsSync guard was permanently false and the branch was dead —
     // clearLinkPath still ran, silently removing a stale ~/.claude-mem-lite/registry link

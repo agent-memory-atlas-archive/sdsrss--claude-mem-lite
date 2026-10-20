@@ -2,6 +2,55 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.0 — background `claude -p` calls drop Claude Code's auto-memory section, and a database schema SQLite cannot read says memory is off
+
+**Upgrade note: nothing to run; the schema version stays 49.** Every headless `claude -p` call
+the plugin makes (the LLM leg of users without an API key) now runs with
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Going back is pinning `claude-mem-lite@6.29.3`.
+
+- **`claude -p` calls run without Claude Code's auto-memory section** (D#483). Each carried about
+  2.2 KB of system prompt describing a memory directory these extraction calls never use (Claude
+  Code 2.1.304: 8,964 → 6,688 bytes, read from a stub endpoint). Before the change, an A/B on the
+  CLI leg with its gate written down first (`benchmark/haiku-model-ab.mjs`, 8 items per site) read
+  usable answers 8/8, 8/8 and 7/8 with and without it; episode lessons kept read 3 against 4, within
+  that gate.
+- **CLI hints** (D#462). Usage lines, `Try:` pointers, `adopt --status`, the startup dashboard, the
+  unusable-database notices, the CLI's damaged-search-index message and `/adopt` and `/unadopt`
+  printed `claude-mem-lite <command>`, which a plugin install does not put on PATH. They print `node
+  <path>/cli.mjs <command>` now, as the MCP instructions do (`npx claude-mem-lite` where the
+  installer runs through npx).
+- **A database schema SQLite cannot read says memory is off.** A damaged `sqlite_master` row
+  ("malformed database schema") left SessionStart silent while every save and recall failed. It now
+  gets the memory-off notice on both channels, and `doctor` names the newest backup snapshot without
+  a command to run.
+- **Writers that read first wait for another writer.** The episode worker's upgrade to an event and
+  its low-yield drop, Stop's edge attribution, the daily cluster merge and smart compress, and
+  SessionStart's one-time project re-key began with a read and failed at once with `SQLITE_BUSY`
+  when another process held the write lock. They take the write lock up front now and wait for it.
+- **Maintenance output matches what runs.** `stats --quality --project X` printed a purge hint
+  without `--project`, which purges every project; it keeps the project now, and its pending-purge
+  ratio no longer counts explicit saves, which `purge_stale` never deletes (D#467, D#466). `maintain
+  scan`'s Stale and Broken counts no longer include rows execute skips (a compression keeper, an
+  empty row carrying a `superseded_by` redirect). A purge preview of 0 rows says "Nothing to
+  delete." instead of asking for `--confirm` (D#468). `get` no longer says a queued row goes at the
+  next `purge_stale` run (D#465).
+- **Search's operator note** no longer says every word must match when the search relaxed AND to OR.
+- **Adoption.** With Project instructions set to `managed-only` in the user settings, auto-adopt
+  writes no `CLAUDE.local.md` and injects the steering instead, also where a `CLAUDE.md` carries the
+  block (D#219). Auto-adopt in a session below a directory of the same repository whose `CLAUDE.md`
+  carries the block (for example `adopt` run in `packages/`) no longer writes a root
+  `CLAUDE.local.md` (D#177). A `CLAUDE.md` holding this plugin's block and another plugin's managed
+  block gets the `AGENTS.md` import, so the `AGENTS.md` beside it keeps loading (D#220). `adopt`
+  says when it rewrote the detail doc (D#470), and the detail doc no longer points at a `docs/` file
+  that does not exist (D#471).
+- **`/update`'s dedup step** (D#461). `maintain scan` prints a line for each side of a Needs-review
+  pair (type, project, date, lesson, start of the narrative), read without counting an access, and
+  `/update` judges those pairs from them rather than from two 40-character titles.
+- **Dependency.** hono, which `@modelcontextprotocol/sdk` brings in, moves from 4.13.7 to
+  4.13.13 for GHSA-5r4p-p66f-jhc7.
+- For maintainers: `haiku-model-ab.mjs` takes `cli:<effort>` arms, and `install-e2e`'s setup.sh case
+  no longer runs a real `npm install` in a checkout without `node_modules` (D#408).
+
 ## v6.29.3 — the model is no longer sent to tools it cannot call, /bug and /verify name this plugin's commands, and the purge count you are asked to approve comes from the purge itself
 
 **Upgrade note: nothing to run; the schema version stays 49.** Text the model and you read

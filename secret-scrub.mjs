@@ -599,22 +599,38 @@ function cutRun(core) {
 }
 
 // D#500: a reading goes over a run of blank lines line by line, and every BEGIN that reaches the run
-// read it again: a BEGIN and 16 armor headers holding a BEGIN each, over 200,000 blank lines, read
-// 37x benign text (v6.30.0, 2026-10-20). Stopping after some number of blank lines stored cut keys
-// below them twice (v6.30.0 pre-tag reviews r1, r2), so nothing here stops a reading: a run of
-// lines that are blank with no line prefix is walked once per scrubSecrets call, by break depth, and
-// a reading jumps to where it ends. With a prefix that is not `inert`, the lines of the run that
+// read it again: 40 labelled values (scrubSecrets' 32 passes), then a BEGIN and 16 armor headers
+// holding a BEGIN each, over 200,000 blank lines, read 37x benign text (v6.30.0, 2026-10-20).
+// Stopping after some number of blank lines stored cut keys below them twice (v6.30.0 pre-tag
+// reviews r1, r2), so nothing here stops a reading: a run of lines that are blank with no line
+// prefix is walked once per pass, by break depth, and a reading jumps to where it ends. With a prefix that is not `inert`, the lines of the run that
 // prefix matches are looked up in an index of the run's distinct lines, and the reading resumes at
 // the first one it leaves non-blank. Every line a reading skips is one it would have read as blank.
 //
 // A run's positions are kept as offsets from the end of the text, and a later pass of the same call
 // reuses it only where the text from its first line to the end is unchanged: a run is read forward
 // from that line, so it is then the same run. A pass that scrubs text before a run (the labelled
-// values that keep the loop going) leaves it so. 2026-10-20: 180,000 fuzzed inputs gave output
-// identical to v6.30.0's, and the shape above reads 1.0x benign.
+// values that keep the loop going) leaves it so. Where that text begins is found once per pass,
+// by comparing the pass's text with the previous one from the end, and the runs before it are
+// dropped: checking each run against the rest of the text was quadratic (v6.30.1 pre-tag review).
 
-/** Runs recorded by the passes of the scrubSecrets call under way, by `${depth}:${offset}`. */
-let carriedRuns = null;
+/** Runs carried between the passes of the scrubSecrets call under way, and the last pass's text. */
+let carried = null;
+
+/** Keep the carried runs that start in the part of `text` the previous pass's text ends with. */
+function pruneCarried(text) {
+  const prev = carried.text;
+  carried.text = text;
+  if (prev === null || carried.runs.size === 0) return;
+  let i = text.length;
+  let j = prev.length;
+  while (i > 0 && j > 0 && text.charCodeAt(i - 1) === prev.charCodeAt(j - 1)) {
+    i--;
+    j--;
+  }
+  const min = i - text.length;
+  for (const [key, run] of carried.runs) if (run.from < min) carried.runs.delete(key);
+}
 
 /** The run of lines blank with no prefix that starts at line start `s` (depth `u`); recorded. */
 function blankRunAt(text, runs, s, u) {
@@ -624,8 +640,8 @@ function blankRunAt(text, runs, s, u) {
   if (run) return run;
   const L = text.length;
   const key = `${u}:${s - L}`;
-  run = carriedRuns?.get(key);
-  if (!run || !text.startsWith(run.suffix, s)) {
+  run = carried?.runs.get(key);
+  if (!run) {
     const starts = [];
     const ends = [];
     let p = s;
@@ -642,8 +658,8 @@ function blankRunAt(text, runs, s, u) {
       ends.push(line.end - L);
       p = line.next;
     }
-    run = { starts, ends, end: p === -1 ? null : p - L, index: null, suffix: text.slice(s) };
-    carriedRuns?.set(key, run);
+    run = { starts, ends, end: p === -1 ? null : p - L, index: null, from: s - L };
+    if (starts.length > 0) carried?.runs.set(key, run);
   }
   byStart.set(s, run);
   return run;
@@ -867,6 +883,7 @@ function cutOffKeyEnd(text, b, be, runs) {
 
 function scrubCutOffKeys(text) {
   if (!text.includes('PRIVATE KEY')) return text;
+  if (carried) pruneCarried(text);
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;
@@ -1064,7 +1081,7 @@ const MAX_SCRUB_PASSES = 32;
 export function scrubSecrets(text) {
   if (!text || typeof text !== 'string') return text || '';
   let result = stripPrivate(text);
-  carriedRuns = new Map();
+  carried = { text: null, runs: new Map() };
   try {
     for (let pass = 1; ; pass++) {
       const before = result;
@@ -1074,7 +1091,7 @@ export function scrubSecrets(text) {
       if (result === before || pass >= MAX_SCRUB_PASSES) break;
     }
   } finally {
-    carriedRuns = null;
+    carried = null;
   }
   return result;
 }

@@ -110,6 +110,9 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       '\\n'.repeat(N / 2),
     armorBeginsQuotePrefix:
       CHAIN + '\n"-----BEGIN RSA PRIVATE KEY-----\n' + ARMOR_BEGINS('"') + '"\n'.repeat(N / 2),
+    // v6.30.1 pre-tag defects review: a run carried to a later pass was checked by comparing the
+    // whole text after it, once per BEGIN that looked it up (50k chars: 25 ms on v6.30.0, 1,474 ms).
+    beginBlankWordRepeated: CHAIN + ' ' + '-----BEGIN PRIVATE KEY-----\n\nword\n'.repeat(N / 34),
     pemEscapedQuoteSpaces: '-----BEGIN RSA PRIVATE KEY-----\\n"' + ' '.repeat(N) + 'x',
     pemEscapedQuoteTabs: '-----BEGIN RSA PRIVATE KEY-----\\n"' + '\t'.repeat(N) + 'x',
     // BEGINs at alternating escape depths. A since-removed walk back to a string's opening quote,

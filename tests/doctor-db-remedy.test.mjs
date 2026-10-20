@@ -108,6 +108,21 @@ describe('dbCheckRemedy', () => {
     expect(await dbCheckRemedy(db, new Error('EACCES: permission denied, open'))).toBeNull();
   });
 
+  // A schema row SQLite cannot parse: name the snapshots, run nothing (lib/db-unusable.mjs).
+  it('names the newest snapshot for an unreadable schema, with no command', async () => {
+    const { db } = withDb([
+      'claude-mem-lite.db.pre-maintain-2026-09-01T00-00-00-000Z-1-1.bak',
+      'claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak',
+    ]);
+    const err = Object.assign(new Error('malformed database schema (idx_t_a) - incomplete input'), {
+      code: 'SQLITE_CORRUPT',
+    });
+    const out = await dbCheckRemedy(db, err);
+    expect(out).toMatch(/schema/);
+    expect(out).toContain('2026-09-06T00-00-00-000Z');
+    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
+  });
+
   it('accepts the other spellings SQLite uses for a damaged file', async () => {
     const { db } = withDb();
     for (const msg of ['database disk image is malformed', 'file is encrypted or is not a database']) {

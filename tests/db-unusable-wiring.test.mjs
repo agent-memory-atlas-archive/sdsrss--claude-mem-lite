@@ -48,6 +48,25 @@ function corruptDataDir({ withSnapshot = false } = {}) {
   return dir;
 }
 
+/** A data dir whose database has a sqlite_master row SQLite cannot parse. */
+function damagedSchemaDataDir({ withSnapshot = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'dbschema-'));
+  fixtures.push(dir);
+  const dbPath = join(dir, 'claude-mem-lite.db');
+  if (withSnapshot) {
+    const snap = new Database(`${dbPath}.v1.bak`);
+    snap.exec('CREATE TABLE t (a)');
+    snap.close();
+  }
+  const db = new Database(dbPath);
+  db.exec('CREATE TABLE t (a); CREATE INDEX idx_t_a ON t(a);');
+  db.unsafeMode(true);
+  db.pragma('writable_schema = ON');
+  db.prepare("UPDATE sqlite_master SET sql = 'CREATE INDEX idx_t_a ON t(' WHERE name = 'idx_t_a'").run();
+  db.close();
+  return dir;
+}
+
 /** HOME is sandboxed for every case — see the note in tests/schema-skew-wiring.test.mjs. */
 function run(args, dataDir, { stdin = '{}', ...extraEnv } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'dbbad-home-'));
@@ -152,6 +171,35 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
     const r = run([join(REPO, 'hook.mjs'), 'session-start'], dir);
     expect(r.stdout).not.toMatch(/Memory is OFF/);
     expect(r.status).toBe(0);
+  });
+});
+
+// Triage 2026-10-20: a damaged schema row took the generic branch — memory off every session,
+// a stack trace per fire, and nothing the user sees.
+describe('SessionStart speaks when the database schema cannot be read', () => {
+  it('says memory is off, on both channels, with no command on either', () => {
+    const dataDir = damagedSchemaDataDir({ withSnapshot: true });
+    const r = run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
+    // Premise: the open really failed on the schema.
+    expect(hookErrorLines(dataDir).some((e) => /malformed database schema/i.test(e.msg))).toBe(true);
+    const envelope = JSON.parse(
+      r.stdout
+        .split('\n')
+        .filter((l) => l.trim().startsWith('{'))
+        .pop(),
+    );
+    expect(envelope.systemMessage).toMatch(/Memory is OFF/);
+    expect(envelope.systemMessage).toContain('.v1.bak');
+    expect(envelope.systemMessage).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
+    expect(envelope.hookSpecificOutput?.additionalContext).toMatch(/Memory is OFF/);
+    expect(r.status).toBe(0);
+  });
+
+  it('records the failure once across repeated fires', () => {
+    const dataDir = damagedSchemaDataDir();
+    for (let i = 0; i < 3; i++) run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
+    const lines = hookErrorLines(dataDir).filter((e) => /malformed database schema/i.test(e.msg));
+    expect(lines.length).toBe(1);
   });
 });
 

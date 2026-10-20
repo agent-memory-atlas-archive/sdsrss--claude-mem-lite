@@ -597,6 +597,7 @@ export function lastSchemaSkew() {
 // boolean rather than the error, because the only thing SessionStart needs is "which notice",
 // and keeping an Error alive here would tempt a caller into rendering a stack trace at a user.
 let lastUnusable = false;
+let lastUnusableError = null;
 
 /**
  * True when the most recent openDb() returned null because the database file is not a usable
@@ -606,6 +607,11 @@ let lastUnusable = false;
  */
 export function lastDbUnusable() {
   return lastUnusable;
+}
+
+/** The error behind lastDbUnusable(), so the notice can name the right family; null otherwise. */
+export function lastDbUnusableError() {
+  return lastUnusable ? lastUnusableError : null;
 }
 
 // The epoch (ms) until which a connection openDb() hands out in this process may wait for another
@@ -686,6 +692,7 @@ export function openDb() {
     // the skew dedup lost by calling a function that WRITES.
     if (isDbUnusableError(e)) {
       lastUnusable = true;
+      lastUnusableError = e;
       lastSkew = null; // the two flags are a set: whichever family fired last is the true one
       let project = '';
       try {

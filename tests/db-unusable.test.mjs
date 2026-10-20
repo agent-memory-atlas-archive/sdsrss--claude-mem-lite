@@ -37,6 +37,9 @@ describe('isDbUnusableError', () => {
     ['SqliteError: file is not a database', true],
     ['database disk image is malformed', true],
     ['DISK IMAGE IS MALFORMED', true],
+    // A damaged sqlite_master row: every statement fails, so memory is as off as with a damaged
+    // header, and it took the silent generic branch (triage 2026-10-20, reproduced).
+    ['malformed database schema (idx_t_a) - incomplete input', true],
   ])('classifies %j as unusable=%s', (msg, expected) => {
     expect(isDbUnusableError(new Error(msg))).toBe(expected);
     expect(isDbUnusableError(msg), 'a bare string reaches recordHookError too').toBe(expected);
@@ -137,6 +140,62 @@ describe('dbUnusableRemedy', () => {
     expect(r.command, 'a command we cannot justify must not be printed').toBe('');
     expect(r.note).toMatch(/Could not read/);
     expect(r.note).not.toMatch(/No backup snapshot exists/);
+  });
+});
+
+// SQLite says "malformed database schema" when it cannot parse a row of sqlite_master. A
+// damaged row is one cause; SQL its parser does not know is another (reasoned, not
+// reproduced), and there restoring a snapshot or setting the file aside is wrong. So this
+// family names the snapshots and gives no command.
+describe('a schema SQLite cannot read', () => {
+  const err = Object.assign(new Error('malformed database schema (idx_t_a) - incomplete input'), {
+    code: 'SQLITE_CORRUPT',
+  });
+
+  it('gives no command, and names the newest snapshot when one exists', () => {
+    const dir = tmp('rem-schema-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'x');
+    writeFileSync(`${db}.2026-09-01.bak`, 'a');
+    writeFileSync(`${db}.2026-09-07.bak`, 'b');
+    const now = Date.now();
+    utimesSync(`${db}.2026-09-01.bak`, now / 1000 - 1000, now / 1000 - 1000);
+    utimesSync(`${db}.2026-09-07.bak`, now / 1000, now / 1000);
+    const r = dbUnusableRemedy(db, err);
+    expect(r.kind).toBe('schema');
+    expect(r.command).toBe('');
+    expect(r.snapshotCount).toBe(2);
+    expect(r.note).toContain(`${db}.2026-09-07.bak`);
+    expect(r.note).not.toContain(`${db}.2026-09-01.bak`);
+  });
+
+  it('says so when no snapshot exists, still with no command', () => {
+    const dir = tmp('rem-schema-none-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'x');
+    const r = dbUnusableRemedy(db, err);
+    expect(r.kind).toBe('schema');
+    expect(r.command).toBe('');
+    expect(r.note).toMatch(/No backup snapshot exists/);
+  });
+
+  it('keeps the other families on their own remedies', () => {
+    const dir = tmp('rem-schema-ctl-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'x');
+    expect(dbUnusableRemedy(db, new Error('file is not a database')).kind).toBe('set-aside');
+    expect(dbUnusableRemedy(db).kind).toBe('set-aside');
+  });
+
+  it('the human notice says the schema cannot be read, not that the file is not a database', () => {
+    const dir = tmp('rem-schema-notice-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'x');
+    const out = formatDbUnusableNotice({ dbPath: db, remedy: dbUnusableRemedy(db, err) });
+    expect(out).toMatch(/Memory is OFF/);
+    expect(out).toMatch(/schema/);
+    expect(out).not.toMatch(/does not recognise it as a database/);
+    expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
   });
 });
 

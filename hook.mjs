@@ -106,6 +106,7 @@ import {
   sweepStaleProjectMarkers,
   lastSchemaSkew,
   lastDbUnusable,
+  lastDbUnusableError,
 } from './hook-shared.mjs';
 import {
   handleLLMEpisode,
@@ -2780,7 +2781,10 @@ async function emitDbUnusableNotice() {
     // human channel carries the repair command, the model channel carries only the fact.
     // See formatDbUnusableModelNotice — this family's remedy overwrites the database.
     queueHookSystemMessage(
-      mod.formatDbUnusableNotice({ dbPath: DB_PATH, remedy: mod.dbUnusableRemedy(DB_PATH) }),
+      mod.formatDbUnusableNotice({
+        dbPath: DB_PATH,
+        remedy: mod.dbUnusableRemedy(DB_PATH, lastDbUnusableError()),
+      }),
     );
     queueHookContext('SessionStart', mod.formatDbUnusableModelNotice());
   } catch (e) {

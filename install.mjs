@@ -472,8 +472,9 @@ export async function dbCheckRemedy(dbPath, err) {
   // imports doctor already uses.
   const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
-  const remedy = dbUnusableRemedy(dbPath);
+  const remedy = dbUnusableRemedy(dbPath, err);
   if (remedy.kind === 'unknown') return remedy.note;
+  if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
   if (remedy.kind === 'set-aside') {
     return (
       `No backup snapshot exists beside the database. Set the broken file aside so a fresh ` +

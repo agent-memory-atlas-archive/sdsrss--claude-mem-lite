@@ -59,10 +59,10 @@ doc). Other plugins' blocks (e.g. `code-graph-mcp:*`) and your own prose survive
 - `/unadopt` removes the CLAUDE.md block + `.claude/` detail doc (your prose stays),
   and the local block. The next session writes a local file if the plugin never
   created one in this repository; one it created before is not written back (the
-  text is injected instead) until `claude-mem-lite adopt --enable`. Beside an
+  text is injected instead) until `node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" adopt --enable`. Beside an
   `AGENTS.md` that `CLAUDE.local.md` would switch off, no file is written unless
   `CLAUDE_MEM_RULES_STEERING=1`.
-- `claude-mem-lite adopt --disable` permanently stops auto-adopt for this project
+- `node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" adopt --disable` permanently stops auto-adopt for this project
   (also for sessions started in its subdirectories) and removes the local block; a
   `CLAUDE.md` block stays until `/unadopt`.
 - `MEM_NO_AUTO_ADOPT=1` disables auto-adopt globally; blocks already written stay.

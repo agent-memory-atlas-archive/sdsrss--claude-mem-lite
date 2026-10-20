@@ -181,6 +181,31 @@ export function holdsOnlyOwnLines(p, slug) {
   }
 }
 
+// Another plugin's managed block: the same sentinel shape under any slug (code-graph-mcp writes
+// `<!-- code-graph-mcp:begin v2 -->` … `<!-- code-graph-mcp:end -->`). The backreference pairs a
+// begin with its own slug's end, so an unpaired line of one slug never closes another's block.
+const ANY_BLOCK_RE_G =
+  /<!-- ([a-z0-9][a-z0-9._-]*):begin v\d+ -->\r?\n(?:(?!<!-- \1:(?:begin|end))[\s\S])*?\r?\n<!-- \1:end -->/g;
+
+/**
+ * Whether the instructions file at `p` holds no line a person wrote: this plugin's blocks and
+ * imports, and other plugins' managed blocks. For "did plugin text alone switch AGENTS.md off"
+ * (D#220), never for deleting the file — another plugin's block is not ours to remove, and
+ * holdsOnlyOwnLines answers that question. False for a missing file.
+ * @param {string} p absolute path
+ * @param {string} slug
+ * @returns {boolean}
+ */
+export function holdsOnlyPluginLines(p, slug) {
+  try {
+    if (!existsSync(p)) return false;
+    const rest = readFileSync(p, 'utf8').replace(blockRegexG(slug), '').replace(ANY_BLOCK_RE_G, '');
+    return rest.trim() === '' || isOwnImportsOnly(rest, slug);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Put adopt's AGENTS.md imports at the top of <cwd>/CLAUDE.md (created if absent), unless the
  * marker is there already. `imports` are paths relative to `cwd` (`AGENTS.md`,

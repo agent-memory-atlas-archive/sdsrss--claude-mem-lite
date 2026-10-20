@@ -640,6 +640,34 @@ describe('adopt next to an AGENTS.md', () => {
     expect(body()).toBe(after);
   });
 
+  // D#220(b): another plugin's managed block beside ours is plugin text too. Claude Code stops
+  // reading AGENTS.md all the same, and with only this plugin's block counted the import was
+  // never added, so the user's AGENTS.md stayed unloaded.
+  const otherPluginBlock =
+    '<!-- code-graph-mcp:begin v2 -->\n## Code Graph\nIndex notes.\n<!-- code-graph-mcp:end -->\n';
+  it("session start adds the import to a CLAUDE.md that holds this block and another plugin's", () => {
+    cmdAdopt([]);
+    appendFileSync(claudeMd(fakeCwd), `\n${otherPluginBlock}`);
+    agentsMd(fakeCwd);
+    const r = silentAutoAdopt({ cwd: fakeCwd });
+    expect(r.agents).toEqual({ imported: ['AGENTS.md'], elsewhere: [] });
+    expect(body().startsWith(`${MARKER}\n@AGENTS.md\n\n${BEGIN}`)).toBe(true);
+    expect(body()).toContain(otherPluginBlock);
+  });
+
+  // The other plugin's block is not ours to delete: unadopt takes our block and our import, and
+  // the file stays with the other block in it.
+  it("unadopt keeps the other plugin's block, and the file", () => {
+    cmdAdopt([]);
+    appendFileSync(claudeMd(fakeCwd), `\n${otherPluginBlock}`);
+    agentsMd(fakeCwd);
+    silentAutoAdopt({ cwd: fakeCwd });
+    cmdUnadopt([]);
+    expect(existsSync(claudeMd(fakeCwd))).toBe(true);
+    expect(body()).toContain(otherPluginBlock);
+    expect(body()).not.toContain(BEGIN);
+  });
+
   it('session start adds no import once the user has written into CLAUDE.md', () => {
     cmdAdopt([]);
     appendFileSync(claudeMd(fakeCwd), '\n## Our conventions\n');

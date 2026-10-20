@@ -50,7 +50,7 @@ import {
   claudeMdPath,
   detailDocPath,
   addAgentsImports,
-  holdsOnlyOwnLines,
+  holdsOnlyPluginLines,
   straySentinelLines,
 } from './claudemd.mjs';
 import { PLUGIN_SLUG, CURRENT_SENTINEL_VERSION, buildClaudeMdBlock, getDetailDoc } from './adopt-content.mjs';
@@ -480,8 +480,8 @@ function syncAgentsImports(cwd) {
   // project below it, each asking to approve an import from outside its directory.
   if (isSharedAncestor(cwd)) return null;
   // The cheap check first: most CLAUDE.md files hold the user's own lines, and the full answer
-  // asks git.
-  if (!holdsOnlyOwnLines(claudeMdPath(cwd), PLUGIN_SLUG)) return null;
+  // asks git. Another plugin's managed block counts as plugin text, not the user's (D#220).
+  if (!holdsOnlyPluginLines(claudeMdPath(cwd), PLUGIN_SLUG)) return null;
   const agents = agentsMdForNewClaudeMd(cwd, PLUGIN_SLUG);
   if (!agents) return null;
   const imported =

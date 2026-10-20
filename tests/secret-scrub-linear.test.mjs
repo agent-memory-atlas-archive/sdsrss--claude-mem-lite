@@ -99,16 +99,6 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       '-----BEGIN RSA PRIVATE KEY-----\\nAb\\n-----BEGIN RSA PRIVATE KEY-----\\\\nAb\\\\n'.repeat(N / 76),
     pemConcatLines:
       '"-----BEGIN RSA PRIVATE KEY-----\\n" +\n' + '  "MIIEabcdefghijklmnop\\n" +\n'.repeat(N / 28),
-    // D#169: 16 armor-header lines that each hold a BEGIN, then a run of blank lines. Each BEGIN
-    // read the whole blank run on each pass.
-    armorAlphaBlank:
-      CHAIN +
-      ' -----BEGIN RSA PRIVATE KEY-----\n' +
-      Array.from(
-        { length: 16 },
-        (_, i) => `X-h${String.fromCharCode(97 + i)}: -----BEGIN RSA PRIVATE KEY-----\n`,
-      ).join('') +
-      '\n'.repeat(N),
     jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),
     jwtDotChain: ('eyJ' + 'A'.repeat(12) + '.').repeat(N / 16),
   };

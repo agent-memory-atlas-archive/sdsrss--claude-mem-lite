@@ -589,10 +589,10 @@ describe('a short first key line under a quote-plus opener', () => {
   });
 });
 
-// D#169's first fix stopped reading after 16 blank lines before any key line, so a cut key with 17
-// or more blank lines between its BEGIN (or its headers) and its body was stored; it had been erased
-// (v6.30.0 pre-tag review). The bound now applies only after a header line that holds another
-// BEGIN, whose own reading covers the lines below it.
+// D#169 (a crafted run of blank lines after armor-header BEGINs read slowly) was attempted twice for
+// v6.30.0 and withdrawn: each attempt stopped reading after 16 blank lines in some case, and a cut key
+// below 17 or more blank lines was stored where v6.29.3 erased it (pre-tag reviews r1 and r2). These
+// shapes pin the erasing side for whatever fixes D#169 next.
 describe('blank lines between a BEGIN and a cut key body', () => {
   const body = [b64(64), b64(64), `${b64(40)}…`];
   const windows = body.flatMap((l) => [l.slice(0, 16), l.slice(-17, -1)]);
@@ -613,5 +613,36 @@ describe('blank lines between a BEGIN and a cut key body', () => {
     const text = ['-----BEGIN PGP PRIVATE KEY BLOCK-----', 'Version: 1', ...Array(17).fill(''), ...body];
     const out = scrubSecrets(text.join('\n'));
     expect(windows.filter((w) => out.includes(w))).toEqual([]);
+  });
+  // r2: a header line that holds a BEGIN no reading starts from (another label, words after it, a
+  // quote, no closing dashes) and then 17 or more blank lines.
+  it.each([
+    'X-Ref: -----BEGIN CERTIFICATE-----',
+    'Comment: -----BEGIN PGP SIGNATURE-----',
+    'Comment: see -----BEGIN here',
+    'X-Ref: "-----BEGIN RSA PRIVATE KEY-----"',
+    'X-Ref: -----BEGIN RSA PRIVATE KEY',
+    'X-Ref: -----BEGIN RSA PRIVATE KEY-----',
+  ])('a header holding %s, then 17 and 40 blank lines', (header) => {
+    for (const n of [17, 40]) {
+      const text = ['-----BEGIN RSA PRIVATE KEY-----', header, ...Array(n).fill(''), ...body];
+      const out = scrubSecrets(text.join('\n'));
+      expect(
+        windows.filter((w) => out.includes(w)),
+        `${n} blank lines`,
+      ).toEqual([]);
+    }
+  });
+  it('Read-tool numbered output with 17 blank lines under a header holding a BEGIN', () => {
+    const lines = [
+      '-----BEGIN RSA PRIVATE KEY-----',
+      'Comment: -----BEGIN RSA PRIVATE KEY-----',
+      ...Array(17).fill(''),
+      ...body,
+    ];
+    const out = scrubSecrets(numbered(lines));
+    expect(windows.filter((w) => out.includes(w))).toEqual([]);
+    const escaped = scrubSecrets(J(numbered(lines)));
+    expect(windows.filter((w) => escaped.includes(w))).toEqual([]);
   });
 });

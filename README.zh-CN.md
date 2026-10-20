@@ -549,10 +549,9 @@ README 和 `docs/ARCHITECTURE.md` 都钉在它上面。）
 ### Invited Memory（邀请式记忆，v2.32+）
 
 Opt-in 机制——在项目自己的 `CLAUDE.md` 里写入一个按 slug 限定的托管块（外加 `.claude/` 下
-按需读取的详情文档），让 Claude Code 把插件的 MCP 工具触发规则作为**项目指令**加载——比
-MCP server instructions（被框定为 tool metadata）具有更高的 instruction-following 权威。
-Claude Code 以同等权重加载 `CLAUDE.md` 和 memdir 的 `MEMORY.md`，所以引导放在 `CLAUDE.md`
-（项目指令的正规位置），不去占用留给用户自己记忆的 `MEMORY.md`。v3.13 之前的方案写入
+按需读取的详情文档），让 Claude Code 把插件的 MCP 工具触发规则作为**项目指令**加载（在系统
+提示之后的一条消息里送达）。引导放在 `CLAUDE.md`（项目指令的正规位置），不去占用 memdir 里
+留给用户自己记忆的 `MEMORY.md`。v3.13 之前的方案写入
 `MEMORY.md`；下一次 SessionStart 会自动迁走。
 
 ```bash

@@ -9,7 +9,7 @@ Install the claude-mem-lite **steering block** into the current project's
 `CLAUDE.md` (the canonical home for project instructions — Claude Code loads it
 into every session, in a message after the system prompt). It does not go
 in the project's memory-dir `MEMORY.md`: that index belongs to the user's own
-memories, and it carries no more weight than `CLAUDE.md`.
+memories.
 
 Auto-adopt does not add the block to `CLAUDE.md`: in a git repository it keeps the same block
 in `CLAUDE.local.md` at the repository root, excluded from git through `.git/info/exclude`.

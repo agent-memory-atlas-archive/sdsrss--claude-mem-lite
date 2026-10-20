@@ -701,12 +701,10 @@ have not allowed, and routing the same action through Bash would sidestep it.
 
 Opt-in mechanism that installs a slug-scoped managed block into the project's
 own `CLAUDE.md` (plus an on-demand detail doc under `.claude/`) so Claude Code
-loads the plugin's MCP-tool triggers as **project instructions** — a higher
-instruction-following authority than MCP server instructions (which are framed
-as tool metadata). Claude Code loads `CLAUDE.md` and the memdir `MEMORY.md` at
-equal weight, so steering lives in `CLAUDE.md` (the canonical home for project
-instructions) rather than polluting `MEMORY.md`, which is reserved for the user's
-own memories. The pre-v3.13 scheme wrote into `MEMORY.md`; it is migrated away
+loads the plugin's MCP-tool triggers as **project instructions**, delivered in a
+message after the system prompt. Steering lives in `CLAUDE.md` (the canonical home
+for project instructions) rather than in the memdir `MEMORY.md`, which is reserved
+for the user's own memories. The pre-v3.13 scheme wrote into `MEMORY.md`; it is migrated away
 automatically on the next SessionStart.
 
 ```bash

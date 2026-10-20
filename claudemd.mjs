@@ -2,9 +2,8 @@
 // project-tree managed block at <cwd>/CLAUDE.md plus an on-demand detail doc
 // at <cwd>/.claude/plugin_<slug>.md.
 //
-// Why here and not memdir.mjs: Claude Code loads the project CLAUDE.md and the
-// memory-dir MEMORY.md at EQUAL weight, so steering belongs in CLAUDE.md (the
-// canonical home for project instructions) — seeding MEMORY.md just pollutes an
+// Why here and not memdir.mjs: steering belongs in CLAUDE.md (the canonical home
+// for project instructions) — seeding the memory-dir MEMORY.md just pollutes an
 // index meant for the user's own memories. This module mirrors the design
 // shipped by the sibling code-graph-mcp plugin (claude-plugin/scripts/adopt.js)
 // and the oh-my-claudecode versioned `<!-- :begin vN -->` managed-block pattern.

@@ -376,6 +376,28 @@ describe('maintenanceStats (scan preview must match what execute does)', () => {
     expect(idleHidden).toBe(stats.stale);
   });
 
+  // Triage 2026-10-20 (v6.28.0 claims M1e): the hide pass skips a compression keeper — hiding it
+  // would hide every member folded into it — but the stale forecast counted it.
+  test('stale count excludes a compression keeper (parity with the hide pass)', () => {
+    const db = freshDb();
+    const keeper = add(db, { title: 'weekly summary', importance: 1, injectionCount: 0 });
+    add(db, { title: 'member', importance: 1, injectionCount: 0, compressedInto: keeper });
+    const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
+    expect(decayAndMarkIdle(db, ctx(Date.now() - 30 * DAY)).idleHidden).toBe(0);
+    expect(stats.stale).toBe(0);
+  });
+
+  // Same drift on the broken forecast: cleanupBroken keeps an empty row whose superseded_by is
+  // the redirect a citation of it follows to its successor.
+  test('broken count excludes an empty row that carries a superseded_by redirect', () => {
+    const db = freshDb();
+    const successor = add(db, { title: 'successor', importance: 2 });
+    add(db, { title: '', narrative: '', importance: 2, supersededBy: successor });
+    const stats = maintenanceStats(db, ctx(Date.now() - 30 * DAY));
+    expect(cleanupBroken(db, ctx(Date.now() - 30 * DAY))).toBe(0);
+    expect(stats.broken).toBe(0);
+  });
+
   test('stale + broken counts exclude lesson-bearing rows (parity with the execute lesson guard)', () => {
     // Same #8614 drift class, missed for lesson_learned: decayAndMarkIdle (:188) and
     // cleanupBroken (:153) refuse to touch a lesson-bearing row ("lessons never auto-GC"),

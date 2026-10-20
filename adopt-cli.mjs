@@ -392,7 +392,19 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
         // loads the root's CLAUDE.md as an ancestor, so a block there already steers this
         // session; and an opt-out recorded for the root covers the file that lives there.
         if (!samePath(root, cwd)) {
-          if (blockIn(root)) return { ok: true, action: 'already-adopted', reason: 'root-claude-md' };
+          // A block in any directory between the session and the root loads as an ancestor too:
+          // `adopt` run in packages/ and a session in packages/web/src got a root CLAUDE.local.md
+          // on top of packages/CLAUDE.md, the block twice (D#177(2)).
+          for (let d = dirname(cwd); ; d = dirname(d)) {
+            const atRoot = samePath(d, root);
+            if (blockIn(d))
+              return {
+                ok: true,
+                action: 'already-adopted',
+                reason: atRoot ? 'root-claude-md' : 'ancestor-claude-md',
+              };
+            if (atRoot || dirname(d) === d) break;
+          }
           // Off for the project means off here too: no file, no injected copy, no /adopt offer
           // (delta review P2-2; lib/quiet-scope.mjs mirrors it).
           if (isAutoAdoptDisabledFor(root)) return { ok: true, action: 'disabled', reason: 'root-disabled' };

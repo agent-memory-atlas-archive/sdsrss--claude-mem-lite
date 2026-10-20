@@ -572,6 +572,30 @@ describe('pre-tag defect review: local steering edges', () => {
   };
   beforeEach(() => initRepo(app()));
 
+  // D#177(2): adopt run in an intermediate directory of a monorepo, a session started below it.
+  // Claude Code loads packages/CLAUDE.md as an ancestor, and a root CLAUDE.local.md loaded the
+  // same block a second time.
+  it('a session below a directory whose CLAUDE.md carries the block writes no root CLAUDE.local.md', () => {
+    const pkgs = join(app(), 'packages');
+    const deep = join(pkgs, 'web', 'src');
+    mkdirSync(deep, { recursive: true });
+    captureLog(() => withCwd(pkgs, () => cmdAdopt([])));
+    expect(readBlock(pkgs, SLUG).body, 'premise: adopt wrote the block there').not.toBeNull();
+    expect(silentAutoAdopt({ cwd: deep })).toMatchObject({ action: 'already-adopted' });
+    expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  // The quiet gate mirrors that: the session is steered by packages/CLAUDE.md even where the root
+  // has auto-adopt switched off, so it is quiet, not verbose on top of the block.
+  it('the quiet gate counts a block in a directory between the session and the root', () => {
+    const pkgs = join(app(), 'packages');
+    const deep = join(pkgs, 'web', 'src');
+    mkdirSync(deep, { recursive: true });
+    captureLog(() => withCwd(pkgs, () => cmdAdopt([])));
+    captureLog(() => withCwd(app(), () => cmdAdopt(['--disable'])));
+    expect(isAdoptedHere(deep)).toBe(true);
+  });
+
   it('a symlinked CLAUDE.local.md is not written through', () => {
     const other = join(home, 'dotfiles');
     mkdirSync(other);

@@ -3,7 +3,7 @@
 // and that buildSessionContextLines / buildServerInstructions follow suit.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { tmpdir } from 'os';
@@ -122,6 +122,74 @@ describe('isAdoptedHere / effectiveQuiet', () => {
       contentLine: 'x',
     });
     expect(effectiveQuiet()).toBe(true);
+  });
+
+  // D#501(2): Project instructions = managed-only loads no CLAUDE.md or CLAUDE.local.md, so a block
+  // in one steers nothing. With auto-adopt off nothing is injected either, and going quiet left the
+  // session with neither the steering nor the verbose sections.
+  describe('under Project instructions = managed-only', () => {
+    let origConfig;
+    beforeEach(() => {
+      origConfig = process.env.CLAUDE_CONFIG_DIR;
+      const config = join(tmpHome, '.claude');
+      mkdirSync(config, { recursive: true });
+      writeFileSync(
+        join(config, 'settings.json'),
+        JSON.stringify({
+          pluginConfigs: { 'cc-plugin-agents-md@builtin': { options: { instructionFiles: 'managed-only' } } },
+        }),
+      );
+      process.env.CLAUDE_CONFIG_DIR = config;
+    });
+    afterEach(() => {
+      if (origConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = origConfig;
+    });
+    const block = () => ({
+      slug: PLUGIN_SLUG,
+      version: CURRENT_SENTINEL_VERSION,
+      block: buildClaudeMdBlock(),
+      doc: getDetailDoc(),
+    });
+
+    it('a CLAUDE.md block with auto-adopt off does not count', () => {
+      writeManaged(fakeCwd, block());
+      expect(isAdoptedHere()).toBe(false);
+      expect(effectiveQuiet()).toBe(false);
+    });
+    it('nor does a CLAUDE.local.md block', () => {
+      writeManaged(fakeCwd, block());
+      renameSync(join(fakeCwd, 'CLAUDE.md'), join(fakeCwd, 'CLAUDE.local.md'));
+      const config = process.env.CLAUDE_CONFIG_DIR;
+      process.env.CLAUDE_CONFIG_DIR = join(tmpHome, 'no-settings');
+      expect(isAdoptedHere(), 'premise: the block counts without the setting').toBe(true);
+      process.env.CLAUDE_CONFIG_DIR = config;
+      expect(isAdoptedHere()).toBe(false);
+    });
+    it('steering injected with auto-adopt on still counts', () => {
+      delete process.env.MEM_NO_AUTO_ADOPT;
+      writeManaged(fakeCwd, block());
+      expect(isAdoptedHere()).toBe(true);
+    });
+    // A subdirectory session under a root that opted out: silentAutoAdopt skips the CLAUDE.md blocks
+    // between them under managed-only and returns root-disabled, so nothing steers.
+    it('a CLAUDE.md block between the session and an opted-out root does not count', () => {
+      delete process.env.MEM_NO_AUTO_ADOPT;
+      mkdirSync(join(fakeCwd, '.git'));
+      // Under ~/.claude, so the premise below (another config dir) still reads it as the legacy path.
+      const optOut = memdirPath(fakeCwd);
+      mkdirSync(optOut, { recursive: true });
+      writeFileSync(join(optOut, '.mem-no-auto-adopt'), '');
+      const mid = join(fakeCwd, 'packages');
+      const session = join(mid, 'api');
+      mkdirSync(session, { recursive: true });
+      writeManaged(mid, block());
+      const config = process.env.CLAUDE_CONFIG_DIR;
+      process.env.CLAUDE_CONFIG_DIR = join(tmpHome, 'no-settings');
+      expect(isAdoptedHere(session), 'premise: the block above counts without the setting').toBe(true);
+      process.env.CLAUDE_CONFIG_DIR = config;
+      expect(isAdoptedHere(session)).toBe(false);
+    });
   });
 });
 

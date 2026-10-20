@@ -68,6 +68,9 @@ describe('startup dashboard (T10c)', () => {
       expect(text).toMatch(/Invited-memory 未启用/);
       expect(text).toContain(`${CLI_INVOKE} adopt`);
       expect(text).toMatch(/MEM_NO_ADOPT_HINT=1/);
+      // Auto-adopt has not written CLAUDE.md since v6.20, and this hint shows where it is off
+      // (v6.30.0 pre-tag claims review P2-6).
+      expect(text).not.toMatch(/自动/);
     } finally {
       if (prevNoHint === undefined) delete process.env.MEM_NO_ADOPT_HINT;
       else process.env.MEM_NO_ADOPT_HINT = prevNoHint;

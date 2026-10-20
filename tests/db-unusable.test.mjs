@@ -197,6 +197,8 @@ describe('a schema SQLite cannot read', () => {
     expect(out).toMatch(/schema/);
     expect(out).not.toMatch(/does not recognise it as a database/);
     expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
+    // No command here, so nothing for "until then" to wait on (v6.30.0 pre-tag claims review P3-6).
+    expect(out).not.toMatch(/until then/i);
   });
 });
 

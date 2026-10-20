@@ -371,7 +371,10 @@ describe('citation-stats CLI', () => {
     const output = await captureStdout(() => run(['citation-stats']));
     expect(output).toMatch(/UNAVAILABLE/);
     expect(output).toMatch(/citation_surface_log/); // names the actual failure
-    expect(output).toMatch(/fts-check/); // and the repair
+    // It used to send the reader to `fts-check`, which reads only the FTS indexes and repairs
+    // nothing; a missing table is recreated when any command opens the database (v6.30.0 pre-tag
+    // reviews). No repair is promised.
+    expect(output).not.toMatch(/repair/);
     expect(output).not.toMatch(/no rows in this window yet/i);
   });
 

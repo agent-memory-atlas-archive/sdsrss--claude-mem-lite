@@ -130,7 +130,9 @@ export function enterArm(arm, env, resetMode = () => {}) {
   if (unknown) throw new Error(`unknown cli arm option "${unknown}" in ${arm}`);
   const saved = Object.fromEntries(keys.map((k) => [k, env[k]]));
   if (isCliArm(arm)) {
-    // The baseline runs Claude Code's defaults; an option sets only its own switch.
+    // An option sets only its own switch. cliSpawnEnv sets CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 itself
+    // since D#483, so on this tree `cli` and `cli:noautomem` send the same request; the with-memory
+    // reading of 2026-10-20 was taken on 744c56a6.
     for (const k of keys) delete env[k];
     for (const o of options) {
       if (o === 'noautomem') env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';

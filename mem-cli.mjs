@@ -3232,9 +3232,7 @@ function cmdCitationStats(db, args) {
     // created, `no such table` swallowed into the debug log) read as "no data
     // yet" for as long as the surface stayed unmetered.
     out(`  (UNAVAILABLE — the per-face table could not be read: ${surfaceFunnel.unavailable})`);
-    out(
-      `  this is a failure, not an empty window: run \`${CLI_INVOKE} fts-check check\` to repair the schema`,
-    );
+    out('  this is a failure, not an empty window');
   } else if (surfaceFunnel.surfaces.length === 0) {
     out('  (no rows in this window yet — rows accrue at Stop, one per injection face per session)');
   } else {

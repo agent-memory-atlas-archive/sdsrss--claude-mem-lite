@@ -77,6 +77,7 @@ import {
   isSharedAncestor,
   samePath,
   localFileLinked,
+  userInstructionFiles,
 } from './lib/local-steering.mjs';
 import { CLI_INVOKE } from './cli-path.mjs';
 
@@ -393,19 +394,13 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
         // loads the root's CLAUDE.md as an ancestor, so a block there already steers this
         // session; and an opt-out recorded for the root covers the file that lives there.
         if (!samePath(root, cwd)) {
-          // A block in any directory between the session and the root loads as an ancestor too:
-          // `adopt` run in packages/ and a session in packages/web/src got a root CLAUDE.local.md
-          // on top of packages/CLAUDE.md, the block twice (D#177(2)).
-          for (let d = dirname(cwd); ; d = dirname(d)) {
-            const atRoot = samePath(d, root);
-            if (blockIn(d))
-              return {
-                ok: true,
-                action: 'already-adopted',
-                reason: atRoot ? 'root-claude-md' : 'ancestor-claude-md',
-              };
-            if (atRoot || dirname(d) === d) break;
-          }
+          const above = blockAbove(cwd, root);
+          if (above)
+            return {
+              ok: true,
+              action: 'already-adopted',
+              reason: samePath(above, root) ? 'root-claude-md' : 'ancestor-claude-md',
+            };
           // Off for the project means off here too: no file, no injected copy, no /adopt offer
           // (delta review P2-2; lib/quiet-scope.mjs mirrors it).
           if (isAutoAdoptDisabledFor(root)) return { ok: true, action: 'disabled', reason: 'root-disabled' };
@@ -439,7 +434,11 @@ export function silentAutoAdopt({ cwd, markerDir, markerKey }) {
           agentsMd: r.agentsMd,
         };
       }
-      return { ok: true, action: 'inject' };
+      // managed-only loads no project CLAUDE.md, so the hook does not offer /adopt (v6.30.0 pre-tag
+      // claims review P2-5; inside a git work tree the reason is local-managed-only).
+      return userInstructionFiles() === 'managed-only'
+        ? { ok: true, action: 'inject', reason: 'managed-only' }
+        : { ok: true, action: 'inject' };
     }
     dropLocalSteering(cwd, { atRootOnly: true, keepTracked: true });
     let action = 'already-adopted';
@@ -516,6 +515,16 @@ function blockIn(dir) {
     return readBlock(dir, PLUGIN_SLUG).body !== null;
   } catch {
     return false;
+  }
+}
+
+// The nearest directory above `cwd`, up to and including `root`, whose CLAUDE.md carries the block:
+// the host loads it as an ancestor. `adopt` run in packages/ and a session in packages/web/src got a
+// root CLAUDE.local.md on top of packages/CLAUDE.md, the block twice (D#177(2)).
+function blockAbove(cwd, root) {
+  for (let d = dirname(cwd); ; d = dirname(d)) {
+    if (blockIn(d)) return d;
+    if (samePath(d, root) || dirname(d) === d) return null;
   }
 }
 
@@ -640,7 +649,7 @@ function localSteeringStatus(cwd) {
   const runs = autoAdoptRuns(cwd, root);
   // CLAUDE.md first: where it carries the block, no local file is written and nothing is injected,
   // in a git work tree or not (pre-tag delta review of the D#212 repairs, D11).
-  if (blockIn(cwd) || (root && blockIn(root))) {
+  if (blockIn(cwd) || (root && !samePath(root, cwd) && blockAbove(cwd, root))) {
     const cur = root ? readLocalSteering(root, PLUGIN_SLUG) : null;
     if (cur === null || cur.body === null) return '— none: CLAUDE.md carries the block';
     const kept = localFileLinked(root, cur.path)

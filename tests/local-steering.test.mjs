@@ -455,6 +455,27 @@ describe('SessionStart end to end', () => {
     expect(existsSync(join(app, LOCAL_MD))).toBe(false);
   });
 
+  // v6.30.0 pre-tag claims review P2-5: managed-only loads no project CLAUDE.md, so the CLAUDE.md
+  // /adopt writes outside git steers nothing either (D#219 covered the git work tree only).
+  it('outside git under managed-only, the steering is injected and /adopt is not offered', () => {
+    const plain = join(home, 'work', 'plain');
+    mkdirSync(plain, { recursive: true });
+    const premise = sessionStart(plain);
+    expect(premise.systemMessage ?? '', 'premise: outside git /adopt is offered').toMatch(/\/adopt/);
+    const managed = join(home, 'work', 'plain2');
+    mkdirSync(managed, { recursive: true });
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      join(home, '.claude', 'settings.json'),
+      JSON.stringify({
+        pluginConfigs: { 'cc-plugin-agents-md@builtin': { options: { instructionFiles: 'managed-only' } } },
+      }),
+    );
+    const out = sessionStart(managed);
+    expect(out.hookSpecificOutput.additionalContext).toContain(HEADING);
+    expect(out.systemMessage ?? '').not.toMatch(/\/adopt/);
+  });
+
   it('outside git the steering is still injected', () => {
     const plain = join(home, 'work', 'plain');
     mkdirSync(plain, { recursive: true });
@@ -584,6 +605,22 @@ describe('pre-tag defect review: local steering edges', () => {
     expect(readBlock(pkgs, SLUG).body, 'premise: adopt wrote the block there').not.toBeNull();
     expect(silentAutoAdopt({ cwd: deep })).toMatchObject({ action: 'already-adopted' });
     expect(existsSync(join(app(), LOCAL_MD))).toBe(false);
+  });
+
+  // v6.30.0 pre-tag claims review P2-4: --status there checked only the session's directory and the
+  // root, and promised a root CLAUDE.local.md the next session does not write.
+  it('adopt --status below such a directory names the CLAUDE.md, not a file the next session skips', () => {
+    const pkgs = join(app(), 'packages');
+    const deep = join(pkgs, 'web', 'src');
+    mkdirSync(deep, { recursive: true });
+    captureLog(() => withCwd(pkgs, () => cmdAdopt([])));
+    const status = withCwd(deep, () => captureLog(() => cmdAdopt(['--status'])));
+    expect(status).toMatch(/local: +— none: CLAUDE\.md carries the block/);
+    expect(status).not.toMatch(/next session writes/);
+    // A session at the root still writes its own file, which sessions below then load too.
+    expect(silentAutoAdopt({ cwd: app() })).toMatchObject({ action: 'local' });
+    const twice = withCwd(deep, () => captureLog(() => cmdAdopt(['--status'])));
+    expect(twice).toMatch(/sessions here load it twice/);
   });
 
   // The quiet gate mirrors that: the session is steered by packages/CLAUDE.md even where the root

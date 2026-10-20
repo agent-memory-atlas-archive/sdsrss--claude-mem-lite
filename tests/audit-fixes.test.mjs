@@ -525,6 +525,20 @@ describe('MCP T2 audit fixes (stdio)', () => {
     expect(count).toBe(4);
   });
 
+  // D#468: the seeded rows are 60 days old, so a 365-day window previews 0 of them.
+  it('mem_maintain purge_stale previewing 0 rows does not ask for confirm=true', async () => {
+    await initialize(proc);
+    const resp = await callTool('mem_maintain', {
+      action: 'execute',
+      operations: ['purge_stale'],
+      retain_days: 365,
+    });
+    const text = resp.result?.content?.[0]?.text || '';
+    expect(text).toMatch(/Candidates \(pending-purge, older than 365d\): 0/);
+    expect(text).toContain('Nothing to delete.');
+    expect(text).not.toMatch(/confirm=true/);
+  });
+
   it('T2-P0-A: mem_maintain purge_stale with confirm=true actually deletes', async () => {
     await initialize(proc);
     const resp = await callTool('mem_maintain', {

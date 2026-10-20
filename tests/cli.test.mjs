@@ -2447,6 +2447,14 @@ describe('CLI maintain command', () => {
     const row = testDb.prepare("SELECT id FROM observations WHERE title = 'Pending purge obs preview'").get();
     expect(row).toBeDefined();
   });
+
+  // D#468: a preview of 0 rows invited a --confirm that deletes nothing.
+  it('a purge preview of 0 rows does not ask for --confirm', async () => {
+    const output = await captureStdout(() => run(['maintain', 'execute', '--ops', 'purge_stale']));
+    expect(output).toContain('Candidates (pending-purge, older than 30d): 0');
+    expect(output).toContain('Nothing to delete.');
+    expect(output).not.toContain('re-run with --confirm');
+  });
 });
 
 // ─── browse command ─────────────────────────────────────────────────────────

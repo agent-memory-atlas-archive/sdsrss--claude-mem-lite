@@ -1838,10 +1838,13 @@ server.registerTool(
             'purge_stale preview (confirm=false):',
             `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`,
           ];
-          if (previewRow.candidates > 0) {
-            lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
-            lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
+          if (previewRow.candidates === 0) {
+            // D#468: a confirm of 0 rows deletes nothing, so there is nothing to invite.
+            lines.push('  Nothing to delete.');
+            return lines.join('\n');
           }
+          lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
+          lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
           lines.push('  Nothing was deleted. To delete, re-run with confirm=true:');
           lines.push(
             `  mem_maintain(action="execute", operations=${JSON.stringify(ops)}, confirm=true${args.retain_days ? `, retain_days=${args.retain_days}` : ''}${args.project ? `, project="${args.project}"` : ''})`,

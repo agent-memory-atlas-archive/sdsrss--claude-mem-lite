@@ -2882,10 +2882,13 @@ function cmdMaintain(db, args) {
         'purge_stale preview (no --confirm):',
         `  Candidates (pending-purge, older than ${retainDays}d): ${previewRow.candidates}`,
       ];
-      if (previewRow.candidates > 0) {
-        lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
-        lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
+      if (previewRow.candidates === 0) {
+        // D#468: a confirm of 0 rows deletes nothing, so there is nothing to invite.
+        lines.push('  Nothing to delete.');
+        return lines.join('\n');
       }
+      lines.push(`  Oldest: ${new Date(previewRow.oldest).toISOString().slice(0, 10)}`);
+      lines.push(`  Newest: ${new Date(previewRow.newest).toISOString().slice(0, 10)}`);
       lines.push('  To delete, re-run with --confirm.');
       return lines.join('\n');
     },

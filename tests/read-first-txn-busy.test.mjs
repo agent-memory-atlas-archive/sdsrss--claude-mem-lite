@@ -29,6 +29,7 @@ const { callModelJSONAsync } = await import('../haiku-client.mjs');
 const { persistHaikuSummary, retractPreSavedObs } = await import('../hook-llm.mjs');
 const { resolveEdgeAttribution } = await import('../lib/edge-attribution.mjs');
 const { executeMergeCluster, executeSmartCompressCluster } = await import('../hook-optimize.mjs');
+const { rekeyLegacyProject } = await import('../lib/project-rekey.mjs');
 
 const require = createRequire(import.meta.url);
 const BETTER_SQLITE3 = require.resolve('better-sqlite3');
@@ -179,6 +180,28 @@ describe('background writers that read first wait for another writer', () => {
     );
     expect(error?.code ?? null).toBeNull();
     expect(value.compressed).toBe(true);
+    db.close();
+  }, 20000);
+
+  // Its first statements write a TEMP table, which takes no lock on the main database; the first
+  // on main is a read (v6.30.0 pre-tag reviews: 0-1 ms SQLITE_BUSY).
+  it('rekeyLegacyProject (SessionStart)', async () => {
+    const { dir, file, db } = fileDb();
+    insertSession(db, { id: 's2', project: 'old-id' });
+    const id = Number(
+      insertObs(db, {
+        sessionId: 's2',
+        project: 'old-id',
+        title: 'legacy row',
+        filesModified: '["/r/app/a.mjs"]',
+      }).lastInsertRowid,
+    );
+    const { error, value } = await underForeignWriter(dir, file, 1500, () =>
+      rekeyLegacyProject(db, { dir: '/r/app', project: 'new-id', legacy: 'old-id' }),
+    );
+    expect(error?.code ?? null).toBeNull();
+    expect(value.moved).toBe(1);
+    expect(db.prepare('SELECT project FROM observations WHERE id = ?').get(id).project).toBe('new-id');
     db.close();
   }, 20000);
 });

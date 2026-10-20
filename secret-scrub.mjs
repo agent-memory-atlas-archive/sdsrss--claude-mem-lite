@@ -635,6 +635,7 @@ function cutOffKeyEnd(text, b, be) {
   let armors = 0;
   let shorts = 0;
   let blanks = 0;
+  let beginHeader = false;
   let pendingBlank = false;
   while (next !== -1) {
     // Another BEGIN line is never part of this key; stop before reading it whole.
@@ -649,14 +650,19 @@ function cutOffKeyEnd(text, b, be) {
     }
     if (kind === BLANK) {
       if (shorts > 0) break;
-      // Before any key line, more blank lines than an armor header block ends the reading: each
-      // BEGIN in a run of header lines read the whole blank run on every pass (D#169).
-      if (longs === 0 && ++blanks > MAX_ARMOR_HEADERS) break;
+      // Past a header line holding another BEGIN, more blank lines than an armor header block end
+      // the reading: that BEGIN reads them itself, and each BEGIN in a run of such header lines
+      // read the whole blank run on every pass (D#169). Without one, a cut key below 17+ blank
+      // lines was stored (v6.30.0 pre-tag review).
+      if (longs === 0 && beginHeader && ++blanks > MAX_ARMOR_HEADERS) break;
       pendingBlank = true;
       continue;
     }
     if (longs === 0) {
-      if (kind === ARMOR && ++armors <= MAX_ARMOR_HEADERS) continue;
+      if (kind === ARMOR && ++armors <= MAX_ARMOR_HEADERS) {
+        if (core.includes('-----BEGIN ')) beginHeader = true;
+        continue;
+      }
       if (kind !== LONG && kind !== CUT) break;
     }
     if (kind === LONG && shorts === 0) {

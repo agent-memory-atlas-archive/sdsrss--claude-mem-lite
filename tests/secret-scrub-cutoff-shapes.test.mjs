@@ -588,3 +588,30 @@ describe('a short first key line under a quote-plus opener', () => {
     expect(scrubSecrets(`x = '+-----BEGIN EC PRIVATE KEY-----\n${plain}…`)).toContain(plain);
   });
 });
+
+// D#169's first fix stopped reading after 16 blank lines before any key line, so a cut key with 17
+// or more blank lines between its BEGIN (or its headers) and its body was stored; it had been erased
+// (v6.30.0 pre-tag review). The bound now applies only after a header line that holds another
+// BEGIN, whose own reading covers the lines below it.
+describe('blank lines between a BEGIN and a cut key body', () => {
+  const body = [b64(64), b64(64), `${b64(40)}…`];
+  const windows = body.flatMap((l) => [l.slice(0, 16), l.slice(-17, -1)]);
+  for (const blanks of [16, 17, 20, 40]) {
+    for (const [eol, sep] of [
+      ['LF', '\n'],
+      ['CRLF', '\r\n'],
+    ]) {
+      it(`${blanks} blank lines, ${eol}`, () => {
+        const text = ['-----BEGIN RSA PRIVATE KEY-----', ...Array(blanks).fill(''), ...body].join(sep);
+        const out = scrubSecrets(`$ head id_rsa${sep}${text}`);
+        expect(windows.filter((w) => out.includes(w))).toEqual([]);
+        expect(out).toContain('$ head id_rsa');
+      });
+    }
+  }
+  it('a PGP header, then 17 blank lines', () => {
+    const text = ['-----BEGIN PGP PRIVATE KEY BLOCK-----', 'Version: 1', ...Array(17).fill(''), ...body];
+    const out = scrubSecrets(text.join('\n'));
+    expect(windows.filter((w) => out.includes(w))).toEqual([]);
+  });
+});

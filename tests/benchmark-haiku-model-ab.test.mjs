@@ -131,4 +131,21 @@ describe('enterArm', () => {
     restore();
     expect(env).toStrictEqual(withCli());
   });
+  // cli:<option>… sets Claude Code switches the spawn inherits (cliSpawnEnv passes process.env on):
+  // the auto-memory section and the effort level (D#483, D#334), verified to change the request.
+  it('a cli arm with options sets only those switches, and the plain cli arm clears them', () => {
+    const env = { ...withCli(), CLAUDE_CODE_EFFORT_LEVEL: 'high' };
+    const restore = enterArm(`${CLI_ARM}:noautomem:low`, env);
+    expect(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    expect(env.CLAUDE_CODE_EFFORT_LEVEL).toBe('low');
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    restore();
+    expect(env).toStrictEqual({ ...withCli(), CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    const restorePlain = enterArm(CLI_ARM, env);
+    expect(env.CLAUDE_CODE_EFFORT_LEVEL, 'the baseline runs Claude Code defaults').toBeUndefined();
+    restorePlain();
+  });
+  it('an unknown cli arm option is refused rather than ignored', () => {
+    expect(() => enterArm(`${CLI_ARM}:fast`, {})).toThrow(/fast/);
+  });
 });

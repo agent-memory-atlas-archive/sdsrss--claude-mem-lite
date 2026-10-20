@@ -66,6 +66,12 @@ const DEFAULT_ARMS = ['anthropic/claude-haiku-4.5', 'anthropic/claude-haiku-5.5'
 const CONTROL_SLUG = 'anthropic/claude-haiku-0-0-no-such-model';
 export const MISSING_CLI = join(HERE, '.no-such-claude-cli');
 export const CLI_ARM = 'cli';
+// `cli:<option>…`: the cli arm with Claude Code switches the spawn inherits (cliSpawnEnv passes
+// process.env on). `noautomem` drops the auto-memory section from the system prompt; an effort
+// level sets it. Both were checked on Claude Code 2.1.304 against a stub endpoint to change the
+// request body (2026-10-20; D#483, D#334).
+const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const isCliArm = (arm) => arm === CLI_ARM || arm.startsWith(`${CLI_ARM}:`);
 const CONTROL_ITEMS = 2;
 
 /** `n` items evenly spaced over `items` (deterministic; all of them when n >= length). */
@@ -112,10 +118,24 @@ export async function runSite(items, arms, call) {
  * because detectMode() caches its answer.
  */
 export function enterArm(arm, env, resetMode = () => {}) {
-  const keys = ['OPENROUTER_MODEL', 'OPENROUTER_API_KEY', 'CLAUDE_CODE_PATH'];
+  const keys = [
+    'OPENROUTER_MODEL',
+    'OPENROUTER_API_KEY',
+    'CLAUDE_CODE_PATH',
+    'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+    'CLAUDE_CODE_EFFORT_LEVEL',
+  ];
+  const options = isCliArm(arm) ? arm.split(':').slice(1) : [];
+  const unknown = options.find((o) => o !== 'noautomem' && !EFFORT_LEVELS.has(o));
+  if (unknown) throw new Error(`unknown cli arm option "${unknown}" in ${arm}`);
   const saved = Object.fromEntries(keys.map((k) => [k, env[k]]));
-  if (arm === CLI_ARM) {
+  if (isCliArm(arm)) {
+    // The baseline runs Claude Code's defaults; an option sets only its own switch.
     for (const k of keys) delete env[k];
+    for (const o of options) {
+      if (o === 'noautomem') env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+      else env.CLAUDE_CODE_EFFORT_LEVEL = o;
+    }
   } else {
     env.OPENROUTER_MODEL = arm;
     env.CLAUDE_CODE_PATH = MISSING_CLI;
@@ -240,7 +260,7 @@ async function main() {
     }
   };
   let cliVersion = null;
-  if (arms.includes(CLI_ARM)) {
+  if (arms.some(isCliArm)) {
     const restore = enterArm(CLI_ARM, process.env, hc._resetMode);
     try {
       cliVersion = execFileSync(hc.getClaudePath(), ['--version'], {

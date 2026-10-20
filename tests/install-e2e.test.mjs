@@ -27,6 +27,7 @@ import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 import { initSchema, CURRENT_SCHEMA_VERSION } from '../schema.mjs';
 import { randomUUID } from 'crypto';
+import { createRequire } from 'module';
 import { makeFixtureTracker } from './test-helpers.mjs';
 
 const INSTALL_PATH = resolve('install.mjs');
@@ -230,8 +231,14 @@ describe('E2E: Plugin install mode', () => {
       const pluginRoot = join(home, '.claude', 'plugins', 'cache', 'sdsrss', 'claude-mem-lite');
       mkdirSync(dataDir, { recursive: true });
       mkdirSync(pluginRoot, { recursive: true });
-      // Pre-create node_modules symlink (simulating previous install)
-      symlinkSync(resolve('node_modules'), join(dataDir, 'node_modules'));
+      // Pre-create node_modules symlink (simulating previous install). The node_modules Node loads
+      // better-sqlite3 from, not `resolve('node_modules')`: relative to the working directory that
+      // one dangled in a checkout without its own (a fresh worktree), and setup.sh then ran a real
+      // `npm install` (D#408).
+      const nodeModules = dirname(
+        dirname(createRequire(import.meta.url).resolve('better-sqlite3/package.json')),
+      );
+      symlinkSync(nodeModules, join(dataDir, 'node_modules'));
 
       // Stale global MCP that setup should clean
       writeFileSync(
@@ -247,11 +254,28 @@ describe('E2E: Plugin install mode', () => {
         ),
       );
 
+      // An npm first on PATH that records its calls: setup.sh's slow path runs `npm install`, which
+      // in a checkout without node_modules rewrote the repository's lockfile (D#408).
+      const binDir = join(home, 'bin');
+      const npmCalls = join(home, 'npm-calls');
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        join(binDir, 'npm'),
+        `#!/usr/bin/env bash\necho "$*" >> ${JSON.stringify(npmCalls)}\nexit 1\n`,
+      );
+      chmodSync(join(binDir, 'npm'), 0o755);
+
       execFileSync('bash', [SETUP_PATH], {
         encoding: 'utf8',
-        env: { ...process.env, HOME: home, CLAUDE_PLUGIN_ROOT: pluginRoot },
+        env: {
+          ...process.env,
+          HOME: home,
+          CLAUDE_PLUGIN_ROOT: pluginRoot,
+          PATH: `${binDir}:${process.env.PATH}`,
+        },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
+      expect(existsSync(npmCalls) ? readFileSync(npmCalls, 'utf8') : '', 'setup.sh ran npm').toBe('');
 
       // node_modules symlinked from plugin cache to data dir
       expect(existsSync(join(pluginRoot, 'node_modules'))).toBe(true);

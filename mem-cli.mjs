@@ -292,8 +292,15 @@ async function cmdSearch(db, args, { llm } = {}) {
   }
   const useOr = flags.or === true || flags.or === 'true';
   // stderr, so a --json consumer's stdout stays one parseable document (E2E 2026-10-16, cli F5).
-  const opNote = ignoredOperatorNote(query, { orHint: 'use --or for any-word matching', orMode: useOr });
-  if (opNote) process.stderr.write(`[mem] ${opNote}\n`);
+  // Written once the search has run: a fired AND→OR fallback did match any word, so OR then gets
+  // no note (it would say every word must match under a results line that says it relaxed).
+  const emitOpNote = (orFallback) => {
+    const opNote = ignoredOperatorNote(query, {
+      orHint: 'use --or for any-word matching',
+      orMode: useOr || orFallback,
+    });
+    if (opNote) process.stderr.write(`[mem] ${opNote}\n`);
+  };
   // R-1: opt-in flag to surface hook-llm fallback titles ("Modified X", "Worked on X", raw
   // error logs, etc.) which are otherwise filtered from default search. Use for auditing or
   // when explicitly searching for a file/command that produced a degraded title.
@@ -351,6 +358,7 @@ async function cmdSearch(db, args, { llm } = {}) {
   // --deep proceeds even when the literal query sanitizes to nothing — its LLM
   // rewrite may still produce searchable variants (F3, parity with server.mjs).
   if (!ftsQuery && deepMode === 'normal') {
+    emitOpNote(false);
     // A query that sanitizes to an empty FTS expression (only operators/punctuation/
     // sub-min-length tokens) is a zero-result search, not a malformed one. In --json
     // mode emit the same empty envelope as the no-match path below so programmatic
@@ -454,6 +462,7 @@ async function cmdSearch(db, args, { llm } = {}) {
   );
   const isDeep = res.isDeep;
   const orFallbackFired = res.orFallbackFired;
+  emitOpNote(orFallbackFired);
   const deepVariants = res.variants;
   const paged = res.page;
   const total = res.total;

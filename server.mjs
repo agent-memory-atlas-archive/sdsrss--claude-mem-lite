@@ -575,9 +575,11 @@ function formatSearchOutput(
     `${header}:${hasMixed ? ' (# observation, S# session, P# prompt, E# event)' : ''}${autoLegend(paginatedResults)}\n`,
   );
   if (!listing) {
+    // A fired AND→OR fallback did match any word, so OR gets no note (it would say every word
+    // must match under a results line that says the search relaxed).
     const opNote = ignoredOperatorNote(args.query, {
       orHint: 'pass or=true for any-word matching',
-      orMode: !!args.or,
+      orMode: !!args.or || orFallbackFired,
     });
     if (opNote) lines.push(`${opNote}\n`);
   }

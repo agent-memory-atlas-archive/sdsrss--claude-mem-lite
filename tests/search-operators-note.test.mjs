@@ -52,6 +52,11 @@ describe('mem_search tells the caller', () => {
     expect(await text({ query: 'redis OR failover' })).toMatch(/or=true/);
     expect(await text({ query: 'redis OR failover', or: true })).not.toMatch(/not supported/);
   });
+  it('OR is not mentioned when the search relaxed to OR', async () => {
+    const t = await text({ query: 'redis OR zzzqqq' });
+    expect(t, 'premise: the AND→OR fallback fired').toMatch(/relaxed AND→OR/);
+    expect(t).not.toMatch(/every word must match/);
+  });
   it('control: a plain query carries no note', async () => {
     expect(await text({ query: 'redis pool' })).not.toMatch(/not supported/);
   });

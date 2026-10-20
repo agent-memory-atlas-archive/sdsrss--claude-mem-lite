@@ -251,6 +251,13 @@ describe('search says which operators it ignored', () => {
     expect(cli('search', 'redis OR pool').stderr).toMatch(/--or/);
     expect(cli('search', 'redis pool').stderr).not.toMatch(/not supported/);
   });
+  // Triage 2026-10-20: when no row has every word, search relaxes to OR, and the note still said
+  // "every word must match" under a results line that says it did not.
+  it('says nothing about OR when the search relaxed to OR', () => {
+    const r = cli('search', 'redis OR zzzqqq');
+    expect(r.stdout, 'premise: the AND→OR fallback fired').toMatch(/relaxed AND→OR/);
+    expect(r.stderr).not.toMatch(/every word must match/);
+  });
 });
 
 // E2E 2026-10-16 (cli F10): the content writers took any flag, applied what they read and said

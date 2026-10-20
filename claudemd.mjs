@@ -365,7 +365,8 @@ export function needsRefresh(cwd, { slug, version, block, doc }) {
  * CLAUDE.md is created if absent. Only our slug-scoped region is rewritten;
  * everything else in the file is preserved verbatim.
  *
- * @returns {{action: 'created'|'updated'|'unchanged'}} (block disposition)
+ * @returns {{action: 'created'|'updated'|'unchanged', docAction: 'created'|'updated'|'unchanged'}}
+ *   (block disposition, and the detail doc's)
  */
 export function writeManaged(cwd, { slug, version, block, doc }) {
   const { action } = writeBlockAt(claudeMdPath(cwd), { slug, version, block });
@@ -378,6 +379,7 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const existingDoc = existsSync(dp) ? readFileSync(dp, 'utf8') : null;
   if (existingDoc !== docContent) atomicWrite(dp, docContent);
+  const docAction = existingDoc === null ? 'created' : existingDoc === docContent ? 'unchanged' : 'updated';
 
   // Only when what the sidecar records changed: it is committed alongside the block in a team
   // repo, and a fresh writtenAt on every re-run of `adopt` left a diff each time (E2E
@@ -393,7 +395,7 @@ export function writeManaged(cwd, { slug, version, block, doc }) {
   if (!(prev?.version === version && prev?.blockHash === blockHash && prev?.docHash === docHash)) {
     writeState(cwd, slug, { version, blockHash, docHash, writtenAt: new Date().toISOString() });
   }
-  return { action };
+  return { action, docAction };
 }
 
 /**

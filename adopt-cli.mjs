@@ -262,7 +262,12 @@ function adoptOne(cwd, { force, dryRun }) {
           : local.action === 'failed'
             ? ` (could not remove the block from ${local.path}, so sessions here load it twice)`
             : ` (+removed the block from ${local.path})`;
-    log(`[adopt] ${cwd} → ${r.action}${migNote}${localNote}${importNote}`);
+    // The block's disposition alone read "unchanged" over a rewritten detail doc (D#470).
+    const docNote =
+      r.action === 'unchanged' && r.docAction !== 'unchanged'
+        ? ` (+${r.docAction === 'created' ? 'wrote' : 'refreshed'} detail doc)`
+        : '';
+    log(`[adopt] ${cwd} → ${r.action}${docNote}${migNote}${localNote}${importNote}`);
     for (const line of elsewhere('stops')) log(line);
     for (const line of sharedNote('stops')) log(line);
     // The copy that could not come out loads beside CLAUDE.md: said, and not a success (R3-4).

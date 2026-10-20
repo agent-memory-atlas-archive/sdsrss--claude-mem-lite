@@ -6,8 +6,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { writeManaged } from '../claudemd.mjs';
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let dir;
 beforeEach(() => {
@@ -42,5 +46,35 @@ describe('writeManaged leaves an unchanged state sidecar byte-identical', () => 
     writeFileSync(STATE(), '{ torn');
     writeManaged(dir, args());
     expect(() => JSON.parse(readFileSync(STATE(), 'utf8'))).not.toThrow();
+  });
+});
+
+// Triage 2026-10-20 (D#470): writeManaged reported the block alone, so an `adopt` that rewrote a
+// stale detail doc printed "→ unchanged".
+describe('adopt reports a detail doc it rewrote', () => {
+  it('writeManaged says what it did to the doc', () => {
+    expect(writeManaged(dir, args()).docAction).toBe('created');
+    expect(writeManaged(dir, args()).docAction).toBe('unchanged');
+    const r = writeManaged(dir, args('block v1', 'doc v2'));
+    expect(r.action).toBe('unchanged');
+    expect(r.docAction).toBe('updated');
+  });
+
+  it('the adopt line names the doc refresh', () => {
+    const home = mkdtempSync(join(tmpdir(), 'mem-adopt-rerun-home-'));
+    try {
+      const env = { ...process.env, HOME: home, CLAUDE_MEM_DIR: join(home, 'data'), MEM_NO_AUTO_ADOPT: '1' };
+      delete env.CLAUDE_CONFIG_DIR;
+      delete env.CLAUDE_PROJECT_DIR;
+      const adopt = () =>
+        execFileSync(process.execPath, [join(REPO, 'cli.mjs'), 'adopt'], { cwd: dir, env, encoding: 'utf8' });
+      adopt();
+      expect(adopt(), 'premise: a re-run with nothing to do').toMatch(/→ unchanged$/m);
+      const doc = join(dir, '.claude', 'plugin_claude_mem_lite.md');
+      writeFileSync(doc, readFileSync(doc, 'utf8') + '\nstale line\n');
+      expect(adopt()).toMatch(/→ unchanged \(\+refreshed detail doc\)/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

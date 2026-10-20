@@ -43,3 +43,18 @@ describe('adopt detail doc — citation feedback claim matches the decay loop', 
     db.close();
   });
 });
+
+// D#471: the detail doc named docs/CLAUDE-MD-STEERING-PLAN.md, a file the repository does not
+// have; and the doc is written into the user's project or the plugin's data dir, where a
+// repository-relative docs/ path resolves to nothing anyway.
+describe('adopt text points at no repository-relative docs/ path', () => {
+  it('neither the detail doc nor the CLAUDE.md block names one', async () => {
+    const { buildClaudeMdBlock } = await import('../adopt-content.mjs');
+    for (const [name, text] of [
+      ['detail doc', getDetailDoc()],
+      ['CLAUDE.md block', buildClaudeMdBlock()],
+    ]) {
+      expect(text, name).not.toMatch(/(^|[\s(`])docs\/[\w./-]+\.md/m);
+    }
+  });
+});

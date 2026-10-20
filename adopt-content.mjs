@@ -73,7 +73,6 @@ export function getDetailDoc() {
 
 > 由 \`${CLI} adopt\` 生成、随版本自动刷新；卸载用 \`${CLI} unadopt\`。
 > 精炼触发表由 SessionStart 注入会话上下文（显式 \`${CLI} adopt\` 过的项目则写在 \`CLAUDE.md\` 的 \`claude-mem-lite\` 托管块里）；本文件是其展开。
-> 设计背景见 docs/CLAUDE-MD-STEERING-PLAN.md。
 
 > **本文下方所有命令写作 \`${CLI} <cmd>\`。** 该名字只在全局装过
 > （\`npm i -g claude-mem-lite\`）时才在 PATH 上；否则用等价的

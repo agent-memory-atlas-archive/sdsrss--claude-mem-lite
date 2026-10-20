@@ -681,7 +681,10 @@ function cutOffKeyEnd(text, b, be) {
     break;
   }
   if (longs === 0) return -1;
-  const magic = KEY_MAGIC_RE.test(first) || (text.slice(b, be).includes('PGP') && PGP_MAGIC_RE.test(first));
+  // Under an opener whose prefix does not match the diff lines below it (`'+`, `rb'+`,
+  // `+KEY = '''`) the line still starts with its `+`; the magic is tested without it (D#167).
+  const body = first.replace(/^[-+]/, '');
+  const magic = KEY_MAGIC_RE.test(body) || (text.slice(b, be).includes('PGP') && PGP_MAGIC_RE.test(body));
   return longs >= 2 || armors > 0 || longest >= 40 || magic ? end : -1;
 }
 

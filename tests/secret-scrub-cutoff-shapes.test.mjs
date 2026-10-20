@@ -567,3 +567,24 @@ describe('v6.19.4 pre-tag reviews', () => {
     expect(out).not.toContain(last);
   });
 });
+
+// D#167: a cut key whose one full line is 16-39 characters, under an opener whose prefix does
+// not match the `+` diff lines below it (`'+`, `rb'+`, `+KEY = '''`). The line keeps its `+`,
+// so the key-magic test saw `+MHcC…` and the line was stored. A plain `+` prefix was erased.
+describe('a short first key line under a quote-plus opener', () => {
+  const line = `+MHcCAQEEIB${b64(17)}`;
+  it.each([
+    ['a plain diff prefix', '+-----BEGIN EC PRIVATE KEY-----'],
+    ['a quote-plus opener', "x = '+-----BEGIN EC PRIVATE KEY-----"],
+    ['a bytes-literal opener', "rb'+-----BEGIN EC PRIVATE KEY-----"],
+    ['a triple-quote opener', "+KEY = '''-----BEGIN EC PRIVATE KEY-----"],
+  ])('%s', (_name, begin) => {
+    expect(line.length - 1, 'premise: 16-39 characters after the diff mark').toBeLessThan(40);
+    expect(scrubSecrets(`${begin}\n${line}…`)).not.toContain(line.slice(1, 20));
+  });
+  // The other direction: a `+` line that does not start with a key magic stays.
+  it('keeps a short base64 line with no key magic', () => {
+    const plain = `+QUJD${b64(23)}`;
+    expect(scrubSecrets(`x = '+-----BEGIN EC PRIVATE KEY-----\n${plain}…`)).toContain(plain);
+  });
+});

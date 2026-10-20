@@ -592,8 +592,8 @@ describe('a short first key line under a quote-plus opener', () => {
 // D#504 F1: one cut key line of 16-39 characters counts as key material only when it starts the
 // way a key encoding starts, and that test was a list of five prefixes. The DER headers below are
 // from keys OpenSSL 3.5.5 generated on 2026-10-20 (`openssl ecparam -genkey`, `openssl genpkey`,
-// `openssl pkcs8 -topk8`); none of them is on the list, so `head -c 60` of any of these keys stored
-// up to 22 bytes of the private key.
+// `openssl pkcs8 -topk8`); none of them is on the list, so a first line cut to 16-39 characters
+// was stored.
 describe('a short first key line of a key type the prefix list missed', () => {
   it.each([
     ['secp256k1 SEC1', 'MHQCAQEEI'],

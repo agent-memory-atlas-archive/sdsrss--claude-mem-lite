@@ -389,9 +389,10 @@ const B64_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567
 
 /**
  * Whether base64 `s` starts the way a DER private key starts: a SEQUENCE holding an INTEGER 0 or 1
- * (PKCS#1, PKCS#8, SEC1, DSA) or a SEQUENCE and an OID (encrypted PKCS#8). The prefix list above
- * missed every key whose length byte gives another second character: secp256k1 `MHQC`, P-521
- * `MIHc`/`MIHu`, Ed448 `MEcC`, X448 `MEYC`, the 192/224-bit curves (D#504 F1).
+ * (PKCS#1, PKCS#8, SEC1, DSA) or a SEQUENCE and an OID (encrypted PKCS#8; a public key's
+ * SubjectPublicKeyInfo starts that way too, so a public-key line under a PRIVATE KEY marker is
+ * erased as well). The prefix list above missed keys whose DER header begins otherwise: secp256k1
+ * `MHQC`, P-521 `MIHc`/`MIHu`, Ed448 `MEcC`, X448 `MEYC`, the 192/224-bit curves and others (D#504 F1).
  */
 function isDerKeyStart(s) {
   if (s.length < 12) return false;

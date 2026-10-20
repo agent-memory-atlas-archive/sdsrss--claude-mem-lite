@@ -480,8 +480,7 @@ function nextLine(text, s, u) {
       if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
         let next = j + 1;
         if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
-        // The pattern starts with a quote; testing for one first keeps it off every other break.
-        if (u === 1 && (text[next] === '"' || text[next] === "'")) {
+        if (u === 1) {
           CONCAT_AFTER_RE.lastIndex = next;
           const m = CONCAT_AFTER_RE.exec(text);
           if (m) next += m[0].length;
@@ -523,21 +522,16 @@ function prevLine(text, ls, u, floor) {
   return { start: i + 1, end: bs };
 }
 
-/**
- * A regex for the line prefix `prefix` has, with digits free and grep's `:`/`-` interchangeable.
- * `inert`: it leaves every line that is blank with no prefix blank. Such a line is spaces, or starts
- * after them with a quote, `<` or `\` (lineCore keeps nothing else), so a prefix starting with
- * anything else matches none of them, and `[-+ ]` takes only a space from one (D#500).
- */
+/** A regex for the line prefix `prefix` has, with digits free and grep's `:`/`-` interchangeable. */
 function prefixShape(prefix) {
   const body = prefix.replace(/^[ \t]+/, '');
   if (!body || body.length > 256) return null;
-  if (body === '-' || body === '+') return Object.assign(/^[ \t]*[-+ ]/, { inert: true });
+  if (body === '-' || body === '+') return /^[ \t]*[-+ ]/;
   const src = body
     .replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
     .replace(/\d+/g, '\\d+')
     .replace(/[:-]/g, '[:-]');
-  return Object.assign(new RegExp(`^[ \\t]*${src}`), { inert: !/^["'`<\\]/.test(body) });
+  return new RegExp(`^[ \\t]*${src}`);
 }
 
 /** The judged part of line [s, e): no prefix of the key's shape, no padding, no string quotes. */
@@ -599,162 +593,6 @@ function cutRun(core) {
   return m[0].length >= 40 || CUT_MARK_RE.test(core.slice(m[0].length)) ? m[0] : null;
 }
 
-// D#500: a reading goes over a run of blank lines line by line, and every BEGIN that reaches the run
-// read it again: 40 labelled values (scrubSecrets' 32 passes), then a BEGIN and 16 armor headers
-// holding a BEGIN each, over 200,000 blank lines, read 37x benign text (v6.30.0, 2026-10-20).
-// Stopping after some number of blank lines stored cut keys below them twice (v6.30.0 pre-tag
-// reviews r1, r2), so nothing here stops a reading: a run of lines that are blank with no line
-// prefix is walked once per pass, by break depth, and a reading jumps to where it ends. With a prefix that is not `inert`, the lines of the run that
-// prefix matches are looked up in an index of the run's distinct lines, and the reading resumes at
-// the first one it leaves non-blank. Every line a reading skips is one it would have read as blank.
-//
-// A run's positions are kept as offsets from the end of the text, and a later pass of the same call
-// reuses it only where the text from its first line to the end is unchanged: a run is read forward
-// from that line, so it is then the same run. A pass that scrubs text before a run (the labelled
-// values that keep the loop going) leaves it so. Where that text begins is found once per pass,
-// by comparing the pass's text with the previous one from the end, and the runs before it are
-// dropped: checking each run against the rest of the text was quadratic (v6.30.1 pre-tag review).
-
-/** Runs carried between the passes of the scrubSecrets call under way, and the last pass's text. */
-let carried = null;
-
-/** Keep the carried runs that start in the part of `text` the previous pass's text ends with. */
-function pruneCarried(text) {
-  const prev = carried.text;
-  carried.text = text;
-  if (prev === null || carried.runs.size === 0) return;
-  let i = text.length;
-  let j = prev.length;
-  while (i > 0 && j > 0 && text.charCodeAt(i - 1) === prev.charCodeAt(j - 1)) {
-    i--;
-    j--;
-  }
-  const min = i - text.length;
-  for (const [key, run] of carried.runs) if (run.from < min) carried.runs.delete(key);
-}
-
-/** The run of lines blank with no prefix that starts at line start `s` (depth `u`); recorded. */
-function blankRunAt(text, runs, s, u) {
-  let byStart = runs.get(u);
-  if (!byStart) runs.set(u, (byStart = new Map()));
-  let run = byStart.get(s);
-  if (run) return run;
-  const L = text.length;
-  const key = `${u}:${s - L}`;
-  run = carried?.runs.get(key);
-  if (!run) {
-    const starts = [];
-    const ends = [];
-    let p = s;
-    // The last non-empty line found blank: a run mostly repeats one, so most lines skip lineCore.
-    let same = '';
-    while (p !== -1) {
-      const line = nextLine(text, p, u);
-      const len = line.end - p;
-      if (len > 0 && !(len === same.length && text.startsWith(same, p))) {
-        if (lineCore(text, p, line.end, null).core !== '') break;
-        same = text.slice(p, line.end);
-      }
-      starts.push(p - L);
-      ends.push(line.end - L);
-      p = line.next;
-    }
-    run = { starts, ends, end: p === -1 ? null : p - L, index: null, from: s - L };
-    if (starts.length > 0) carried?.runs.set(key, run);
-  }
-  byStart.set(s, run);
-  return run;
-}
-
-/** The first index in sorted `list` whose value is >= `x`, or -1. */
-function firstAtOrAfter(list, x) {
-  let lo = 0;
-  let hi = list.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (list[mid] < x) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo < list.length ? lo : -1;
-}
-
-/** The run's distinct lines, joined for one regex pass per prefix, and where each one occurs. */
-function indexRun(text, run) {
-  const L = text.length;
-  const ids = new Map();
-  const texts = [];
-  const where = [];
-  let id = -1;
-  for (let k = 0; k < run.starts.length; k++) {
-    const s = run.starts[k] + L;
-    const len = run.ends[k] - run.starts[k];
-    // The same line as the one before: no slice and no lookup.
-    if (id === -1 || len !== texts[id].length || !text.startsWith(texts[id], s)) {
-      const t = text.slice(s, s + len);
-      id = ids.get(t);
-      if (id === undefined) {
-        id = texts.length;
-        ids.set(t, id);
-        texts.push(t);
-        where.push([]);
-      }
-    }
-    where[id].push(k);
-  }
-  const offsets = [];
-  let off = 0;
-  for (const t of texts) {
-    offsets.push(off);
-    off += t.length + 1;
-  }
-  return { texts, where, offsets, joined: texts.join('\n') };
-}
-
-/** The index of the first line from `i` on that `shape` matches and leaves non-blank, or -1. */
-function firstStop(text, run, i, shape) {
-  if (!run.index) run.index = indexRun(text, run);
-  const { texts, where, offsets, joined } = run.index;
-  if (!shape.scan) shape.scan = new RegExp(`(?<![^\\n])${shape.source.slice(1)}`, 'g');
-  shape.scan.lastIndex = 0;
-  let best = -1;
-  for (let m; (m = shape.scan.exec(joined));) {
-    const id = firstAtOrAfter(offsets, m.index);
-    const t = texts[id];
-    if (lineCore(t, 0, t.length, shape).core === '') continue;
-    const at = firstAtOrAfter(where[id], i);
-    if (at !== -1 && (best === -1 || where[id][at] < best)) best = where[id][at];
-  }
-  return best;
-}
-
-/**
- * Where a reading with `shape` at depth `u` goes on from, given that the line before `e` was blank:
- * `e` itself when that line is not blank with no prefix, else the first line of the run it leaves
- * non-blank, or the run's end (-1 at the end of the text). `cursor` keeps the run a reading resumed
- * inside, so a later blank line in it is found there.
- */
-function skipBlankRun(text, runs, e, u, shape, cursor) {
-  const L = text.length;
-  const rel = e - L;
-  let run = null;
-  let i = 0;
-  const cur = cursor.run;
-  if (cur && cur.starts.length > 0 && rel > cur.starts[0] && (cur.end === null || rel < cur.end)) {
-    const k = firstAtOrAfter(cur.starts, rel);
-    if (k !== -1 && cur.starts[k] === rel) {
-      run = cur;
-      i = k;
-    }
-  }
-  if (!run) run = blankRunAt(text, runs, e, u);
-  cursor.run = run;
-  if (run.starts.length === 0) return e;
-  const end = run.end === null ? -1 : run.end + L;
-  if (!shape || shape.inert) return end;
-  const k = firstStop(text, run, i, shape);
-  return k === -1 ? end : run.starts[k] + L;
-}
-
 /**
  * Where the key that starts with the BEGIN at [b, be) ends, or -1 when no key material follows it.
  * Header lines and blank lines may come first; then 16+-character base64 lines (blank lines only
@@ -764,7 +602,7 @@ function skipBlankRun(text, runs, e, u, shape, cursor) {
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
  * block never gets here; the block pattern above takes it first.
  */
-function cutOffKeyEnd(text, b, be, runs) {
+function cutOffKeyEnd(text, b, be) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
   let i = be;
   for (
@@ -826,7 +664,6 @@ function cutOffKeyEnd(text, b, be, runs) {
   let armors = 0;
   let shorts = 0;
   let pendingBlank = false;
-  const cursor = { run: null };
   while (next !== -1) {
     // Another BEGIN line is never part of this key; stop before reading it whole.
     if (!shape && text.startsWith('-----BEGIN ', next)) break;
@@ -841,8 +678,6 @@ function cutOffKeyEnd(text, b, be, runs) {
     if (kind === BLANK) {
       if (shorts > 0) break;
       pendingBlank = true;
-      // The blank lines after this one, read once per pass for every reading that reaches them.
-      if (next !== -1) next = skipBlankRun(text, runs, next, u, shape, cursor);
       continue;
     }
     if (longs === 0) {
@@ -884,14 +719,12 @@ function cutOffKeyEnd(text, b, be, runs) {
 
 function scrubCutOffKeys(text) {
   if (!text.includes('PRIVATE KEY')) return text;
-  if (carried) pruneCarried(text);
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;
   let m;
-  const runs = new Map();
   while ((m = KEY_BEGIN_RE.exec(text))) {
-    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, runs);
+    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
     if (end === -1) continue;
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;
@@ -1082,17 +915,12 @@ const MAX_SCRUB_PASSES = 32;
 export function scrubSecrets(text) {
   if (!text || typeof text !== 'string') return text || '';
   let result = stripPrivate(text);
-  carried = { text: null, runs: new Map() };
-  try {
-    for (let pass = 1; ; pass++) {
-      const before = result;
-      for (const [pattern, replacement] of SECRET_PATTERNS) {
-        result = result.replace(pattern, replacement);
-      }
-      if (result === before || pass >= MAX_SCRUB_PASSES) break;
+  for (let pass = 1; ; pass++) {
+    const before = result;
+    for (const [pattern, replacement] of SECRET_PATTERNS) {
+      result = result.replace(pattern, replacement);
     }
-  } finally {
-    carried = null;
+    if (result === before || pass >= MAX_SCRUB_PASSES) break;
   }
   return result;
 }

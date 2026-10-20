@@ -27,12 +27,6 @@ const ms = (fn) => {
 const CHAIN = Array.from({ length: 40 }, (_, i) => (i % 2 ? 'secret: abcdefgh' : 'token: abcdefgh')).join(
   ' ',
 );
-// 16 armor header lines, each holding a BEGIN, under a line prefix (D#500).
-const ARMOR_BEGINS = (prefix) =>
-  Array.from(
-    { length: 16 },
-    (_, i) => `${prefix}X-h${String.fromCharCode(65 + i)}: -----BEGIN RSA PRIVATE KEY-----\n`,
-  ).join('');
 
 describe('scrubSecrets stays linear on crafted input (D#130)', () => {
   const shapes = {
@@ -97,22 +91,17 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       CHAIN + ' ' + JSON.stringify("a'a'a'a'a'a'-----BEGIN RSA PRIVATE KEY-----\n-abc def\n".repeat(N / 55)),
     // v6.19.2 pre-tag defect review F1: a quote then a whitespace run after an escaped break; the
     // continuation pattern split the run between two quantifiers (200k: 16-19 s).
-    // D#500: a BEGIN and 16 armor headers holding a BEGIN each, over a run of blank lines; every BEGIN
-    // read the whole run (2026-10-20, v6.30.0: 37x benign as written, 25-31x with lines of spaces, of
-    // quotes, or escaped, 27x under a quote prefix that can match a blank line).
-    armorBeginsBlankRun: CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\n' + ARMOR_BEGINS('') + '\n'.repeat(N),
-    armorBeginsQuoteRun:
-      CHAIN + ' -----BEGIN RSA PRIVATE KEY-----\n' + ARMOR_BEGINS('') + '"\n'.repeat(N / 2),
-    armorBeginsEscapedRun:
-      CHAIN +
-      ' -----BEGIN RSA PRIVATE KEY-----\\n' +
-      ARMOR_BEGINS('').replace(/\n/g, '\\n') +
-      '\\n'.repeat(N / 2),
-    armorBeginsQuotePrefix:
-      CHAIN + '\n"-----BEGIN RSA PRIVATE KEY-----\n' + ARMOR_BEGINS('"') + '"\n'.repeat(N / 2),
-    // v6.30.1 pre-tag defects review: a run carried to a later pass was checked by comparing the
-    // whole text after it, once per BEGIN that looked it up (50k chars: 25 ms on v6.30.0, 1,474 ms).
+    // D#500 (open) was withdrawn from v6.30.1 at its second pre-tag review: a memo of blank-line
+    // runs got two shapes slower than v6.30.0's line-by-line reading. These read under 2x here; a next
+    // attempt must keep them so. The first repeats a BEGIN over one blank line; the second resumes
+    // a `</`-prefixed reading inside a run of distinct lines that prefix reads as headers.
     beginBlankWordRepeated: CHAIN + ' ' + '-----BEGIN PRIVATE KEY-----\n\nword\n'.repeat(N / 34),
+    tagPrefixDistinctHeaders:
+      CHAIN +
+      '\n</-----BEGIN RSA PRIVATE KEY-----\n' +
+      '"\n</X-b:>\n'.repeat(16) +
+      '"\n' +
+      Array.from({ length: Math.floor(N / 12) }, (_, i) => `</X-b${i}:>\n`).join(''),
     pemEscapedQuoteSpaces: '-----BEGIN RSA PRIVATE KEY-----\\n"' + ' '.repeat(N) + 'x',
     pemEscapedQuoteTabs: '-----BEGIN RSA PRIVATE KEY-----\\n"' + '\t'.repeat(N) + 'x',
     // BEGINs at alternating escape depths. A since-removed walk back to a string's opening quote,
@@ -358,53 +347,6 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
       'Keys start with -----BEGIN RSA PRIVATE KEY----- and certs with -----BEGIN CERTIFICATE----- ok',
     ],
   ])('%s', (_name, input, want) => {
-    expect(scrubSecrets(input)).toBe(want);
-  });
-});
-
-// D#500: a run of blank lines is walked once per scrubSecrets call and carried to later passes by
-// its offset from the end of the text, which is the same run only while the text from it to the end
-// is the same. Here each pass scrubs one labelled value after the runs, so the text there shrinks
-// by a different amount every pass; a run carried without that check put a reading on another line
-// and erased a line v6.30.0 keeps (found by the equality fuzz against v6.30.0, then minimised).
-describe('a blank run carried to a later pass', () => {
-  it('gives the output each pass would give alone', () => {
-    const labels =
-      'token: abcdefghijklmnop secret: abcdefghijklm token: abcdefghijk secret: abcdefghijklm secret: abcdefghijklmno token: abcdefgh token: abcdefghijklmno token: abcdefghijklmnop secret: abcdefghijk token: abcdefghijklmno token: abcdefghijklm';
-    const input = [
-      "'X-a: -----BEGIN RSA PRIVATE KEY-----",
-      '"',
-      '\'n"',
-      '"',
-      "'Id2sobi9rOJhcjKZ/p8lEQugTKEJmMGtNjVmwHsGIwCyGCb45127WjGZML",
-      "'VS554IrB",
-      '=8dPf',
-      '\\nComment: -----BEGIN RSA PRIVATE KEY-----',
-      '</a>',
-      ' ',
-      '"-----BEGIN PRIVATE KEY-----',
-      '""X-c: "-----BEGIN RSA PRIVATE KEY-----',
-      "'X-d:-----BEGIN PRIVATE KEY-----",
-      '"8W2NwJGwpBzfcLU5/SIQ97yKgx0Oe64',
-      labels,
-    ].join('\n');
-    const want = [
-      "'X-a: -----BEGIN RSA PRIVATE KEY-----",
-      '"',
-      '\'n"',
-      '"',
-      "'Id2sobi9rOJhcjKZ/p8lEQugTKEJmMGtNjVmwHsGIwCyGCb45127WjGZML",
-      "'VS554IrB",
-      '=8dPf',
-      '\\nComment: -----BEGIN RSA PRIVATE KEY-----',
-      '</a>',
-      ' ',
-      '"***PEM_KEY***',
-      labels.replace(/: [a-p]+/g, ': ***'),
-    ].join('\n');
-    expect(want.split('\n').pop(), 'premise: every label is scrubbed').toBe(
-      'token: *** secret: *** token: *** secret: *** secret: *** token: *** token: *** token: *** secret: *** token: *** token: ***',
-    );
     expect(scrubSecrets(input)).toBe(want);
   });
 });

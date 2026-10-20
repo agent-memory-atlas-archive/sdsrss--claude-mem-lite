@@ -167,6 +167,22 @@ describe('R10 P2-4 — the purge instruction the model reads actually purges', (
     });
   }
 
+  // Delta review r2: with auto-adopt on — the default — the steering points the model at the
+  // detail doc, and its cleanup row said `maintain execute --ops purge_stale --confirm`: a delete
+  // with no preview and no one asked. The cleanup belongs to /update, which a person starts.
+  it('the adoption block and detail doc leave the purge to /claude-mem-lite:update', async () => {
+    const { getDetailDoc, buildClaudeMdBlock } = await import('../adopt-content.mjs');
+    const doc = getDetailDoc();
+    expect(doc, 'premise: the detail doc has a cleanup row').toMatch(/清理过期记忆/);
+    for (const [name, text] of [
+      ['detail doc', doc],
+      ['CLAUDE.md block', buildClaudeMdBlock()],
+    ]) {
+      expect(text, `${name} has the model confirm a purge itself`).not.toMatch(/purge_stale[^\n|]*--confirm/);
+    }
+    expect(doc.split('\n').find((l) => l.includes('清理过期记忆'))).toContain('/claude-mem-lite:update');
+  });
+
   it('commands/mem.md and commands/update.md state the --retain-days range the CLI actually enforces', async () => {
     const { min, max } = await retainDaysBounds();
     expect(min).toBe(7);

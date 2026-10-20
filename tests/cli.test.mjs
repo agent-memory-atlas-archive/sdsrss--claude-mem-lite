@@ -2155,7 +2155,7 @@ describe('CLI maintain command', () => {
   // reading the rows with `get` counts as an access (it can lift importance 1 -> 2). The scan
   // prints a line of each row under the pair, from a read that touches no counter.
   it('scan shows each side of a Needs-review pair, and counts no access', async () => {
-    const add = (title, narrative, lessonLearned) =>
+    const add = (title, narrative, lessonLearned, importance) =>
       Number(
         insertObs(testDb, {
           sessionId: 'mem-s1',
@@ -2164,17 +2164,20 @@ describe('CLI maintain command', () => {
           title,
           narrative,
           lessonLearned,
+          importance,
         }).lastInsertRowid,
       );
     const a = add(
       'Redis pool exhaustion fixed by sizing the pool per worker',
       'Workers shared one pool and ran it dry under load.',
       'Size connection pools per worker process',
+      3,
     );
     const b = add(
       'Redis pool exhaustion fixed by sizing the pool per process',
       'A forked process inherited the parent pool and leaked sockets.',
       null,
+      1,
     );
     const output = await captureStdout(() => run(['maintain', 'scan']));
     const review = output.slice(output.indexOf('Needs review:'));
@@ -2183,6 +2186,9 @@ describe('CLI maintain command', () => {
     expect(review).toContain('Workers shared one pool');
     expect(review).toContain('Size connection pools per worker');
     expect(review).toContain('A forked process inherited');
+    // update.md step 5 says to keep the more important row of a pair; the line says which (D#497).
+    expect(review).toMatch(new RegExp(`#${a} bugfix · importance 3 · `));
+    expect(review).toMatch(new RegExp(`#${b} bugfix · importance 1 · `));
     const counts = testDb.prepare('SELECT access_count AS n FROM observations WHERE id IN (?, ?)').all(a, b);
     expect(counts.map((r) => r.n ?? 0)).toEqual([0, 0]);
   });

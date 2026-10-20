@@ -650,10 +650,11 @@ export function formatProbeHints(probe) {
 }
 
 /**
- * The line under one side of a scan's Needs-review pair (D#461), from reviewRows: type, project,
- * date, the lesson or that there is none, and the start of the narrative — enough to tell two rows
- * with near-identical titles apart without `get`, which counts as an access.
- * @param {{id: number, type?: string, project?: string, created_at_epoch?: number,
+ * The line under one side of a scan's Needs-review pair (D#461), from reviewRows: type, importance
+ * (update.md keeps the more important row, D#497), project, date, the lesson or that there is none,
+ * and the start of the narrative — enough to tell two rows with near-identical titles apart without
+ * `get`, which counts as an access.
+ * @param {{id: number, type?: string, importance?: number, project?: string, created_at_epoch?: number,
  *   narrative?: string|null, lesson_learned?: string|null}|undefined} row
  * @returns {string}
  */
@@ -671,5 +672,5 @@ export function formatReviewSide(row) {
       ? `lesson: ${flat(row.lesson_learned, 100)}`
       : 'no lesson';
   const date = row.created_at_epoch ? new Date(row.created_at_epoch).toISOString().slice(0, 10) : '?';
-  return `#${row.id} ${row.type || '?'} · ${row.project} · ${date} · ${lesson} · ${flat(row.narrative, 120) || '(no narrative)'}`;
+  return `#${row.id} ${row.type || '?'} · importance ${row.importance ?? '?'} · ${row.project} · ${date} · ${lesson} · ${flat(row.narrative, 120) || '(no narrative)'}`;
 }

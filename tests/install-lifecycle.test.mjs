@@ -963,8 +963,10 @@ describe('install lifecycle checks', () => {
         );
         // The fix keeps the plugin: cleanup-hooks, by path. `uninstall` removes the plugin too, and a
         // plugin install puts no bare claude-mem-lite on PATH (D#501(3)).
+        // And it names this profile's config home, which the user's shell may not carry (v6.30.1
+        // pre-tag defects review: run without it, cleanup-hooks cleaned ~/.claude).
         const root = join(cfg, 'plugins', 'cache', 'sdsrss', 'claude-mem-lite', '6.24.0');
-        expect(second.stderr).toContain(`node "${root}/cli.mjs" cleanup-hooks`);
+        expect(second.stderr).toContain(`CLAUDE_CONFIG_DIR=${cfg} node ${root}/cli.mjs cleanup-hooks`);
         expect(second.stderr).not.toMatch(/\buninstall\b/);
 
         // Still one-shot per home: a second start of the same profile does neither again.

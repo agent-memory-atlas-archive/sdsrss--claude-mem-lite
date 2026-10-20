@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
 import { insertSession, insertObs } from './test-helpers.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI_PATH = join(REPO, 'cli.mjs');
@@ -98,7 +99,7 @@ describe('verify-apply CLI', () => {
   it('without a file prints usage and exits 1', () => {
     const r = runCli(['verify-apply']);
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/Usage: claude-mem-lite verify-apply/);
+    expect(r.stderr).toContain(`Usage: ${CLI_INVOKE} verify-apply`);
   });
 
   it('dry run is the default: prints the plan, exits 0, writes nothing — not even a backup', () => {

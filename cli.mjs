@@ -338,8 +338,12 @@ if (cmd === '--version' || cmd === '-v' || cmd === '-V' || cmd === 'version') {
   if (best && bestDist <= 2) {
     process.stderr.write(`[mem] Did you mean: ${best}?\n`);
   } else {
+    // By path (D#462: the bare name is on PATH only after a global npm install). Imported here,
+    // not at the top: this entry takes no static local imports (D#26), and a module it cannot
+    // load leaves the old wording rather than no hint.
+    const { CLI_INVOKE } = await import('./cli-path.mjs').catch(() => ({ CLI_INVOKE: 'claude-mem-lite' }));
     process.stderr.write(
-      '[mem] Run "claude-mem-lite help" for CLI commands or "claude-mem-lite install" for setup\n',
+      `[mem] Run "${CLI_INVOKE} help" for CLI commands or "${CLI_INVOKE} install" for setup\n`,
     );
   }
   process.exitCode = 1;

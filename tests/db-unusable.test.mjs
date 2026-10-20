@@ -14,6 +14,7 @@ import {
   DB_UNUSABLE_MARKER_PREFIX,
 } from '../lib/db-unusable.mjs';
 import { shouldRecordOnce, RELOG_INTERVAL_MS } from '../lib/record-once.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 const dirs = [];
 const tmp = (prefix) => {
@@ -234,7 +235,7 @@ describe('the two notices', () => {
     const out = formatDbUnusableModelNotice();
     expect(out).toMatch(/Memory is OFF/);
     expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
-    expect(out, 'it must still route the user somewhere').toMatch(/claude-mem-lite doctor/);
+    expect(out, 'it must still route the user somewhere').toContain(`${CLI_INVOKE} doctor`);
   });
 
   it('the two notices are not the same string', () => {

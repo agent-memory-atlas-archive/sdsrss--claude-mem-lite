@@ -15,6 +15,7 @@ import { parseArgs, out, fail, rejectBareStringFlags } from './common.mjs';
 import { parseIntFlag, isNumericToken } from '../lib/cli-flags.mjs';
 import { snapshotDb } from '../lib/db-backup.mjs';
 import { isBlankText } from '../lib/blank-text.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 function formatActivityResults(rows) {
   if (!rows || rows.length === 0) return '(no events)';
@@ -31,7 +32,7 @@ function eventIdOf(token) {
 export async function cmdActivity(db, args) {
   const sub = args[0];
   if (!sub) {
-    fail('[mem] Usage: claude-mem-lite activity <save|search|recent|show|delete|promote> ...');
+    fail(`[mem] Usage: ${CLI_INVOKE} activity <save|search|recent|show|delete|promote> ...`);
     return;
   }
 
@@ -171,7 +172,7 @@ export async function cmdActivity(db, args) {
     // This command lets users prune them by ID without dropping to raw SQL.
     const idStr = positional.join(',').trim();
     if (!idStr) {
-      fail('[mem] Usage: claude-mem-lite activity delete <id1,id2,...> [--confirm]');
+      fail(`[mem] Usage: ${CLI_INVOKE} activity delete <id1,id2,...> [--confirm]`);
       return;
     }
     const tokens = idStr

@@ -5,6 +5,7 @@
 import { test, expect, describe } from 'vitest';
 import { createTestDb } from './test-helpers.mjs';
 import { buildDashboard } from '../lib/startup-dashboard.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 describe('startup dashboard (T10c)', () => {
   test('composes all sources into structured injection', () => {
@@ -65,7 +66,7 @@ describe('startup dashboard (T10c)', () => {
         },
       });
       expect(text).toMatch(/Invited-memory 未启用/);
-      expect(text).toMatch(/claude-mem-lite adopt/);
+      expect(text).toContain(`${CLI_INVOKE} adopt`);
       expect(text).toMatch(/MEM_NO_ADOPT_HINT=1/);
     } finally {
       if (prevNoHint === undefined) delete process.env.MEM_NO_ADOPT_HINT;

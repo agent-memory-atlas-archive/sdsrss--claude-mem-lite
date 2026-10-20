@@ -539,7 +539,7 @@ describe('E2E: Direct install mode (git clone / npx)', () => {
         out = `${e.stdout}${e.stderr}`;
       }
       expect(out).toMatch(/Marketplace clone: 1 uncommitted change/);
-      expect(out).toMatch(/emptied by an earlier claude-mem-lite install/);
+      expect(out).toMatch(/emptied by an earlier install of claude-mem-lite/);
       expect(out).toMatch(/checkout -- hooks\/hooks\.json/);
     });
 

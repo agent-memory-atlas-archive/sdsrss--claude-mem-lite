@@ -10,6 +10,7 @@
 
 import { editDistance } from '../lib/edit-distance.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters } from '../format-utils.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 // ─── Argument Parsing ────────────────────────────────────────────────────────
 
@@ -250,7 +251,7 @@ export function inertFilterFlagNotice(cmd, inert) {
   const verb = inert.length > 1 ? 'were' : 'was';
   return (
     `[mem] ${names} ${verb} ignored — \`${cmd}\` does not filter on ${inert.length > 1 ? 'them' : 'it'}, ` +
-    `so the results above are UNFILTERED. Run "claude-mem-lite help" for the flags this command reads.`
+    `so the results above are UNFILTERED. Run "${CLI_INVOKE} help" for the flags this command reads.`
   );
 }
 

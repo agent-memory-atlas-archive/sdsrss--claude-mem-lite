@@ -3,12 +3,13 @@
 
 import { checkFTSIntegrity, rebuildFTS } from '../schema.mjs';
 import { parseArgs, out, fail } from './common.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 export function cmdFtsCheck(db, args) {
   const { positional } = parseArgs(args);
   const action = positional[0];
   if (!action) {
-    fail('[mem] Usage: claude-mem-lite fts-check <check|rebuild>');
+    fail(`[mem] Usage: ${CLI_INVOKE} fts-check <check|rebuild>`);
     return;
   }
   if (!['check', 'rebuild'].includes(action)) {

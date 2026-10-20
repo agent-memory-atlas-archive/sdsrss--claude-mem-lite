@@ -176,7 +176,7 @@ describe('doctor: a healthy plugin-only install is not an error', () => {
     expect(r.stdout).not.toMatch(/✗ hook\.mjs: missing/);
     expect(r.stdout).not.toMatch(/Managed files: \d+ missing/);
     // `update` is the observation editor; the self-updater is `self-update`.
-    expect(r.stdout).not.toMatch(/claude-mem-lite update(?!\s*<)/);
+    expect(r.stdout).not.toMatch(/(claude-mem-lite|cli\.mjs) update(?!\s*<)/);
   });
 
   it('still FAILS a plugin-only install whose cache entry point is gone', () => {

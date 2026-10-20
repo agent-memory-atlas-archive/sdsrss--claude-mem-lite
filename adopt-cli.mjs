@@ -78,6 +78,7 @@ import {
   samePath,
   localFileLinked,
 } from './lib/local-steering.mjs';
+import { CLI_INVOKE } from './cli-path.mjs';
 
 /**
  * Remove the auto-written local block (CLAUDE.local.md, or the D#212 rules file) for the project at
@@ -226,7 +227,7 @@ function adoptOne(cwd, { force, dryRun }) {
   const sharedNote = (verb) =>
     switchesOffBelow
       ? [
-          `  ⚠ ${claudeMdPath(cwd)} ${verb} Claude Code reading the AGENTS.md of every project below ${cwd} that has one; to steer one project, run adopt inside it instead${verb === 'stops' ? ' (`claude-mem-lite unadopt` here takes this back)' : ''}, or set Project instructions to claude-md-and-agents-md in /config`,
+          `  ⚠ ${claudeMdPath(cwd)} ${verb} Claude Code reading the AGENTS.md of every project below ${cwd} that has one; to steer one project, run adopt inside it instead${verb === 'stops' ? ` (\`${CLI_INVOKE} unadopt\` here takes this back)` : ''}, or set Project instructions to claude-md-and-agents-md in /config`,
         ]
       : [];
 
@@ -659,7 +660,7 @@ function localSteeringStatus(cwd) {
   }
   // Before "not a git work tree": with auto-adopt off nothing is injected either (R3-13).
   if (isAutoAdoptDisabledFor(cwd) || (root && isAutoAdoptDisabledFor(root)))
-    return '— none: auto-adopt is off for this project (`claude-mem-lite adopt --enable` turns it back on)';
+    return `— none: auto-adopt is off for this project (\`${CLI_INVOKE} adopt --enable\` turns it back on)`;
   if (process.env.MEM_NO_AUTO_ADOPT === '1')
     return '— none: MEM_NO_AUTO_ADOPT=1, so no local file is written';
   if (!root)
@@ -673,10 +674,10 @@ function localSteeringStatus(cwd) {
     const plan = planLocalSteering(root, PLUGIN_SLUG, cwd);
     const beside = plan.agentsMd ?? 'the AGENTS.md';
     if (plan.file === RULES_MD && plan.refusal === 'off')
-      return `${removed}; beside ${beside} a file comes back only with CLAUDE_MEM_RULES_STEERING=1 and then \`claude-mem-lite adopt --enable\``;
+      return `${removed}; beside ${beside} a file comes back only with CLAUDE_MEM_RULES_STEERING=1 and then \`${CLI_INVOKE} adopt --enable\``;
     if (plan.file === RULES_MD && plan.refusal)
       return `${removed}; beside ${beside}, ${rulesWhy(plan.refusal)}`;
-    return `${removed}; after \`claude-mem-lite adopt --enable\` the next session may write it again`;
+    return `${removed}; after \`${CLI_INVOKE} adopt --enable\` the next session may write it again`;
   }
   const plan = planLocalSteering(root, PLUGIN_SLUG, cwd);
   if (!plan.refusal)
@@ -688,7 +689,7 @@ function localSteeringStatus(cwd) {
     ways.settingGivesFile
       ? 'set Project instructions to claude-md-and-agents-md in /config and CLAUDE.local.md is written instead'
       : null,
-    ways.adoptImports ? 'run `claude-mem-lite adopt`, whose CLAUDE.md imports AGENTS.md' : null,
+    ways.adoptImports ? `run \`${CLI_INVOKE} adopt\`, whose CLAUDE.md imports AGENTS.md` : null,
   ].filter(Boolean);
   return `✗ not written: Claude Code stops reading ${plan.agentsMd ?? 'the AGENTS.md'} once a CLAUDE.local.md exists, and ${rulesWhy(plan.refusal)} (steering is injected at session start${alt.length ? `; ${alt.join(', or ')}` : ''})`;
 }
@@ -784,7 +785,7 @@ function statusAll() {
     `[adopt --status] scanned ${dirs.length} memdir(s): ${legacy} with legacy sentinel (await migration), ${disabled} auto-adopt-disabled.`,
   );
   if (legacy > 0)
-    log('[adopt --status] run `claude-mem-lite adopt --all` to sweep legacy memory-dir sentinels now.');
+    log(`[adopt --status] run \`${CLI_INVOKE} adopt --all\` to sweep legacy memory-dir sentinels now.`);
 
   const known = listKnownProjectDirs();
   let adoptedCount = 0;
@@ -793,7 +794,7 @@ function statusAll() {
     `[adopt --status] known projects (~/.claude.json): ${known.length} scanned, ${adoptedCount} with a CLAUDE.md managed block or partial residue (detail doc/state).`,
   );
   if (adoptedCount > 0)
-    log('[adopt --status] run `claude-mem-lite unadopt --all` to remove every CLAUDE.md block.');
+    log(`[adopt --status] run \`${CLI_INVOKE} unadopt --all\` to remove every CLAUDE.md block.`);
 
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ? 'set' : 'unset';
   const noAutoAdopt = process.env.MEM_NO_AUTO_ADOPT === '1' ? '1 (opt-out)' : 'unset';
@@ -803,7 +804,7 @@ function statusAll() {
     `  CLAUDE_PLUGIN_ROOT  = ${pluginRoot}  (any install path is consent; gate is the per-project opt-out below)`,
   );
   log(`  MEM_NO_AUTO_ADOPT   = ${noAutoAdopt}  (global escape hatch)`);
-  log('Per-project opt-out: `claude-mem-lite adopt --disable` (run --enable to re-arm).');
+  log(`Per-project opt-out: \`${CLI_INVOKE} adopt --disable\` (run --enable to re-arm).`);
 }
 
 /**
@@ -872,7 +873,7 @@ function unadoptAll(args) {
   if (failures > 0) process.exitCode = 1;
   if (projectDirs.length === 0) {
     log(
-      '[unadopt --all] no known projects found in ~/.claude.json — if a project was adopted but never opened in Claude Code, run `claude-mem-lite unadopt` from inside it.',
+      `[unadopt --all] no known projects found in ~/.claude.json — if a project was adopted but never opened in Claude Code, run \`${CLI_INVOKE} unadopt\` from inside it.`,
     );
   }
 }

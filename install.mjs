@@ -58,6 +58,9 @@ const CLI_BIN_DIRS = [join(homedir(), '.local', 'bin'), '/usr/local/bin'];
 
 // Detect ephemeral context (npx) — files won't persist after exit
 const IS_NPX = isNpxRun(PROJECT_DIR);
+// How a hint names this CLI: by path (the bare name is on PATH only after a global npm install,
+// D#462), or through npx when that is how this run started.
+const CLI_HINT = IS_NPX ? 'npx claude-mem-lite' : CLI_INVOKE;
 
 // Both modes install to ~/.claude-mem-lite/ (copies or symlinks)
 const INSTALL_DIR = DATA_DIR;
@@ -127,7 +130,7 @@ const takeLock =
     return release ? { release } : {};
   });
 import { atomicWriteFileSync, atomicCopyFileSync } from './lib/atomic-write.mjs';
-import { shellWord } from './cli-path.mjs';
+import { shellWord, CLI_INVOKE } from './cli-path.mjs';
 import { dirAccessError, walOpenBlocked, dataDirRemedy, WAL_BLOCKED_WHY } from './lib/wal-open-blocked.mjs';
 import {
   claudeConfigDir,
@@ -2983,7 +2986,7 @@ async function doctor() {
       `Hooks named like claude-mem-lite's point at missing files (not confirmed ours, so left alone): ${unconfirmed.join(', ')}`,
     );
     log(
-      '    Each fails on every fire. If they are from an old claude-mem-lite install, delete them from settings.json.',
+      '    Each fails on every fire. If they are from an old install of claude-mem-lite, delete them from settings.json.',
     );
   }
 
@@ -3045,7 +3048,7 @@ async function doctor() {
     );
     // The commonest cause was this installer's own edit (D#368): say so, with the fix.
     if (cloneManifestEmptiedByUs(marketplaceClone)) {
-      log('    Cause: hooks/hooks.json was emptied by an earlier claude-mem-lite install.');
+      log('    Cause: hooks/hooks.json was emptied by an earlier install of claude-mem-lite.');
       log(`    Fix: git -C ${shellWord(marketplaceClone)} checkout -- hooks/hooks.json`);
     } else {
       log(`    Inspect: git -C ${marketplaceClone} status`);
@@ -3072,7 +3075,7 @@ async function doctor() {
       );
       for (const line of stray) log(`    line ${line.line}: ${line.text}`);
       log(
-        '    Fix: make the marker lines exact (`claude-mem-lite adopt` prints the expected lines), or delete',
+        `    Fix: make the marker lines exact (\`${CLI_HINT} adopt\` prints the expected lines), or delete`,
       );
       log('    them and the text between them; then run adopt again.');
     }
@@ -3431,7 +3434,7 @@ async function doctor() {
               `file(s) absent, none present) — this is a data directory with no install behind it, not ` +
               `a damaged one. Fix: ${installRemedy}`
           : `Managed files: ${r.missingCount} missing (${parts.join('; ')}) — a copy install resolves ` +
-              `imports against the install dir, so these throw at hook time. Fix: claude-mem-lite self-update ` +
+              `imports against the install dir, so these throw at hook time. Fix: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} self-update ` +
               `(or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`,
       );
     }
@@ -3460,7 +3463,7 @@ async function doctor() {
     // `noCodeInstall` above: the `repair` route runs from an entry point that is itself absent.
     const scriptRemedy = noCodeInstall
       ? installRemedy
-      : `claude-mem-lite self-update (or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`;
+      : `node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} self-update (or: node ${shellWord(join(INSTALL_DIR, 'cli.mjs'))} repair)`;
     if (skipScripts) {
       ok('Hook scripts: n/a (plugin-only install — hooks run from the plugin cache)');
     } else if (codeDirDenied) {
@@ -3696,9 +3699,7 @@ async function doctor() {
     // contract `claude-mem-lite doctor || alert` depends on is untouched.
     // Phrased as prose, not as `doctor a | b | c`: a line that looks like a command gets
     // copy-pasted, and `|` is a shell pipe. See doctorDbModeHint()'s note.
-    console.log(
-      `  Deeper checks (database layer): run \`claude-mem-lite doctor\` with ${doctorDbModeHint()}\n`,
-    );
+    console.log(`  Deeper checks (database layer): run \`${CLI_HINT} doctor\` with ${doctorDbModeHint()}\n`);
   }
   // Diagnostic-tool exit-code contract: any ✗-level finding must propagate non-zero
   // so CI / wrapper scripts (`claude-mem-lite doctor || alert`) actually trip. Keeps

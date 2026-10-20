@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSy
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import Database from 'better-sqlite3';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 const REPO = resolve(import.meta.dirname, '..');
 const fixtures = [];
@@ -147,7 +148,7 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
     const model = envelope.hookSpecificOutput.additionalContext;
     expect(model, 'no shell command reaches the model').not.toMatch(/rm -f|\bcp\b|\bmv\b/);
     expect(model, 'it still learns memory is off').toMatch(/Memory is OFF/);
-    expect(model).toMatch(/claude-mem-lite doctor/);
+    expect(model).toContain(`${CLI_INVOKE} doctor`);
     // The premise: the human channel really does carry the command the model must not get.
     expect(envelope.systemMessage).toMatch(/rm -f/);
     expect(envelope.systemMessage).toContain('.v1.bak');

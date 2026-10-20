@@ -7,6 +7,7 @@ import { tmpdir } from 'os';
 import { createTestDb } from './test-helpers.mjs';
 import { importJsonl, MAX_IMPORT_BYTES } from '../lib/import-jsonl.mjs';
 import { recallByFile } from '../lib/recall-core.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(__dirname, 'fixtures/sample-claude-jsonl/sample.jsonl');
@@ -307,7 +308,7 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
     expect(out).toMatch(/\+1 observations \(1 from unpaired tool_use\)/);
     expect(out).not.toMatch(/\+0 observations/);
     // The "something landed, go look" hint must fire — an orphan-only import is not a no-op.
-    expect(out).toMatch(/Try: claude-mem-lite recent/);
+    expect(out).toContain(`Try: ${CLI_INVOKE} recent`);
     expect(out).not.toMatch(/Nothing new/);
   });
 
@@ -324,7 +325,7 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
     );
     const out = execFileSync(process.execPath, [CLI, 'import-jsonl', file], { env, encoding: 'utf8' });
     expect(out).toMatch(/0 prompts, 1 observations \(1 from unpaired tool_use\)/);
-    expect(out).toMatch(/Try: claude-mem-lite recent/);
+    expect(out).toContain(`Try: ${CLI_INVOKE} recent`);
     expect(out).not.toMatch(/Nothing new/);
   });
 
@@ -337,7 +338,7 @@ describe('import-jsonl — the CLI summary reports what was written', () => {
     execFileSync(process.execPath, [CLI, 'import-jsonl', file], { env, encoding: 'utf8' });
     const second = execFileSync(process.execPath, [CLI, 'import-jsonl', file], { env, encoding: 'utf8' });
     expect(second).toMatch(/Nothing new/);
-    expect(second).not.toMatch(/Try: claude-mem-lite recent/);
+    expect(second).not.toContain(`Try: ${CLI_INVOKE} recent`);
   });
 });
 

@@ -216,7 +216,7 @@ function emitRecallHint(db, query) {
     const n = countRecallableByFile(db, q);
     if (n > 0) {
       out(`[mem] ${n} observation(s) are linked to that file — search indexes text, not file paths.`);
-      out(`[mem] Try: claude-mem-lite recall "${queryLabel(q)}"`);
+      out(`[mem] Try: ${CLI_INVOKE} recall "${queryLabel(q)}"`);
     }
   } catch {
     /* hint is best-effort; never break search */
@@ -235,7 +235,7 @@ async function cmdSearch(db, args, { llm } = {}) {
   if (query === null) return;
   if (!query) {
     fail(
-      '[mem] Usage: claude-mem-lite search <query> [--type TYPE] [--source SOURCE] [--limit N] [--project P] [--from DATE] [--to DATE] [--since DUR] [--importance N] [--branch B] [--offset N] [--sort relevance|time|importance] [--include-noise] [--deep] [--no-deep] [--rerank] — query may also be passed via --query "<query>"',
+      `[mem] Usage: ${CLI_INVOKE} search <query> [--type TYPE] [--source SOURCE] [--limit N] [--project P] [--from DATE] [--to DATE] [--since DUR] [--importance N] [--branch B] [--offset N] [--sort relevance|time|importance] [--include-noise] [--deep] [--no-deep] [--rerank] — query may also be passed via --query "<query>"`,
     );
     return;
   }
@@ -348,7 +348,7 @@ async function cmdSearch(db, args, { llm } = {}) {
     if (!wantDeferredTrailer) return;
     try {
       const rows = searchDeferredWork(db, query, project || cliProject(db));
-      for (const line of formatDeferredSearchTrailer(rows, 'claude-mem-lite get D#<id>')) out(line);
+      for (const line of formatDeferredSearchTrailer(rows, `${CLI_INVOKE} get D#<id>`)) out(line);
     } catch {
       /* trailer is best-effort; never break search */
     }
@@ -775,7 +775,7 @@ function cmdRecall(db, args) {
   if (file === null) return;
   if (!file) {
     fail(
-      '[mem] Usage: claude-mem-lite recall <file> [--limit N] [--project P] [--include-noise] [--json] — file may also be passed via --file <file>',
+      `[mem] Usage: ${CLI_INVOKE} recall <file> [--limit N] [--project P] [--include-noise] [--json] — file may also be passed via --file <file>`,
     );
     return;
   }
@@ -946,7 +946,7 @@ function cmdGet(db, args) {
   if (idStr === null) return;
   if (!idStr) {
     fail(
-      '[mem] Usage: claude-mem-lite get <id1,id2,...> [--source obs|session|prompt|event] [--fields f1,f2,...] — ids may also be passed via --ids 1,2\n' +
+      `[mem] Usage: ${CLI_INVOKE} get <id1,id2,...> [--source obs|session|prompt|event] [--fields f1,f2,...] — ids may also be passed via --ids 1,2\n` +
         '        IDs accept prefix from search output: #123 (obs), P#123 (prompt), S#123 (session), E#123 (event), D#123 (deferred item, full detail).',
     );
     return;
@@ -1072,7 +1072,7 @@ function cmdGet(db, args) {
       bySrc.obs.length + bySrc.session.length + bySrc.prompt.length + bySrc.event.length === 0
     ) {
       fail(
-        `[mem] Deferred item(s) not found: ${deferredMissing.map((i) => `D#${i}`).join(', ')}. List open items: claude-mem-lite defer list`,
+        `[mem] Deferred item(s) not found: ${deferredMissing.map((i) => `D#${i}`).join(', ')}. List open items: ${CLI_INVOKE} defer list`,
       );
       return;
     }
@@ -1316,7 +1316,7 @@ function cmdSave(db, args) {
   if (text === null) return;
   if (!text.trim()) {
     fail(
-      '[mem] Usage: claude-mem-lite save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,E#10524] [--force] — content may also be passed via --text/--content "<text>"',
+      `[mem] Usage: ${CLI_INVOKE} save "<text>" [--type T] [--title T] [--importance N] [--project P] [--files f1,f2] [--lesson T] [--closes-deferred 1,D#42] [--supersedes 8754,E#10524] [--force] — content may also be passed via --text/--content "<text>"`,
     );
     return;
   }
@@ -1452,7 +1452,7 @@ function cmdSave(db, args) {
 
   if (result.kind === 'duplicate') {
     out(
-      `[mem] Skipped: similar to existing #${result.existingId}. Use "claude-mem-lite get ${result.existingId}" to review.`,
+      `[mem] Skipped: similar to existing #${result.existingId}. Use "${CLI_INVOKE} get ${result.existingId}" to review.`,
     );
     // D#201: the dedup swallowed the requested supersession too — say so here,
     // because this branch returns before the note below is ever reached.
@@ -1493,7 +1493,7 @@ function cmdDefer(db, args) {
       cmdDeferDrop(db, rest);
       break;
     default:
-      fail('[mem] Usage: claude-mem-lite defer <add|list|drop> ...');
+      fail(`[mem] Usage: ${CLI_INVOKE} defer <add|list|drop> ...`);
       fail('[mem]   defer add "<title>" [--priority 1|2|3] [--detail T] [--files f1,f2] [--project P]');
       fail('[mem]   defer list [--project P] [--limit N]');
       fail('[mem]   defer drop <id-or-D#N> --reason "<reason>" [--project P]');
@@ -1512,7 +1512,7 @@ function cmdDeferAdd(db, args) {
   const title = resolvedTitle.trim();
   if (!title) {
     fail(
-      '[mem] Usage: claude-mem-lite defer add "<title>" [--priority 1|2|3] [--detail T] [--files f1,f2] [--project P] — title may also be passed via --title "<title>"',
+      `[mem] Usage: ${CLI_INVOKE} defer add "<title>" [--priority 1|2|3] [--detail T] [--files f1,f2] [--project P] — title may also be passed via --title "<title>"`,
     );
     return;
   }
@@ -1584,7 +1584,7 @@ function cmdDeferList(db, args) {
   if (staleHint) out(`  ${staleHint}`);
   // Affordance for the detail field — list stays title-only by design (it is
   // mirrored into the SessionStart dashboard, where detail would be noise).
-  out(`  Full detail: claude-mem-lite get D#<id>`);
+  out(`  Full detail: ${CLI_INVOKE} get D#<id>`);
 }
 
 function cmdDeferDrop(db, args) {
@@ -1595,7 +1595,7 @@ function cmdDeferDrop(db, args) {
   if (idStr === null) return;
   if (!idStr.trim()) {
     fail(
-      '[mem] Usage: claude-mem-lite defer drop <id-or-D#N>[,id2,...] --reason "<reason>" [--project P] — id may also be passed via --id D#N',
+      `[mem] Usage: ${CLI_INVOKE} defer drop <id-or-D#N>[,id2,...] --reason "<reason>" [--project P] — id may also be passed via --id D#N`,
     );
     return;
   }
@@ -2081,7 +2081,7 @@ function cmdDelete(db, args) {
   if (idStr === null) return;
   if (!idStr) {
     fail(
-      '[mem] Usage: claude-mem-lite delete <id1,id2,...> [--confirm] — ids may also be passed via --ids 1,2',
+      `[mem] Usage: ${CLI_INVOKE} delete <id1,id2,...> [--confirm] — ids may also be passed via --ids 1,2`,
     );
     return;
   }
@@ -2096,8 +2096,8 @@ function cmdDelete(db, args) {
   if (nonObs.length > 0) {
     fail(
       `[mem] delete only works on observations. Rejected: ${nonObs.join(', ')}. ` +
-        `Delete an event with \`claude-mem-lite activity delete E#N --confirm\`. Prompts and sessions are not ` +
-        `deletable — inspect with \`claude-mem-lite get P#N --source prompt\` / \`--source session\`.`,
+        `Delete an event with \`${CLI_INVOKE} activity delete E#N --confirm\`. Prompts and sessions are not ` +
+        `deletable — inspect with \`${CLI_INVOKE} get P#N --source prompt\` / \`--source session\`.`,
     );
     return;
   }
@@ -2173,7 +2173,7 @@ function cmdUpdate(db, args) {
   const id = parsed && parsed.source === null ? parsed.id : NaN;
   if (!id || isNaN(id)) {
     fail(
-      '[mem] Usage: claude-mem-lite update <id> [--title T] [--type T] [--importance N] [--lesson T] [--narrative T] [--concepts T] — id may also be passed via --id N',
+      `[mem] Usage: ${CLI_INVOKE} update <id> [--title T] [--type T] [--importance N] [--lesson T] [--narrative T] [--concepts T] — id may also be passed via --id N`,
     );
     return;
   }
@@ -2425,7 +2425,7 @@ function cmdRestore(db, argv) {
   const { positional, flags } = parseArgs(argv);
   const file = positional[0];
   if (!file) {
-    fail('[mem] Usage: claude-mem-lite restore <file> [--project P] [--dry-run]');
+    fail(`[mem] Usage: ${CLI_INVOKE} restore <file> [--project P] [--dry-run]`);
     return;
   }
   let raw;
@@ -2649,7 +2649,7 @@ function cmdCompress(db, args) {
   // a silent preview; fail fast pointing at the right flag. --execute still wins if both.
   if ((flags.run === true || flags.run === 'true') && flags.execute !== true && flags.execute !== 'true') {
     fail(
-      "[mem] compress executes with --execute, not --run (--run is optimize's flag). Re-run: claude-mem-lite compress --execute",
+      `[mem] compress executes with --execute, not --run (--run is optimize's flag). Re-run: ${CLI_INVOKE} compress --execute`,
     );
     return;
   }
@@ -2732,7 +2732,7 @@ function cmdMaintain(db, args) {
   const action = positional[0];
   if (!action || !['scan', 'execute'].includes(action)) {
     fail(
-      "[mem] Usage: claude-mem-lite maintain <scan|execute> [--ops cleanup,decay,boost,demote_pinned,dedup,purge_stale,vacuum] [--project P] [--retain-days N] [--merge-ids keepId:removeId,...] — 'scan' previews, 'execute' applies.",
+      `[mem] Usage: ${CLI_INVOKE} maintain <scan|execute> [--ops cleanup,decay,boost,demote_pinned,dedup,purge_stale,vacuum] [--project P] [--retain-days N] [--merge-ids keepId:removeId,...] — 'scan' previews, 'execute' applies.`,
     );
     return;
   }
@@ -3223,7 +3223,9 @@ function cmdCitationStats(db, args) {
     // created, `no such table` swallowed into the debug log) read as "no data
     // yet" for as long as the surface stayed unmetered.
     out(`  (UNAVAILABLE — the per-face table could not be read: ${surfaceFunnel.unavailable})`);
-    out('  this is a failure, not an empty window: run `claude-mem-lite fts-check` to repair the schema');
+    out(
+      `  this is a failure, not an empty window: run \`${CLI_INVOKE} fts-check check\` to repair the schema`,
+    );
   } else if (surfaceFunnel.surfaces.length === 0) {
     out('  (no rows in this window yet — rows accrue at Stop, one per injection face per session)');
   } else {
@@ -3532,7 +3534,7 @@ async function cmdImportJsonl(db, argv) {
   const { positional, flags } = parseArgs(argv);
   const target = positional[0];
   if (!target) {
-    fail('[mem] Usage: claude-mem-lite import-jsonl <file-or-dir> [--project <name>]');
+    fail(`[mem] Usage: ${CLI_INVOKE} import-jsonl <file-or-dir> [--project <name>]`);
     return;
   }
 
@@ -3631,7 +3633,7 @@ async function cmdImportJsonl(db, argv) {
     // — an orphan-only first import must not fall through to the "already imported"
     // no-op branch below.
     if (projectCheck.note) out(`[mem] Imported${projectCheck.note}.`);
-    out(`[mem] Try: claude-mem-lite recent 5 --project ${project}`);
+    out(`[mem] Try: ${CLI_INVOKE} recent 5 --project ${project}`);
   } else if (totalRecognized > 0) {
     // Lines WERE Claude Code transcript events but produced no new rows — the file
     // was already imported (idempotent re-run) or carried no extractable content.
@@ -3684,7 +3686,7 @@ async function cmdOptimize(db, args) {
   const hasExecuteFlag = args.some((a) => a === '--execute' || a.startsWith('--execute='));
   if (hasExecuteFlag && !run && !runAll) {
     fail(
-      "[mem] optimize executes with --run, not --execute (--execute is compress's flag). Re-run: claude-mem-lite optimize --run",
+      `[mem] optimize executes with --run, not --execute (--execute is compress's flag). Re-run: ${CLI_INVOKE} optimize --run`,
     );
     return;
   }
@@ -4128,7 +4130,7 @@ async function runDispatch(argv) {
         ? `[mem] --${flag} is read only by ${owner}; ${cmd} does not read it.\n`
         : suggestion
           ? `[mem] Unknown flag --${flag}; did you mean --${suggestion}?\n`
-          : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "claude-mem-lite help" for this command's flags.\n`,
+          : `[mem] Unknown flag --${flag} — ignored, it had no effect. Run "${CLI_INVOKE} help" for this command's flags.\n`,
     );
   }
 
@@ -4394,7 +4396,7 @@ async function runDispatch(argv) {
         break;
       default:
         out(`[mem] Unknown command: ${cmd}`);
-        out('[mem] Run "claude-mem-lite help" for usage');
+        out(`[mem] Run "${CLI_INVOKE} help" for usage`);
         process.exitCode = 1;
     }
   } catch (e) {

@@ -108,6 +108,7 @@ import {
   lastDbUnusable,
   lastDbUnusableError,
 } from './hook-shared.mjs';
+import { CLI_INVOKE } from './cli-path.mjs';
 import {
   handleLLMEpisode,
   handleLLMSummary,
@@ -2839,8 +2840,8 @@ function offerAdoptOnce(project) {
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     queueHookSystemMessage(
       'claude-mem-lite: memory guidance for this project is injected at session start, and nothing is written to your repository. ' +
-        'Run /adopt (or `claude-mem-lite adopt`) to put it in CLAUDE.md instead — the agent then saves lessons after fixes more reliably. ' +
-        'Shown once per project; `claude-mem-lite adopt --disable` turns the guidance off for this project.',
+        `Run /adopt (or \`${CLI_INVOKE} adopt\`) to put it in CLAUDE.md instead — the agent then saves lessons after fixes more reliably. ` +
+        `Shown once per project; \`${CLI_INVOKE} adopt --disable\` turns the guidance off for this project.`,
     );
   } catch (e) {
     debugCatch(e, 'session-start-adopt-offer');
@@ -2860,7 +2861,7 @@ function noteLocalSteeringOnce(project) {
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     queueHookSystemMessage(
       'claude-mem-lite: memory guidance for this project is in CLAUDE.local.md at the repository root. Git ignores it (it is added to .git/info/exclude unless your ignore rules already cover it), so it is not committed, but npm pack and other packagers do not read .git/info/exclude. ' +
-        'Delete it or run `claude-mem-lite unadopt` and it is not written again; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
+        `Delete it or run \`${CLI_INVOKE} unadopt\` and it is not written again; \`${CLI_INVOKE} adopt --disable\` turns the guidance off for this project. Shown once per project.`,
     );
   } catch (e) {
     debugCatch(e, 'session-start-local-note');
@@ -2879,7 +2880,7 @@ function noteRulesSteeringOnce(project) {
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     queueHookSystemMessage(
       'claude-mem-lite: memory guidance for this project is in .claude/rules/claude-mem-lite.md at the repository root, not in CLAUDE.local.md: Claude Code stops reading your AGENTS.md once a CLAUDE.local.md exists, and a rules file leaves it loading. Git ignores it (it is listed in .git/info/exclude), so it is not committed, but npm pack and other packagers do not read .git/info/exclude. ' +
-        'Delete it or run `claude-mem-lite unadopt` and it is not written again; `claude-mem-lite adopt --disable` turns the guidance off for this project. Shown once per project.',
+        `Delete it or run \`${CLI_INVOKE} unadopt\` and it is not written again; \`${CLI_INVOKE} adopt --disable\` turns the guidance off for this project. Shown once per project.`,
     );
   } catch (e) {
     debugCatch(e, 'session-start-rules-note');
@@ -2924,7 +2925,7 @@ async function noteAgentsMdOnce(project, { detail, agentsMd, adoptImports, setti
         );
       else if (detail === 'removed')
         parts.push(
-          `With CLAUDE_MEM_RULES_STEERING=1 and then \`claude-mem-lite adopt --enable\` it goes to ${RULES_MD}, which leaves AGENTS.md loading (a local file you or unadopt removed is not written back until then).`,
+          `With CLAUDE_MEM_RULES_STEERING=1 and then \`${CLI_INVOKE} adopt --enable\` it goes to ${RULES_MD}, which leaves AGENTS.md loading (a local file you or unadopt removed is not written back until then).`,
         );
     }
     if (settingGivesFile)
@@ -2954,12 +2955,12 @@ function noteAgentsImportOnce(project, { imported, elsewhere }) {
     if (imported.length > 0)
       parts.push(
         `added ${imported.map((p) => `@${p}`).join(' and ')} at the top of this project's CLAUDE.md, which holds only the claude-mem-lite block: Claude Code stops reading AGENTS.md once a CLAUDE.md exists, so it was not being loaded. It loads from the next session. ` +
-          'If CLAUDE.md is committed, commit the change too; to drop CLAUDE.md instead, run `claude-mem-lite unadopt` (the guidance then goes to a git-ignored local file from the next session, or is injected where none can be written).',
+          `If CLAUDE.md is committed, commit the change too; to drop CLAUDE.md instead, run \`${CLI_INVOKE} unadopt\` (the guidance then goes to a git-ignored local file from the next session, or is injected where none can be written).`,
       );
     if (elsewhere.length > 0) {
       const them = elsewhere.length > 1 ? 'them' : 'it';
       parts.push(
-        `Claude Code does not read ${elsewhere.join(', ')} while this project's CLAUDE.md exists, and an import cannot keep ${them} loading: set Project instructions to claude-md-and-agents-md in /config, or run \`claude-mem-lite unadopt\`.`,
+        `Claude Code does not read ${elsewhere.join(', ')} while this project's CLAUDE.md exists, and an import cannot keep ${them} loading: set Project instructions to claude-md-and-agents-md in /config, or run \`${CLI_INVOKE} unadopt\`.`,
       );
     }
     queueHookSystemMessage(`claude-mem-lite: ${parts.join(' ')} Shown once per project.`);
@@ -3003,9 +3004,9 @@ function rekeyProjectOnce(db, project) {
         ? ''
         : left === 1
           ? " 1 other stays under the old id (another directory's, or nothing shows whose); " +
-            `list it with \`claude-mem-lite recent 50 --project ${legacy}\`.`
+            `list it with \`${CLI_INVOKE} recent 50 --project ${legacy}\`.`
           : ` ${left} others stay under the old id (another directory's, or nothing shows whose); ` +
-            `list them with \`claude-mem-lite recent 50 --project ${legacy}\`.`;
+            `list them with \`${CLI_INVOKE} recent 50 --project ${legacy}\`.`;
     queueHookSystemMessage(
       `claude-mem-lite: this project's memory now has its own id, ${project}. Its old id, ${legacy}, ` +
         'could be shared with other directories whose names are not plain ASCII. ' +

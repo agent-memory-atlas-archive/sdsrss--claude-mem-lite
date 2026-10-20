@@ -46,6 +46,7 @@ import {
 import { memdirPath, disableSentinelPath } from '../memdir.mjs';
 import { isAdoptedHere } from '../lib/quiet-scope.mjs';
 import { mkdtempWithoutInstructionAncestors } from './test-helpers.mjs';
+import { CLI_INVOKE } from '../cli-path.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SLUG = PLUGIN_SLUG;
@@ -412,8 +413,8 @@ describe('SessionStart end to end', () => {
     expect(status(app)).toBe('');
     expect(first.systemMessage).toMatch(/CLAUDE\.local\.md/);
     // The undo it names is the one that holds (a removed file stays removed).
-    expect(first.systemMessage).toMatch(
-      /Delete it or run `claude-mem-lite unadopt` and it is not written again/,
+    expect(first.systemMessage).toContain(
+      `Delete it or run \`${CLI_INVOKE} unadopt\` and it is not written again`,
     );
     // The block points at a detail doc that exists, in the plugin's data dir, named under ~.
     const ref = /→ `([^`]+plugin_claude_mem_lite\.md)`/.exec(readFileSync(join(app, LOCAL_MD), 'utf8'))?.[1];
@@ -2017,7 +2018,7 @@ describe('adopt --status says why there is no CLAUDE.local.md', () => {
     // CLAUDE.local.md is refused at a package root too, so the setting is not offered; the
     // AGENTS.md is at the root, so the CLAUDE.md `adopt` writes imports it.
     expect(out).not.toMatch(/claude-md-and-agents-md/);
-    expect(out).toMatch(/run `claude-mem-lite adopt`, whose CLAUDE\.md imports AGENTS\.md/);
+    expect(out).toContain(`run \`${CLI_INVOKE} adopt\`, whose CLAUDE.md imports AGENTS.md`);
   });
 
   it('a removed block stays removed until adopt --enable', () => {
@@ -2063,8 +2064,9 @@ describe('adopt --status says why there is no CLAUDE.local.md', () => {
   it('"removed" says --enable lets the next session write it again, not that --enable writes it', () => {
     silentAutoAdopt({ cwd: app() });
     rmSync(join(app(), LOCAL_MD));
+    const cli = CLI_INVOKE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     expect(statusOut()).toMatch(
-      /✗ removed: .*after `claude-mem-lite adopt --enable` the next session may write it again/,
+      new RegExp(`✗ removed: .*after \`${cli} adopt --enable\` the next session may write it again`),
     );
   });
 });

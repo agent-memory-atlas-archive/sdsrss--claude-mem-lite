@@ -2,6 +2,52 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.29.3 — the model is no longer sent to tools it cannot call, /bug and /verify name this plugin's commands, and the purge count you are asked to approve comes from the purge itself
+
+**Upgrade note: nothing to run; the schema version stays 49.** Text the model and you read
+changes; nothing the store holds does. Going back is pinning `claude-mem-lite@6.29.2`.
+
+- **The MCP text the model reads names only tools it can call** (D#448). Claude Code gives the
+  model only the tools in the tool list, and nine maintenance and admin tools are left out of it.
+  Four places still sent the model to one of them: the instructions' "Decision rules" (normally
+  sent only when the project is not adopted and auto-adopt is off) named `mem_maintain`, `mem_delete`,
+  `mem_fts_check`, `mem_browse` and `mem_export`; the `mem_timeline` and `mem_get` descriptions
+  named `mem_browse`; `mem_search`'s no-results tip named `mem_stats`; and `mem_save`'s reminder
+  to add a lesson to a bugfix or decision saved without one said to call `mem_update`. The rules
+  now give the CLI command (`maintain scan`, `fts-check check`, `browse`, `export`) and leave the
+  cleanup itself to `/claude-mem-lite:update`, which you start; the descriptions and the tip name
+  `mem_recent`; and the reminder gives `node <path>/cli.mjs update <id> --lesson "…"`. The CLI's
+  own reminder said a bare `claude-mem-lite update`, which a plugin install does not have; it
+  prints the same command.
+- **`/bug` and `/verify` are written as `/claude-mem-lite:bug` and `/claude-mem-lite:verify`**
+  (D#454). Claude Code has its own `/bug`, which opens its bug-report dialog, and its own
+  `/verify`; typed bare, those run instead. `/bug`'s heading and examples, `/verify`'s description
+  and heading, both READMEs, `claude-mem-lite help`, and the notes `get` prints on a memory
+  `/verify` retired or whose `/verify` correction was undone used the bare names. The READMEs'
+  command tables also said `/lesson` and `/bug` write to the events table; both write searchable
+  observations.
+- **The purge count you are asked to approve comes from the purge itself** (D#450). `maintain
+  scan`'s pending-purge line counted every row queued for purge (explicit saves aside) and said
+  `purge_stale` deletes them, but it deletes only the ones older than its retain window (30 days
+  unless you pass `--retain-days`). The line now also gives how many a purge at the default window
+  would delete. `/mem cleanup` asked you to approve the scan's count; it now runs the purge's
+  preview first and asks with that count, as `/update` already did, and neither asks you to approve
+  a preview of 0 rows. `stats --quality` told you to run the purge with `--confirm` straight away;
+  it now says to preview first. And the plugin's detail doc, which the steering block points the
+  model to, told it to run the purge with `--confirm` itself; it now says to preview with
+  `maintain scan` and leaves the cleanup to `/claude-mem-lite:update`, which you start. The doc
+  is rewritten at the next session start with auto-adopt on. An explicitly adopted project's copy
+  is rewritten only by a session started at the project's root, and not under
+  `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`; running `/claude-mem-lite:adopt` there rewrites it.
+- **`maintain scan` prints a dedup command that runs** (D#449). Its "Ready-to-use" line said
+  `claude-mem-lite maintain execute …`; it now gives the CLI by its path.
+- **`/adopt` describes how `CLAUDE.md` loads correctly** (D#451). It said `CLAUDE.md` loads "at
+  system-prompt authority"; Claude Code delivers it in a message after the system prompt. The
+  Chinese README's Invited Memory section, which still described the memory-dir scheme v3.13
+  replaced, now describes the `CLAUDE.md` block, as the English one does. Both READMEs and
+  `llms.txt` no longer say the block outranks MCP server instructions or that Claude Code weighs
+  `CLAUDE.md` and `MEMORY.md` equally; Claude Code's docs say neither.
+
 ## v6.29.2 — /update and /mem cleanup run maintenance through the CLI, and the slash commands name /memory and /update by the plugin's namespace
 
 **Upgrade note: nothing to run; the schema version stays 49.** Only the slash-command text

@@ -12,7 +12,7 @@ import {
   checkWriteProject,
   unknownProjectNote,
 } from './project-utils.mjs';
-import { ensureDbWithWalRecovery, refreshPlannerStats, DB_DIR, CODE_DIR } from './schema.mjs';
+import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
 // the DB is touched — a static import here adds no cold-start cost.
 import {
@@ -253,16 +253,9 @@ try {
   }
   // Fatal: log and exit with descriptive message (Claude Code shows stderr)
   console.error(`[claude-mem-lite] FATAL: Database cannot be opened: ${err.message}`);
-  // D#506: the WAL is moved aside only while nothing else holds the store, and kept, so neither
-  // branch below names a command that removes it: removing it under another connection lost that
-  // connection's commits (D#427), and after a move there is no -wal left to remove.
-  if (err.code === 'CLAUDE_MEM_STORE_IN_USE') {
-    // The message says what to do; nothing on disk was changed.
-  } else if (err.walRecoveryAttempted) {
+  if (err.walRecoveryAttempted) {
     console.error(
-      err.walMovedTo
-        ? `[claude-mem-lite] The damaged WAL was moved to ${shellWord(err.walMovedTo)}; the database file itself does not open. Next: run \`${CLI_INVOKE} doctor\`.`
-        : `[claude-mem-lite] The database file does not open. Next: run \`${CLI_INVOKE} doctor\`.`,
+      `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
     );
   } else {
     console.error(

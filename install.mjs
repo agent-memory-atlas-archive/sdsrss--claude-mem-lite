@@ -2871,24 +2871,6 @@ async function doctor() {
       dwarn('Disk footprint: check failed — ' + e.message);
     }
 
-  // D#506: a WAL that failed to open twice is kept as <db>-wal.corrupt-<stamp>-<pid> (the newest
-  // three) instead of being deleted, so a recovery is never invisible afterwards. An unreadable
-  // data dir is already reported by the footprint line above.
-  if (!dataDirUnreadable)
-    try {
-      const copies = readdirSync(MEM_DATA_DIR)
-        .filter((f) => f.startsWith('claude-mem-lite.db-wal.corrupt-'))
-        .sort();
-      if (copies.length > 0)
-        dwarn(
-          `Damaged WAL copies: ${copies.length} kept beside the database (newest ${copies.at(-1)}). A recovery ` +
-            `moved each aside instead of deleting it; they hold the commits after the damaged frame. Delete ` +
-            `them once you no longer need them.`,
-        );
-    } catch (e) {
-      dwarn('Damaged WAL copies: check failed — ' + e.message);
-    }
-
   // Plugin/hook lifecycle state
   //
   // Audit 2026-09-08 P1-2: readSettings() THROWS on a settings.json that exists and does

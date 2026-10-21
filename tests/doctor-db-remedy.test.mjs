@@ -176,17 +176,6 @@ describe('doctor prints the remedy it computes', () => {
     expect(out).toContain('2026-09-06T00-00-00-000Z');
   });
 
-  // D#506: the WAL recovery keeps a damaged WAL beside the store instead of deleting it.
-  it('names the damaged WAL copies a recovery kept', () => {
-    const dir = dataDir();
-    for (const s of ['20261020T010101Z-11', '20261021T020202Z-22'])
-      writeFileSync(join(dir, `claude-mem-lite.db-wal.corrupt-${s}`), 'frames');
-    const out = runDoctor(dir).stdout;
-    expect(out).toMatch(/Damaged WAL copies: 2 kept beside the database/);
-    expect(out).toContain('claude-mem-lite.db-wal.corrupt-20261021T020202Z-22');
-    expect(runDoctor(dataDir()).stdout, 'none, no line').not.toMatch(/Damaged WAL copies/);
-  });
-
   it('says nothing extra when the database opens cleanly (control)', () => {
     const dir = dataDir();
     const out = runDoctor(dir).stdout;

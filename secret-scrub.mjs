@@ -464,35 +464,62 @@ const isEscBreak = (r, u) => u > 0 && r % (2 * u) === u;
 // An unescaped quote at depth u ends the string: r % 2u < u.
 const isStringEnd = (r, u) => u > 0 && r % (2 * u) < u;
 
+// The characters an escaped line acts on: breaks and backslashes; every other character only moves
+// it on. Steps past LINE_STEP_BUDGET of them are searched natively: a line that runs to the end of
+// the text, read once per BEGIN at its depth and once per pass, was 94.6% of the time of the
+// escape-depth shape (D#511). A line at depth 0 keeps the plain loop, which costs a short line less.
+const ESC_LINE_STOP_RE = /[\n\r\\]/g;
+const LINE_STEP_BUDGET = 32;
+
 /** The line starting at s: its end, and where the next line starts (-1 at the end of the text). */
 function nextLine(text, s, u) {
+  if (u > 0) return nextEscapedLine(text, s, u);
   const n = text.length;
-  let i = s;
-  while (i < n) {
+  for (let i = s; i < n; i++) {
     const ch = text[i];
     if (ch === '\n') return { end: i, next: i + 1 };
     if (ch === '\r') return { end: i, next: text[i + 1] === '\n' ? i + 2 : i + 1 };
-    if (u > 0 && ch === '\\') {
-      let j = i;
-      while (j < n && text[j] === '\\') j++;
-      const r = j - i;
-      const c = text[j];
-      if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
-        let next = j + 1;
-        if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
-        if (u === 1) {
-          CONCAT_AFTER_RE.lastIndex = next;
-          const m = CONCAT_AFTER_RE.exec(text);
-          if (m) next += m[0].length;
-        }
-        return { end: j - u, next };
-      }
-      i = j + 1;
-      continue;
-    }
-    i++;
   }
   return { end: n, next: -1 };
+}
+
+/** nextLine at break depth u > 0. */
+function nextEscapedLine(text, s, u) {
+  const n = text.length;
+  let i = s;
+  let lim = Math.min(n, s + LINE_STEP_BUDGET);
+  for (;;) {
+    while (i < lim) {
+      const ch = text[i];
+      if (ch === '\n') return { end: i, next: i + 1 };
+      if (ch === '\r') return { end: i, next: text[i + 1] === '\n' ? i + 2 : i + 1 };
+      if (ch === '\\') {
+        let j = i;
+        while (j < n && text[j] === '\\') j++;
+        const r = j - i;
+        const c = text[j];
+        if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
+          let next = j + 1;
+          if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
+          // The pattern starts with a quote, so no other character can begin a match.
+          if (u === 1 && (text[next] === '"' || text[next] === "'")) {
+            CONCAT_AFTER_RE.lastIndex = next;
+            const m = CONCAT_AFTER_RE.exec(text);
+            if (m) next += m[0].length;
+          }
+          return { end: j - u, next };
+        }
+        i = j + 1;
+        continue;
+      }
+      i++;
+    }
+    if (i >= n) return { end: n, next: -1 };
+    ESC_LINE_STOP_RE.lastIndex = i;
+    if (!ESC_LINE_STOP_RE.test(text)) return { end: n, next: -1 };
+    i = ESC_LINE_STOP_RE.lastIndex - 1;
+    lim = Math.min(n, i + LINE_STEP_BUDGET);
+  }
 }
 
 /** The line that ends at the break before `ls`, or null when `ls` starts the text or string. */
@@ -534,6 +561,31 @@ function prefixShape(prefix) {
   return new RegExp(`^[ \\t]*${src}`);
 }
 
+const isTagNameCode = (c) =>
+  (c >= 65 && c <= 90) ||
+  (c >= 97 && c <= 122) ||
+  (c >= 48 && c <= 57) ||
+  c === 95 ||
+  c === 58 ||
+  c === 46 ||
+  c === 45;
+
+/**
+ * The length of a closing tag `</name>` (a letter, then up to 40 of `[\w:.-]`) that ends `line` at
+ * q, starting at a or after; 0 when there is none. `/<\/[A-Za-z][\w:.-]{0,40}>$/` on
+ * `line.slice(a, q)`, read from its end: the name is the run of name characters before the `>`,
+ * since a `/` cannot be one of them.
+ */
+function closingTagLength(line, a, q) {
+  if (line[q - 1] !== '>') return 0;
+  let r = q - 1;
+  while (r > a && q - 1 - r <= 41 && isTagNameCode(line.charCodeAt(r - 1))) r--;
+  const len = q - 1 - r;
+  if (len < 1 || len > 41 || r - 2 < a || line[r - 1] !== '/' || line[r - 2] !== '<') return 0;
+  const c = line.charCodeAt(r);
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ? q - (r - 2) : 0;
+}
+
 /** The judged part of line [s, e): no prefix of the key's shape, no padding, no string quotes. */
 function lineCore(text, s, e, shape) {
   let line = text.slice(s, e);
@@ -555,8 +607,8 @@ function lineCore(text, s, e, shape) {
   // `(?:\\+[rn])*["']…$` retried every start in a backslash run.
   let q = b;
   while (q > a && ' \t+,;)]}'.includes(line[q - 1])) q--;
-  const tag = q > a && line[q - 1] === '>' ? /<\/[A-Za-z][\w:.-]{0,40}>$/.exec(line.slice(a, q)) : null;
-  if (tag) b = q - tag[0].length;
+  const tag = q > a ? closingTagLength(line, a, q) : 0;
+  if (tag) b = q - tag;
   else if (q > a && (line[q - 1] === '"' || line[q - 1] === "'" || line[q - 1] === '`')) {
     q--;
     for (;;) {
@@ -660,6 +712,12 @@ function cutOffKeyEnd(text, b, be) {
   let run = 0;
   while (run < 16 && b - run > ls && isB64Code(text.charCodeAt(b - run - 1))) run++;
   const shape = run >= 16 ? null : prefixShape(text.slice(ls, b));
+  // The first character of the prefix after its spaces and tabs: a shape's match can only start a
+  // line whose first character after spaces and tabs is this one (a digit, `:` and `-` stand for
+  // more, and none of them begins a blank line below).
+  let pl = ls;
+  while (pl < b && (text.charCodeAt(pl) === 32 || text.charCodeAt(pl) === 9)) pl++;
+  const shapeLead = shape ? text.charCodeAt(pl) : -1;
 
   let armors = 0;
   let shorts = 0;
@@ -668,6 +726,32 @@ function cutOffKeyEnd(text, b, be) {
     // Another BEGIN line is never part of this key; stop before reading it whole.
     if (!shape && text.startsWith('-----BEGIN ', next)) break;
     const line = nextLine(text, next, u);
+    // Blank lines read here without lineCore, where the runs a BEGIN reads through spent a third of
+    // their time (D#511). Spaces and tabs, at most one quote or backtick, spaces and tabs: blank
+    // whatever the shape, since a shape that matches takes a prefix of it and lineCore takes leading
+    // blanks, one leading quote and trailing blanks from the rest. Spaces and tabs, at most one
+    // quote, then exactly a closing tag and blanks: blank too, unless the shape can start where the
+    // line does (lineCore takes the tag whole, but a shape could take part of it).
+    const le = line.end;
+    let k = next;
+    while (k < le && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9)) k++;
+    const c0 = text.charCodeAt(k);
+    if (k < le && (c0 === 34 || c0 === 39 || c0 === 96)) k++;
+    let blank = k === le;
+    if (!blank && text.charCodeAt(k) === 60 && c0 !== shapeLead) {
+      let e2 = le;
+      while (e2 > k && (text.charCodeAt(e2 - 1) === 32 || text.charCodeAt(e2 - 1) === 9)) e2--;
+      blank = closingTagLength(text, k, e2) === e2 - k;
+    } else if (!blank && k > next && (c0 === 34 || c0 === 39 || c0 === 96)) {
+      while (k < le && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9)) k++;
+      blank = k === le;
+    }
+    if (blank) {
+      next = line.next;
+      if (shorts > 0) break;
+      pendingBlank = true;
+      continue;
+    }
     const { core, start, end: coreEnd } = lineCore(text, next, line.end, shape);
     const kind = classify(core);
     next = line.next;

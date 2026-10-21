@@ -229,24 +229,21 @@ describe('corruption recovery branch', () => {
     );
   });
 
-  // This asserts the BRANCH was entered — not any filesystem byte-state, which is SQLite
-  // internals rather than server.mjs behavior. The guard test above proved this exact
-  // fixture makes a plain open throw a corruption error; the two stderr markers below then
-  // prove server.mjs matched the signature and ran the recovery arm (deleted -wal/-shm,
-  // retried ensureDb) rather than the transient fail-fast arm:
+  // The guard test above proved this exact fixture makes a plain open throw a corruption error;
+  // the two stderr markers below then prove server.mjs matched the signature and ran the recovery
+  // arm (deleted -wal/-shm, retried ensureDb) rather than the transient fail-fast arm:
   //   present: "DB corruption detected, attempting WAL recovery" (the recovery-arm log,
   //            surfaced by the CLAUDE_MEM_DEBUG=1 that runServer sets)
   //   absent:  "Left WAL/SHM intact" (the fail-fast arm's banner)
-  // Deliberately NOT asserted: the post-run -wal/-shm existence (a failed retry reopens in
-  // WAL mode and recreates a 0-byte -wal), and whether the server ultimately serves —
-  // with this fixture the retry does not complete a recovery, so it exits 1 without
-  // serving. exitCode===1 is the agreed, deterministic outcome and is pinned here.
+  // Until D#506 this pinned exit 1: each failed open's close checkpointed the damaged frame into
+  // the main file, so the retry after the delete had no intact file to open. Those closes now
+  // leave the main file alone, and the server serves from it.
   it('enters the WAL-delete recovery arm on a corruption signature', async () => {
     const dir = fixtureDir('recover');
     const dbPath = plantCorruptWal(dir);
     expect(existsSync(dbPath + '-wal')).toBe(true);
 
-    const { stderr, exitCode } = await runServer(dir);
+    const { stderr, exitCode, served } = await runServer(dir);
 
     expect(stderr, 'server must enter the corruption-recovery arm').toContain(
       'DB corruption detected, attempting WAL recovery',
@@ -254,7 +251,7 @@ describe('corruption recovery branch', () => {
     expect(stderr, 'must NOT take the transient fail-fast arm that preserves the WAL').not.toContain(
       'Left WAL/SHM intact',
     );
-    expect(exitCode).toBe(1);
+    expect(served, `exit ${exitCode}: ${stderr.slice(-400)}`).toBe(true);
   }, 30000);
 });
 
@@ -334,7 +331,7 @@ describe('non-corruption open failure', () => {
 // freezes DB_PATH from CLAUDE_MEM_DIR at import time.
 
 describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', () => {
-  it('ensureDbWithWalRecovery enters the recovery arm and tags a failed retry', () => {
+  it('ensureDbWithWalRecovery enters the recovery arm and recovers from the main file', () => {
     const dir = fixtureDir('shared-fn');
     plantCorruptWal(dir);
     const out = execFileSync(
@@ -356,11 +353,9 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
     );
     const r = JSON.parse(out.trim());
     expect(r.msgs.some((m) => m.includes('DB corruption detected, attempting WAL recovery'))).toBe(true);
-    // Same pinned outcome as the server-process test above: this fixture's
-    // retry does not complete a recovery — the throw must carry the marker so
-    // callers word their fatal hint accurately.
-    expect(r.opened).toBe(false);
-    expect(r.attempted).toBe(true);
+    // D#506: the failed opens no longer write the damaged frame into the main file, so the retry
+    // after the delete opens it (this case pinned opened=false before).
+    expect(r.opened, JSON.stringify(r)).toBe(true);
   }, 30000);
 
   it('hook openDb() attempts WAL recovery instead of blind-nulling on a corrupt WAL', () => {
@@ -386,9 +381,10 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
       { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
     );
     const r = JSON.parse(out.trim());
-    // Contract unchanged for callers: unrecoverable → null, hooks degrade.
-    expect(r.isNull).toBe(true);
-    // But the corrupt WAL must be GONE (or a fresh ~0-byte one recreated by the
+    // Recovered (D#506): before, the failed opens had written the damaged frame into the main
+    // file, so this returned null and the hooks degraded.
+    expect(r.isNull).toBe(false);
+    // And the corrupt WAL must be GONE (or a fresh ~0-byte one recreated by the
     // retry's reopen) — pre-fix openDb left the planted frames untouched, so
     // every subsequent hook fire hit the same corruption until MCP restarted.
     expect(r.walSize).toBeLessThan(100);
@@ -543,6 +539,32 @@ describe('a corruption error that does not repeat (D#427)', () => {
       v.close();
     }, 30000);
   }
+});
+
+// D#506. The last connection to close a WAL database checkpoints the WAL into the main file first,
+// without checking the pages, so a failed open over a damaged frame wrote that frame into the main
+// file when it closed its handle (or leaked it: `journal_mode = WAL` ran outside the try that closes
+// it, D#438, and better-sqlite3 closes a leaked handle at exit). Measured 2026-10-21 on this
+// fixture: the shipped recovery left the main file corrupt 20 of 20 times.
+describe('a failed open leaves the main file as it was (D#506)', () => {
+  it('does not checkpoint the damaged WAL frame into the main file', () => {
+    const dir = fixtureDir('no-ckpt');
+    const dbPath = plantCorruptWal(dir);
+    const wal = readFileSync(dbPath + '-wal');
+    const out = execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `import(${JSON.stringify(SCHEMA_URL)}).then((m) => {
+           try { m.ensureDb().close(); console.log('opened'); } catch (e) { console.log('threw ' + (e.code || e.message)); }
+         })`,
+      ],
+      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
+    );
+    expect(out.trim(), 'premise: this fixture fails the open').toMatch(/^threw /);
+    expect(readFileSync(dbPath).equals(PRISTINE_DB), 'the failed open rewrote the main file').toBe(true);
+    expect(readFileSync(dbPath + '-wal').equals(wal), 'the WAL is left for the recovery to judge').toBe(true);
+  }, 30000);
 });
 
 // D#415. The FTS arm's raw connection had better-sqlite3's default 5000 ms busy wait, per

@@ -1704,15 +1704,18 @@ export function ensureDb() {
   try {
     chmodSync(DB_PATH, 0o600);
   } catch {}
-  db.pragma('journal_mode = WAL');
-  // 5000ms matches the MCP server (server.mjs) — 3000ms wasn't enough under realistic
-  // concurrency (parallel CLI saves + a long-running FTS rebuild can push individual
-  // transactions past 3s, triggering SQLITE_BUSY on the third caller).
-  db.pragma(`busy_timeout = ${DB_BUSY_TIMEOUT_MS}`);
-  db.pragma('synchronous = NORMAL');
-  db.pragma('foreign_keys = OFF'); // Enabled after dedup migration
 
+  // The pragmas sit inside the try that closes the handle: `journal_mode = WAL` throws on a
+  // damaged WAL, and a handle leaked there was closed by better-sqlite3 at exit, which wrote the
+  // damaged frame into the main file (D#438, D#506).
   try {
+    db.pragma('journal_mode = WAL');
+    // 5000ms matches the MCP server (server.mjs) — 3000ms wasn't enough under realistic
+    // concurrency (parallel CLI saves + a long-running FTS rebuild can push individual
+    // transactions past 3s, triggering SQLITE_BUSY on the third caller).
+    db.pragma(`busy_timeout = ${DB_BUSY_TIMEOUT_MS}`);
+    db.pragma('synchronous = NORMAL');
+    db.pragma('foreign_keys = OFF'); // Enabled after dedup migration
     const ready = initSchema(db);
     // P1-5: sentinel-gated data cleanups must run on EVERY open (schema.mjs:766).
     // They were extracted out of initSchema into runDeferredCleanups but never
@@ -1726,11 +1729,37 @@ export function ensureDb() {
     }
     return ready;
   } catch (e) {
-    try {
-      db.close();
-    } catch {}
+    closeWithoutCheckpoint(db);
     throw e;
   }
+}
+
+/**
+ * Close a connection whose open failed, without letting the close checkpoint. The last connection
+ * to close a WAL database copies the WAL into the main file first and checks no page, so a failed
+ * open over a damaged frame wrote that frame into the main file, and the WAL recovery below then
+ * deleted the WAL and retried on a main file that was damaged too: on the corrupt-WAL fixture of
+ * tests/wal-recovery.test.mjs, 20 of 20 times (D#506, 2026-10-21). A read-only connection that has
+ * run a statement holds the shared lock, so the close below is not the last, and a read-only close
+ * never checkpoints; one only opened holds nothing (20 of 20 corrupt). The statement may fail on
+ * the damaged WAL; it took the lock all the same (0 of 20). With no guard, the close is the plain
+ * one it always was.
+ */
+function closeWithoutCheckpoint(db) {
+  let guard = null;
+  try {
+    guard = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+    if (busyDeadline !== null) capBusyWaits(guard);
+    guard.pragma('schema_version');
+  } catch {
+    /* no guard, or a read that failed on the damaged WAL and took the lock all the same */
+  }
+  try {
+    db.close();
+  } catch {}
+  try {
+    guard?.close();
+  } catch {}
 }
 
 /**

@@ -810,9 +810,14 @@ function scrubCutOffKeys(text) {
   while ((m = KEY_BEGIN_RE.exec(text))) {
     const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
     if (end === -1) continue;
+    // A BEGIN inside the key before it, on one of its header lines at another escape depth: its own
+    // key can run past that key's end, so it is read too, and the cut grows to cover it (D#533).
+    if (m.index < last) {
+      if (end > last) last = end;
+      continue;
+    }
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;
-    KEY_BEGIN_RE.lastIndex = end;
   }
   return last === 0 ? text : out + text.slice(last);
 }

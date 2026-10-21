@@ -686,3 +686,26 @@ describe('blank lines between a BEGIN and a cut key body', () => {
     expect(windows.filter((w) => escaped.includes(w))).toEqual([]);
   });
 });
+
+// D#533: a BEGIN on a header line of an earlier key, at another escape depth. The earlier key's cut
+// ended inside the second key's body and the scan resumed after it, so the second BEGIN was never
+// read and the rest of its body was stored.
+describe('a BEGIN inside an earlier key, at another escape depth', () => {
+  const K = '-----BEGIN RSA PRIVATE KEY-----';
+  const br = (u) => `${'\\'.repeat(u)}n`;
+  const body = [`MII${b64(60)}`, `MII${b64(60)}`, `MII${b64(40)}`];
+  const windows = body.flatMap((l) => [l.slice(0, 16), l.slice(-16)]);
+  it.each([
+    [1, 2],
+    [1, 4],
+    [2, 4],
+    [2, 1],
+    [4, 1],
+    [4, 2],
+  ])('outer depth %i, inner depth %i', (u1, u2) => {
+    const text = `${K}${br(u1)}X-hA: ${K}${br(u2)}X-hB: v${br(u2)}\n` + body.join(br(u2)) + `${br(u1)} tail`;
+    const out = scrubSecrets(text);
+    expect(windows.filter((w) => out.includes(w))).toEqual([]);
+    expect(out).toContain(' tail');
+  });
+});

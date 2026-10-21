@@ -1737,10 +1737,11 @@ export function ensureDb() {
 /**
  * Close a connection whose open failed, without letting the close checkpoint. The last connection
  * to close a WAL database copies the WAL into the main file first and checks no page, so a failed
- * open over a damaged frame wrote that frame into the main file (D#506). A read-only connection that has
- * run a statement holds the shared lock, so the close below is not the last, and a read-only close
- * never checkpoints; one only opened holds nothing (20 of 20 corrupt). The statement may fail on
- * the damaged WAL; it took the lock all the same (0 of 20). With no guard, the close is the plain
+ * open over a damaged frame wrote that frame into the main file (D#506). A read-only connection
+ * that has run a statement holds the shared lock, so the close below is not the last, and a
+ * read-only close never checkpoints; one only opened holds nothing. Counts on the corrupt-WAL
+ * fixture: docs/audits/20261021-d506-wal-recovery-experiments.md, Q1. The statement may fail on
+ * the damaged WAL; it takes the lock all the same. With no guard, the close is the plain
  * one it always was.
  */
 function closeWithoutCheckpoint(db) {

@@ -430,9 +430,8 @@ fi
 #    settings.json.
 # CODE_DIR/runtime, same reason: the residue it warns about is stale hook entries in the config
 # home's settings.json — one warning per config home, regardless of where the data lives.
-# A hook is stale when cleanup-hooks would remove it: the classifier is lib/hook-prune.mjs beside
-# this script. A substring of the product name listed a
-# user's own hook kept under ~/.claude-mem-lite/, which cleanup-hooks leaves (D#513).
+# The test for a stale hook is cleanup-hooks' classifier, lib/hook-prune.mjs beside this script.
+# A substring of the product name listed a user's own hook kept under ~/.claude-mem-lite/ (D#513).
 RESIDUE_MARKER="$CODE_DIR/runtime/.residue-warned-v2.55$(marker_suffix "$CC_CONFIG_DIR/settings.json" "$CC_DEFAULT_CONFIG_DIR/settings.json")"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && ! -f "$RESIDUE_MARKER" ]]; then
   SETTINGS="$CC_CONFIG_DIR/settings.json"

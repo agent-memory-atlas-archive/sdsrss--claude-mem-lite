@@ -123,6 +123,20 @@ describe('dbCheckRemedy', () => {
     expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
   });
 
+  // D#534: both commands start by deleting the -wal and -shm, which loses the commits of a
+  // connection still open on the store (D#430), and then replace or move the database file.
+  it('says to close every Claude Code session before the restore or set-aside command', async () => {
+    const snap = withDb(['claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak']).db;
+    for (const [what, out] of [
+      ['restore', await dbCheckRemedy(snap, corrupt())],
+      ['set-aside', await dbCheckRemedy(withDb().db, corrupt())],
+    ]) {
+      const at = out.indexOf('every Claude Code session is closed');
+      expect(at, what).toBeGreaterThan(-1);
+      expect(at, `${what}: before the command`).toBeLessThan(out.indexOf('rm -f'));
+    }
+  });
+
   it('accepts the other spellings SQLite uses for a damaged file', async () => {
     const { db } = withDb();
     for (const msg of ['database disk image is malformed', 'file is encrypted or is not a database']) {

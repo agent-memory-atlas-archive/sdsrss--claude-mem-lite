@@ -221,6 +221,31 @@ describe('the two notices', () => {
     expect(out).toContain(restore.note);
   });
 
+  // D#534: the command deletes the -wal and -shm, then copies over or moves the database file
+  // under any session still holding it, this one included.
+  it('the human notice says to close every session, this one included, before the command', () => {
+    const dir = tmp('rem-sessions-');
+    const dbp = join(dir, 'claude-mem-lite.db');
+    writeFileSync(dbp, 'x');
+    const setAside = dbUnusableRemedy(dbp, new Error('file is not a database'));
+    writeFileSync(`${dbp}.2026-09-07.bak`, 'b');
+    const restoreReal = dbUnusableRemedy(dbp, new Error('file is not a database'));
+    expect([setAside.kind, restoreReal.kind]).toEqual(['set-aside', 'restore']);
+    for (const remedy of [setAside, restoreReal]) {
+      const lines = formatDbUnusableNotice({ dbPath: dbp, remedy }).split('\n');
+      const say = lines.findIndex((l) => /every Claude Code session is closed, this one included/.test(l));
+      expect(say, remedy.kind).toBeGreaterThan(-1);
+      expect(say, `${remedy.kind}: before the command`).toBeLessThan(
+        lines.findIndex((l) => l.includes('rm -f')),
+      );
+    }
+    const none = formatDbUnusableNotice({
+      dbPath: dbp,
+      remedy: { kind: 'unknown', command: '', snapshotCount: 0, note: 'Could not read /tmp/x' },
+    });
+    expect(none).not.toMatch(/session is closed/);
+  });
+
   it('renders without a command when there is none to give', () => {
     const out = formatDbUnusableNotice({
       dbPath: db,

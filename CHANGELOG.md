@@ -2,6 +2,17 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.3 — doctor's restore and set-aside commands say to close every Claude Code session first
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.2`.
+
+- **doctor and the session-start notice say to close every Claude Code session before the restore
+  or set-aside command** (D#534). Both commands start by deleting the database's `-wal` and `-shm`
+  files, then copy a backup over the database file or move it aside. A session that still has the
+  database open can lose its recent writes, or write them over the restored file. The session-start
+  notice adds "this one included", since it is read inside a session.
+
 ## v6.30.2 — a failed open no longer writes a damaged WAL frame into the database file
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

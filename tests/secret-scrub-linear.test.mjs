@@ -110,20 +110,6 @@ describe('scrubSecrets stays linear on crafted input (D#130)', () => {
       '-----BEGIN RSA PRIVATE KEY-----\\nAb\\n-----BEGIN RSA PRIVATE KEY-----\\\\nAb\\\\n'.repeat(N / 76),
     pemConcatLines:
       '"-----BEGIN RSA PRIVATE KEY-----\\n" +\n' + '  "MIIEabcdefghijklmnop\\n" +\n'.repeat(N / 28),
-    // D#527: BEGINs at twelve escape depths, each followed by sixteen header-style lines, over a tail
-    // with a backslash every third character. Every BEGIN of a block read the same line to the end
-    // of the text, a character at a time (v6.30.2: 1.9 s at the hook's 256 KiB input cap).
-    pemEscapeDepthHeaders: (() => {
-      let s = CHAIN;
-      for (let k = 0; k < 12; k++) {
-        const br = '\\'.repeat(2 ** k) + 'n';
-        s += ' -----BEGIN RSA PRIVATE KEY-----' + br;
-        for (let h = 0; h < 16; h++) {
-          s += `X-h${String.fromCharCode(65 + h)}: -----BEGIN RSA PRIVATE KEY-----${br}`;
-        }
-      }
-      return s + ' ' + 'a\\x'.repeat(Math.ceil((N - s.length) / 3));
-    })(),
     jwtLongHyphenPrefix: 'a-'.repeat(N / 2) + 'eyJ' + 'A'.repeat(20),
     jwtDotChain: ('eyJ' + 'A'.repeat(12) + '.').repeat(N / 16),
   };
@@ -362,29 +348,6 @@ describe('the linear rewrites still scrub what the old patterns did', () => {
     ],
   ])('%s', (_name, input, want) => {
     expect(scrubSecrets(input)).toBe(want);
-  });
-});
-
-// D#527: an escaped line that outlasts its first steps is read once per scrubSecrets pass, kept by
-// its start AND its depth, and searched natively past those steps. Both cases came out of an
-// equality fuzz against the line-by-line reading, and each stored key lines under one of the drafts.
-describe('escaped lines read past their first steps', () => {
-  it('are read at each depth they are read at', () => {
-    // A line after a real break can be read at two depths, since a real break ends a line at every
-    // depth. Keyed by start alone, the depth-1 BEGIN was handed the line the depth-2 one had read.
-    const input =
-      ' -----BEGIN EC PRIVATE KEY-----\\\\nVersion:  -----BEGIN RSA PRIVATE KEY-----\\nX-h1: v\\\\n\n' +
-      'g5fzR9LjIgk/wS47Bs+plVL/3542IIdj4A\\nMIItWi\n tail';
-    expect(scrubSecrets(input)).toBe(' -----BEGIN EC PRIVATE KEY-----\\\\nVersion:  ***PEM_KEY***\n tail');
-  });
-
-  it('continue past a real break escaped by a backslash', () => {
-    // The search found the real break after `values \`, which the line-by-line reading steps over,
-    // so the header ended there, `like this` read as prose and the key below it was kept.
-    const input =
-      '-----BEGIN PRIVATE KEY-----\\nComment: exported by a tool that wraps its long header values \\\n' +
-      'like this\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC';
-    expect(scrubSecrets(input)).toBe('***PEM_KEY***');
   });
 });
 

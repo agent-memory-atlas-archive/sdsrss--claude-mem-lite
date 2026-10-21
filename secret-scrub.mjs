@@ -464,16 +464,24 @@ const isEscBreak = (r, u) => u > 0 && r % (2 * u) === u;
 // An unescaped quote at depth u ends the string: r % 2u < u.
 const isStringEnd = (r, u) => u > 0 && r % (2 * u) < u;
 
-// The characters an escaped line acts on: breaks and backslashes; every other character only moves
-// it on. Steps past LINE_STEP_BUDGET of them are searched natively: a line that runs to the end of
-// the text, read once per BEGIN at its depth and once per pass, was 94.6% of the time of the
-// escape-depth shape (D#511). A line at depth 0 keeps the plain loop.
-const ESC_LINE_STOP_RE = /[\n\r\\]/g;
+// The places an escaped line can end: a break not right after a backslash (a backslash escapes the
+// character after its run, a real break included), and a run of backslashes followed by `n` or `r`.
+// Past its first LINE_STEP_BUDGET steps a line is searched natively, from one of these to the next:
+// a line that runs to the end of the text, read once per BEGIN at its depth and once per pass, was
+// 94.6% of the time of the escape-depth shape (D#511). Until D#527 the search stopped at every
+// backslash, so a tail with one every few characters was still read a character at a time. The
+// lookbehind keeps a match at the start of a run, where the steps read one: a search starts after a
+// character that is not a backslash. A line at depth 0 keeps the plain loop.
+const ESC_LINE_STOP_RE = /(?<!\\)(?:[\n\r]|\\+[nr])/g;
 const LINE_STEP_BUDGET = 32;
 
-/** The line starting at s: its end, and where the next line starts (-1 at the end of the text). */
-function nextLine(text, s, u) {
-  if (u > 0) return nextEscapedLine(text, s, u);
+/**
+ * The line starting at s: its end, and where the next line starts (-1 at the end of the text).
+ * `longLines` holds the escaped lines of this text that outlasted LINE_STEP_BUDGET (see
+ * scrubCutOffKeys).
+ */
+function nextLine(text, s, u, longLines) {
+  if (u > 0) return nextEscapedLine(text, s, u, longLines);
   const n = text.length;
   for (let i = s; i < n; i++) {
     const ch = text[i];
@@ -483,43 +491,66 @@ function nextLine(text, s, u) {
   return { end: n, next: -1 };
 }
 
-/** nextLine at break depth u > 0. */
-function nextEscapedLine(text, s, u) {
+/**
+ * nextLine at break depth u > 0. A line is a function of the text, its start and its depth, so one
+ * that outlasts its first LINE_STEP_BUDGET steps is read once per text: on the escape-depth shapes
+ * every BEGIN of a block read the same line to the end of the text after the block's armor-style
+ * header lines, 17 times per block and pass (D#527). Shorter lines never touch the map, which the
+ * shapes with many empty lines would pay on every one of them.
+ */
+function nextEscapedLine(text, s, u, longLines) {
   const n = text.length;
   let i = s;
-  let lim = Math.min(n, s + LINE_STEP_BUDGET);
-  for (;;) {
-    while (i < lim) {
-      const ch = text[i];
-      if (ch === '\n') return { end: i, next: i + 1 };
-      if (ch === '\r') return { end: i, next: text[i + 1] === '\n' ? i + 2 : i + 1 };
-      if (ch === '\\') {
-        let j = i;
-        while (j < n && text[j] === '\\') j++;
-        const r = j - i;
-        const c = text[j];
-        if ((c === 'n' || c === 'r') && isEscBreak(r, u)) {
-          let next = j + 1;
-          if (c === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
-          // The pattern starts with a quote, so no other character can begin a match.
-          if (u === 1 && (text[next] === '"' || text[next] === "'")) {
-            CONCAT_AFTER_RE.lastIndex = next;
-            const m = CONCAT_AFTER_RE.exec(text);
-            if (m) next += m[0].length;
-          }
-          return { end: j - u, next };
-        }
-        i = j + 1;
-        continue;
-      }
-      i++;
+  const lim = Math.min(n, s + LINE_STEP_BUDGET);
+  while (i < lim) {
+    const ch = text[i];
+    if (ch === '\n') return { end: i, next: i + 1 };
+    if (ch === '\r') return { end: i, next: text[i + 1] === '\n' ? i + 2 : i + 1 };
+    if (ch === '\\') {
+      let j = i;
+      while (j < n && text[j] === '\\') j++;
+      const c = text[j];
+      if ((c === 'n' || c === 'r') && isEscBreak(j - i, u)) return escapedBreak(text, j, u);
+      i = j + 1;
+      continue;
     }
-    if (i >= n) return { end: n, next: -1 };
-    ESC_LINE_STOP_RE.lastIndex = i;
-    if (!ESC_LINE_STOP_RE.test(text)) return { end: n, next: -1 };
-    i = ESC_LINE_STOP_RE.lastIndex - 1;
-    lim = Math.min(n, i + LINE_STEP_BUDGET);
+    i++;
   }
+  if (i >= n) return { end: n, next: -1 };
+  let byStart = longLines.get(u);
+  if (!byStart) longLines.set(u, (byStart = new Map()));
+  let line = byStart.get(s);
+  if (!line) byStart.set(s, (line = longEscapedLine(text, i, u)));
+  return line;
+}
+
+/** The rest of an escaped line from i, read from one place it can end to the next. */
+function longEscapedLine(text, i, u) {
+  for (;;) {
+    ESC_LINE_STOP_RE.lastIndex = i;
+    const m = ESC_LINE_STOP_RE.exec(text);
+    if (!m) return { end: text.length, next: -1 };
+    const p = m.index;
+    const ch = text[p];
+    if (ch === '\n') return { end: p, next: p + 1 };
+    if (ch === '\r') return { end: p, next: text[p + 1] === '\n' ? p + 2 : p + 1 };
+    const j = p + m[0].length - 1; // the `n` or `r` after the run
+    if (isEscBreak(j - p, u)) return escapedBreak(text, j, u);
+    i = j + 1;
+  }
+}
+
+/** The line ended by the break at depth u whose `n` or `r` is at j. */
+function escapedBreak(text, j, u) {
+  let next = j + 1;
+  if (text[j] === 'r' && text.startsWith('\\'.repeat(u) + 'n', next)) next += u + 1;
+  // The pattern starts with a quote, so no other character can begin a match.
+  if (u === 1 && (text[next] === '"' || text[next] === "'")) {
+    CONCAT_AFTER_RE.lastIndex = next;
+    const m = CONCAT_AFTER_RE.exec(text);
+    if (m) next += m[0].length;
+  }
+  return { end: j - u, next };
 }
 
 /** The line that ends at the break before `ls`, or null when `ls` starts the text or string. */
@@ -652,9 +683,9 @@ function cutRun(core) {
  * is there. One base64 line alone is a key only when it is 40+ characters, starts the way a key
  * encoding starts (DER `MII…`, OpenSSH `b3BlbnNzaC1rZXktdjE…`) or follows armor headers: a path
  * or an identifier of 16-39 characters under a header is prose (delta review P3-5). A complete
- * block never gets here; the block pattern above takes it first.
+ * block never gets here; the block pattern above takes it first. `longLines` is nextLine's.
  */
-function cutOffKeyEnd(text, b, be) {
+function cutOffKeyEnd(text, b, be, longLines) {
   // The rest of the BEGIN line: nothing, or base64 chunks, then a break that sets the depth.
   let i = be;
   for (
@@ -676,7 +707,7 @@ function cutOffKeyEnd(text, b, be) {
     if (text[j] !== 'n' && text[j] !== 'r') return -1;
     u = r & -r;
     if (r !== u) return -1; // a literal backslash on the BEGIN line: not a key line
-    ({ next } = nextLine(text, i, u));
+    ({ next } = nextLine(text, i, u, longLines));
   } else return -1;
   let longs = 0;
   let longest = 0;
@@ -725,7 +756,7 @@ function cutOffKeyEnd(text, b, be) {
   while (next !== -1) {
     // Another BEGIN line is never part of this key; stop before reading it whole.
     if (!shape && text.startsWith('-----BEGIN ', next)) break;
-    const line = nextLine(text, next, u);
+    const line = nextLine(text, next, u, longLines);
     // Blank lines read here without lineCore, where the runs a BEGIN reads through spent a third of
     // their time (D#511). Spaces and tabs, at most one quote or backtick, spaces and tabs: blank
     // whatever the shape, since a shape that matches takes a prefix of it and lineCore takes leading
@@ -803,12 +834,13 @@ function cutOffKeyEnd(text, b, be) {
 
 function scrubCutOffKeys(text) {
   if (!text.includes('PRIVATE KEY')) return text;
+  const longLines = new Map();
   KEY_BEGIN_RE.lastIndex = 0;
   let out = '';
   let last = 0;
   let m;
   while ((m = KEY_BEGIN_RE.exec(text))) {
-    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length);
+    const end = cutOffKeyEnd(text, m.index, m.index + m[0].length, longLines);
     if (end === -1) continue;
     out += text.slice(last, m.index) + PEM_MARK;
     last = end;

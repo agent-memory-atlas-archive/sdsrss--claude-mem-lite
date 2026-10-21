@@ -233,3 +233,425 @@ smoke runs).
   `cc-socks`, `claude-1000` — other tools' directories, none with a name these scripts write.
   `~/.claude-mem-lite` was never named by any script and every child had HOME and CLAUDE_MEM_DIR
   pointed inside `<d506>`; its mtimes were not used as evidence because live sessions write there.
+
+## Appendix: the Q1 scripts as run
+
+Run from the scripts directory with the child environment `common.mjs` builds: `build-pristine.mjs`, then `node q1.mjs 20 <arms>`; `check.mjs` reads the outcome.
+
+### common.mjs
+```js
+// Shared helpers for the D#506 mechanism experiments. Never imports schema.mjs (callers that need it
+// set CLAUDE_MEM_DIR first and import it themselves, because DB_PATH is frozen at import time).
+import { readFileSync, writeFileSync, rmSync, mkdirSync, copyFileSync, existsSync, statSync, mkdtempSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync, spawn } from 'node:child_process';
+import { join } from 'node:path';
+
+export const REPO = '/home/ai/dev/claude-mem-lite';
+export const BSQ = `${REPO}/node_modules/better-sqlite3/lib/index.js`;
+export const SCHEMA = `${REPO}/schema.mjs`;
+export const D = '/tmp/claude-1000/-home-ai-dev-claude-mem-lite/c9e45eae-6456-4573-9010-9065054431eb/scratchpad/d506';
+export const S = `${D}/scripts`;
+export const FX = `${D}/fx`;
+export const DB_NAME = 'claude-mem-lite.db';
+export const PRISTINE = `${FX}/pristine/${DB_NAME}`;
+
+/** Environment for every child: sandboxed HOME/TMPDIR, no LLM keys, a fixture CLAUDE_MEM_DIR. */
+export function childEnv(dir, extra = {}) {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (/API_KEY|TOKEN|OPENROUTER|ANTHROPIC/i.test(k)) delete env[k];
+  delete env.CLAUDE_MEM_DEBUG;
+  return { ...env, HOME: `${D}/home`, TMPDIR: `${D}/tmp`, CLAUDE_MEM_DIR: dir ?? `${D}/nowhere`, ...extra };
+}
+
+export function node(script, args = [], { dir, env = {}, timeout = 60000, input } = {}) {
+  const out = execFileSync(process.execPath, [script, ...args.map(String)], {
+    env: childEnv(dir, env),
+    encoding: 'utf8',
+    timeout,
+    input,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const last = out.trim().split('\n').pop();
+  try {
+    return JSON.parse(last);
+  } catch {
+    return { raw: out };
+  }
+}
+
+export const sha = (p) => (existsSync(p) ? createHash('sha1').update(readFileSync(p)).digest('hex').slice(0, 12) : null);
+export const size = (p) => (existsSync(p) ? statSync(p).size : -1);
+export function fileState(dbPath) {
+  return {
+    main: sha(dbPath),
+    wal: size(`${dbPath}-wal`),
+    walSha: sha(`${dbPath}-wal`),
+    shm: size(`${dbPath}-shm`),
+  };
+}
+
+// ─── WAL arithmetic (SQLite fileformat2 §4.1), copied from tests/wal-recovery.test.mjs ──────────
+export function walChecksum(buf, s0, s1, bigEndian) {
+  for (let i = 0; i + 7 < buf.length; i += 8) {
+    const a = bigEndian ? buf.readUInt32BE(i) : buf.readUInt32LE(i);
+    const b = bigEndian ? buf.readUInt32BE(i + 4) : buf.readUInt32LE(i + 4);
+    s0 = (s0 + a + s1) >>> 0;
+    s1 = (s1 + b + s0) >>> 0;
+  }
+  return [s0, s1];
+}
+
+export function walFrames(wal) {
+  const pageSize = wal.readUInt32BE(8);
+  const frames = [];
+  for (let off = 32, i = 0; off + 24 + pageSize <= wal.length; off += 24 + pageSize, i++) {
+    frames.push({ i, off, pgno: wal.readUInt32BE(off), commit: wal.readUInt32BE(off + 4) });
+  }
+  return { pageSize, frames, bigEndian: wal.readUInt32BE(0) === 0x377f0683 };
+}
+
+/** Re-sign every frame of `bad` (a damaged copy of a valid WAL) so the checksum chain verifies. */
+export function resign(bad) {
+  const { pageSize, frames, bigEndian } = walFrames(bad);
+  let [s0, s1] = walChecksum(bad.subarray(0, 24), 0, 0, bigEndian);
+  for (const f of frames) {
+    [s0, s1] = walChecksum(bad.subarray(f.off, f.off + 8), s0, s1, bigEndian);
+    [s0, s1] = walChecksum(bad.subarray(f.off + 24, f.off + 24 + pageSize), s0, s1, bigEndian);
+    bad.writeUInt32BE(s0, f.off + 16);
+    bad.writeUInt32BE(s1, f.off + 20);
+  }
+  return bad;
+}
+
+/** quick_check on a copy of the MAIN FILE ALONE (no -wal/-shm), in a private temp dir. */
+export function mainOnlyQuickCheck(dbPath, Database) {
+  const t = mkdtempSync(`${D}/tmp/qc-`);
+  try {
+    copyFileSync(dbPath, join(t, DB_NAME));
+    const db = new Database(join(t, DB_NAME));
+    let r;
+    try {
+      r = db.pragma('quick_check', { simple: true });
+    } catch (e) {
+      r = `${e.code}: ${e.message}`;
+    }
+    db.close();
+    return r;
+  } catch (e) {
+    return `${e.code}: ${e.message}`;
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+}
+
+export function tally(list) {
+  const t = {};
+  for (const x of list) t[x] = (t[x] ?? 0) + 1;
+  return t;
+}
+
+export { readFileSync, writeFileSync, rmSync, mkdirSync, copyFileSync, existsSync, statSync, spawn, join };
+```
+
+### mkfx.mjs
+```js
+// Fixture maker. One fresh process per fixture; the live handle used to produce the WAL is closed
+// (its close checkpoints), then the main file is restored to the pristine bytes, as in
+// tests/wal-recovery.test.mjs plantCorruptWal.
+//   node mkfx.mjs a <dir>                 page-1 frame, bytes 100..300 = 0xff (the test fixture)
+//   node mkfx.mjs b <dir> <seed> header   WAL of 400 observation inserts; the LATEST frame of one
+//                                         observations-table page (seeded pick) gets bytes 0..200 = 0xff
+//   node mkfx.mjs b <dir> <seed> rand     same WAL, 1-8 bytes xor'd at a seeded offset in that frame
+//   node mkfx.mjs c <dir> <seed>          fixture-a WAL; 1-8 bytes xor'd at a seeded offset inside one
+//                                         seeded frame among those holding sqlite_master pages
+//   node mkfx.mjs healthy <dir>           pristine main file only
+// Prints one JSON line describing what was damaged.
+import { BSQ, PRISTINE, DB_NAME, readFileSync, writeFileSync, rmSync, mkdirSync, walFrames, resign } from './common.mjs';
+const Database = (await import(BSQ)).default;
+const [kind, dir, seedArg, mode] = process.argv.slice(2);
+rmSync(dir, { recursive: true, force: true });
+mkdirSync(dir, { recursive: true });
+const dbPath = `${dir}/${DB_NAME}`;
+const pristine = readFileSync(PRISTINE);
+writeFileSync(dbPath, pristine);
+if (kind === 'healthy') {
+  console.log(JSON.stringify({ kind, dbPath }));
+  process.exit(0);
+}
+let seed = Number(seedArg ?? 1) >>> 0 || 1;
+const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32;
+seed = Math.imul(seed, 2654435761) >>> 0; // spread small seeds
+for (let k = 0; k < 4; k++) rnd();
+
+const live = new Database(dbPath);
+live.pragma('journal_mode = WAL');
+live.pragma('wal_autocheckpoint = 0');
+live.pragma('foreign_keys = OFF'); // ensureDb runs with FKs off too
+live.pragma('wal_checkpoint(TRUNCATE)');
+let pageOwner = new Map();
+if (kind === 'a' || kind === 'c') {
+  live.exec('CREATE TABLE _wal_probe_marker(x TEXT)');
+} else if (kind === 'b') {
+  const ins = live.prepare(
+    `INSERT INTO observations(memory_session_id, project, text, type, title, narrative, created_at, created_at_epoch)
+     VALUES (?, 'proj', ?, 'discovery', ?, ?, '2026-10-21T00:00:00Z', ?)`,
+  );
+  live.transaction(() => {
+    for (let i = 0; i < 400; i++) {
+      const words = Array.from({ length: 60 }, (_, k) => `w${(i * 31 + k * 7) % 997}`).join(' ');
+      ins.run(`s${i % 7}`, words, `title ${i}`, `narrative ${words}`, 1_760_000_000 + i);
+    }
+  })();
+}
+for (const r of live.prepare('SELECT pageno, name, pagetype FROM dbstat').all()) pageOwner.set(r.pageno, r);
+const wal = readFileSync(dbPath + '-wal');
+live.close();
+writeFileSync(dbPath, pristine);
+rmSync(dbPath + '-shm', { force: true });
+
+const { pageSize, frames } = walFrames(wal);
+const latest = new Map();
+for (const f of frames) latest.set(f.pgno, f); // a reader uses the newest frame of each page
+const bad = Buffer.from(wal);
+let target;
+let what;
+if (kind === 'a') {
+  target = frames.find((f) => f.pgno === 1);
+  bad.fill(0xff, target.off + 24 + 100, target.off + 24 + 300);
+  what = 'bytes 100..300 = 0xff';
+} else if (kind === 'b') {
+  const cands = [...latest.values()].filter((f) => pageOwner.get(f.pgno)?.name === 'observations');
+  target = cands[Math.floor(rnd() * cands.length)];
+  if (mode === 'rand') {
+    const off = Math.floor(rnd() * pageSize);
+    const n = 1 + Math.floor(rnd() * 8);
+    for (let k = 0; k < n && off + k < pageSize; k++) bad[target.off + 24 + off + k] ^= 1 + Math.floor(rnd() * 255);
+    what = `xor ${n} bytes at ${off}`;
+  } else {
+    bad.fill(0xff, target.off + 24, target.off + 24 + 200);
+    what = 'bytes 0..200 = 0xff';
+  }
+  what += ` (candidates ${cands.length})`;
+} else if (kind === 'c') {
+  const cands = [...latest.values()].filter((f) => f.pgno === 1 || pageOwner.get(f.pgno)?.name === 'sqlite_schema' || pageOwner.get(f.pgno)?.name === 'sqlite_master');
+  target = cands[Math.floor(rnd() * cands.length)];
+  const off = Math.floor(rnd() * pageSize);
+  const n = 1 + Math.floor(rnd() * 8);
+  for (let k = 0; k < n && off + k < pageSize; k++) bad[target.off + 24 + off + k] ^= 1 + Math.floor(rnd() * 255);
+  what = `xor ${n} bytes at ${off} (candidates ${cands.length})`;
+} else throw new Error(`unknown kind ${kind}`);
+resign(bad);
+writeFileSync(dbPath + '-wal', bad);
+writeFileSync(dbPath + '-shm', Buffer.alloc(32768)); // a crash leaves one behind too
+console.log(
+  JSON.stringify({
+    kind,
+    dbPath,
+    frames: frames.length,
+    walPages: [...latest.keys()].map((p) => `${p}:${pageOwner.get(p)?.name ?? '?'}`).slice(0, 12),
+    target: { frame: target.i, pgno: target.pgno, owner: pageOwner.get(target.pgno)?.name, type: pageOwner.get(target.pgno)?.pagetype },
+    what,
+  }),
+);
+```
+
+### build-pristine.mjs
+```js
+// Build the pristine, fully checkpointed, schema-current store once: fx/pristine/claude-mem-lite.db.
+// Same recipe as tests/wal-recovery.test.mjs beforeAll. Run with CLAUDE_MEM_DIR=<FX>/pristine.
+import { FX, SCHEMA } from './common.mjs';
+if (process.env.CLAUDE_MEM_DIR !== `${FX}/pristine`) throw new Error('set CLAUDE_MEM_DIR to fx/pristine');
+const { ensureDb, DB_PATH, CURRENT_SCHEMA_VERSION } = await import(SCHEMA);
+const db = ensureDb();
+db.pragma('wal_checkpoint(TRUNCATE)');
+const cols = db.prepare('PRAGMA table_info(observations)').all();
+const pages = db.pragma('page_count', { simple: true });
+const ps = db.pragma('page_size', { simple: true });
+db.close();
+console.log(JSON.stringify({ DB_PATH, CURRENT_SCHEMA_VERSION, pages, ps, obsCols: cols.map((c) => `${c.name}${c.notnull ? '!' : ''}${c.dflt_value !== null ? '=' + c.dflt_value : ''}`) }));
+```
+
+### q1.mjs
+```js
+// Q1 (and Q5 recovery arms) orchestrator. Each trial: fresh fixture process (mkfx a), one arm
+// process, then fresh check processes: state, mainqc, ensure-after-delete.
+// argv: n arm[,arm...] [guardStmt]
+import { S, FX, D, node, tally, writeFileSync, rmSync } from './common.mjs';
+const [n, arms, guardStmt = 'count'] = process.argv.slice(2);
+const summary = {};
+for (const arm of arms.split(',')) {
+  const trials = [];
+  for (let i = 0; i < Number(n); i++) {
+    const dir = `${FX}/q1/${arm}`;
+    node(`${S}/mkfx.mjs`, ['a', dir]);
+    const run = node(`${S}/q1-arm.mjs`, [dir, arm, guardStmt], { dir });
+    const st = node(`${S}/check.mjs`, [dir, 'state'], { dir });
+    const qc = node(`${S}/check.mjs`, [dir, 'mainqc'], { dir });
+    const en = node(`${S}/check.mjs`, [dir, 'ensure-after-delete'], { dir });
+    trials.push({ run, st, mainqc: qc.mainqc, ensureAfterDelete: en.ensureAfterDelete });
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // pid and inode vary per trial; keep the lock type and byte range (128 = -shm DMS byte,
+  // 1073741826..1073742335 = the db file's SHARED range)
+  const lk = (a) => (a ?? []).map((l) => l.replace(/^(POSIX ADVISORY \w+) \d+ \S+ /, '$1 ')).join(' / ') || '-';
+  const short = (s) => (s === 'ok' ? 'ok' : s.split('\n').slice(0, 2).join(' | ').slice(0, 90));
+  summary[arm] = {
+    n: trials.length,
+    mainqc: tally(trials.map((t) => short(t.mainqc))),
+    mainIsPristine: tally(trials.map((t) => String(t.st.mainIsPristine))),
+    walLeftBytes: tally(trials.map((t) => String(t.st.wal))),
+    corruptFiles: tally(trials.map((t) => t.st.corrupt.join(',') || '-')),
+    ensureAfterDelete: tally(trials.map((t) => t.ensureAfterDelete)),
+    steps: tally(trials.map((t) => t.run.steps?.join(' ; ') ?? JSON.stringify(t.run).slice(0, 120))),
+    locksBeforeClose: tally(trials.map((t) => lk(t.run.locksBeforeClose))),
+    locksWithGuard: tally(trials.map((t) => lk(t.run.locksWithGuard))),
+    locksAfterRwClose: tally(trials.map((t) => lk(t.run.locksAfterRwClose))),
+  };
+  writeFileSync(`${D}/logs/q1-${arm}${guardStmt === 'count' ? '' : '-' + guardStmt}.json`, JSON.stringify(trials, null, 1));
+}
+console.log(JSON.stringify(summary, null, 1));
+```
+
+### q1-arm.mjs
+```js
+// One open of a corrupt-WAL fixture in a FRESH process. argv: dir arm
+//   plain-close    RW open; journal_mode=WAL throws; rw.close()
+//   guarded-close  RW open; journal_mode=WAL throws; RO guard opened and a statement run on it
+//                  (count(*) sqlite_master — throws too, see `guardStmt`); rw.close(); guard.close()
+//   leak           RW open; journal_mode=WAL throws; nothing closed; natural exit
+//   leak-guard     as leak, plus a RO guard (statement run) left open; natural exit
+//   leak-exit      as leak, process.exit(0)
+//   leak-guard-exit as leak-guard, process.exit(0)
+//   shipped        schema.ensureDbWithWalRecovery()
+//   probe-delete   RO probe (count(*) sqlite_master); corruption -> rm -wal,-shm; ensureDb()
+//   probe-rename   RO probe; corruption -> rename -wal to -wal.corrupt-<ts>, rm -shm; ensureDb()
+// Prints one JSON line.
+import { BSQ, SCHEMA, DB_NAME, readFileSync } from './common.mjs';
+import { rmSync, renameSync } from 'node:fs';
+const Database = (await import(BSQ)).default;
+const [dir, arm, guardStmt = 'count'] = process.argv.slice(2);
+process.env.CLAUDE_MEM_DIR = dir;
+const p = `${dir}/${DB_NAME}`;
+const r = { arm, steps: [] };
+const note = (k, e) => r.steps.push(e ? `${k}: ${e.code} ${e.message.slice(0, 60)}` : `${k}: ok`);
+const myLocks = () =>
+  readFileSync('/proc/locks', 'utf8')
+    .split('\n')
+    .filter((l) => l.split(/\s+/)[4] === String(process.pid))
+    .map((l) => l.split(/\s+/).slice(1).join(' '));
+
+function failRw() {
+  const rw = new Database(p);
+  try {
+    rw.pragma('journal_mode = WAL');
+    note('rw journal_mode');
+  } catch (e) {
+    note('rw journal_mode', e);
+  }
+  return rw;
+}
+function openGuard() {
+  const g = new Database(p, { readonly: true });
+  try {
+    if (guardStmt === 'count') g.prepare('SELECT count(*) FROM sqlite_master').get();
+    else if (guardStmt === 'schema_version') g.pragma('schema_version');
+    // guardStmt 'none': the guard is opened and nothing is run on it
+    note(`guard ${guardStmt}`);
+  } catch (e) {
+    note(`guard ${guardStmt}`, e);
+  }
+  r.locksWithGuard = myLocks();
+  return g;
+}
+
+if (arm === 'plain-close') {
+  const rw = failRw();
+  r.locksBeforeClose = myLocks();
+  rw.close();
+} else if (arm === 'guarded-close') {
+  const rw = failRw();
+  const g = openGuard();
+  rw.close();
+  r.locksAfterRwClose = myLocks();
+  g.close();
+} else if (arm === 'leak' || arm === 'leak-exit') {
+  globalThis.keep = [failRw()];
+} else if (arm === 'leak-guard' || arm === 'leak-guard-exit') {
+  globalThis.keep = [failRw(), openGuard()];
+} else if (arm === 'shipped') {
+  const m = await import(SCHEMA);
+  try {
+    m.ensureDbWithWalRecovery({ warn: (x) => r.steps.push(`warn ${x.slice(0, 70)}`) }).close();
+    note('shipped');
+  } catch (e) {
+    note('shipped', e);
+  }
+} else if (arm === 'probe-delete' || arm === 'probe-rename') {
+  const m = await import(SCHEMA);
+  let bad = false;
+  const ro = new Database(p, { readonly: true });
+  try {
+    ro.prepare('SELECT count(*) FROM sqlite_master').get();
+    note('probe');
+  } catch (e) {
+    bad = m.isDbCorruptionError(e);
+    note('probe', e);
+  }
+  ro.close();
+  if (bad) {
+    if (arm === 'probe-delete') rmSync(`${p}-wal`, { force: true });
+    else renameSync(`${p}-wal`, `${p}-wal.corrupt-${Date.now()}`);
+    rmSync(`${p}-shm`, { force: true });
+  }
+  try {
+    m.ensureDb().close();
+    note('ensureDb');
+  } catch (e) {
+    note('ensureDb', e);
+  }
+} else throw new Error(`unknown arm ${arm}`);
+console.log(JSON.stringify(r));
+if (arm.endsWith('-exit')) process.exit(0);
+```
+
+### check.mjs
+```js
+// Outcome checks, each in its own fresh process. argv: dir what
+//   mainqc       quick_check on a copy of the main file alone (no -wal/-shm)
+//   ensure-after-delete  rm -wal/-shm, then schema.ensureDb() and quick_check on it
+//   state        file state (sha of main, sizes) + any -wal.corrupt-* files
+import { BSQ, SCHEMA, DB_NAME, PRISTINE, mainOnlyQuickCheck, fileState, sha, size } from './common.mjs';
+import { rmSync, readdirSync } from 'node:fs';
+const [dir, what] = process.argv.slice(2);
+process.env.CLAUDE_MEM_DIR = dir;
+const p = `${dir}/${DB_NAME}`;
+const Database = (await import(BSQ)).default;
+if (what === 'mainqc') {
+  console.log(JSON.stringify({ mainqc: mainOnlyQuickCheck(p, Database) }));
+} else if (what === 'state') {
+  const corrupt = readdirSync(dir).filter((f) => f.includes('.corrupt-'));
+  console.log(
+    JSON.stringify({
+      ...fileState(p),
+      mainIsPristine: sha(p) === sha(PRISTINE),
+      corrupt: corrupt.map((f) => `${f.replace(/\d+$/, 'TS')}:${size(`${dir}/${f}`)}`),
+    }),
+  );
+} else if (what === 'ensure-after-delete') {
+  rmSync(`${p}-wal`, { force: true });
+  rmSync(`${p}-shm`, { force: true });
+  const m = await import(SCHEMA);
+  let out;
+  try {
+    const db = m.ensureDb();
+    const qc = db.pragma('quick_check', { simple: true });
+    db.close();
+    out = qc === 'ok' ? 'ok' : `opened, quick_check: ${String(qc).split('\n')[1] ?? qc}`;
+  } catch (e) {
+    out = `${e.code}: ${e.message.slice(0, 60)}`;
+  }
+  console.log(JSON.stringify({ ensureAfterDelete: out }));
+}
+```
+

@@ -475,12 +475,6 @@ export async function dbCheckRemedy(dbPath, err) {
   // imports doctor already uses.
   const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
-  // D#525: doctor reads the store through its write-ahead log, and a damaged frame there fails
-  // the same checks as a damaged database file. The restore and set-aside steps below replace
-  // the database file or move it away, so while a log with frames exists the first step is the
-  // one that keeps the file; the re-run names the next one if the file is damaged too.
-  const walStep = walSetAsideStep(dbPath);
-  if (walStep) return walStep;
   const remedy = dbUnusableRemedy(dbPath, err);
   if (remedy.kind === 'unknown') return remedy.note;
   if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
@@ -495,68 +489,6 @@ export async function dbCheckRemedy(dbPath, err) {
     `Restore the newest of ${remedy.snapshotCount} backup snapshot(s): ${remedy.command} ` +
     `— move the broken file aside first if you want to keep it for inspection.`
   );
-}
-
-/** dbCheckRemedy's first step while a write-ahead log with frames sits beside the database. */
-function walSetAsideStep(dbPath) {
-  const wal = `${dbPath}-wal`;
-  let st;
-  try {
-    st = statSync(wal);
-  } catch {
-    return null;
-  }
-  // 32 bytes is the WAL header and frames follow it; a log with no frame changes nothing a reader sees.
-  if (!st.isFile() || st.size <= 32) return null;
-  const aside = `${wal}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  return (
-    `The damage can be in the write-ahead log (${Math.ceil(st.size / 1024)} KB) rather than in the ` +
-    `database file. With every Claude Code session closed, move the log aside: ` +
-    `mv ${shellWord(wal)} ${shellWord(aside)} && rm -f ${shellWord(`${dbPath}-shm`)} ` +
-    `— then run doctor again; it names the next step if the database file is damaged too.`
-  );
-}
-
-// Rows FTS5 writes about its own index during an integrity check (fts5IntegrityMethod in
-// SQLite's fts5_main.c): `fts5: …` from the index code, or its own "malformed inverted index".
-const FTS5_INDEX_ROW_RE = /^(?:fts5: |malformed inverted index for FTS5 table )/;
-
-/**
- * SQLite's own page check of the store, on doctor's read-only handle, before anything opens it
- * for writing (D#525). The FTS check needs a read-write handle, and that handle's close, as the
- * last connection, copies the write-ahead log into the database file without checking a page:
- * on a damaged log whose `sqlite_master` still read, doctor wrote the damaged frame into an
- * intact database file, emptied the log and printed no repair step.
- *
- * Returns null when the check passes, or when its only findings are FTS5 index damage, which the
- * FTS check repairs. Otherwise an error carrying SQLite's SQLITE_CORRUPT sentence, so
- * dbCheckRemedy classifies it as a damaged store. An error that is not corruption (busy, locked,
- * unopenable) is rethrown to the arms that already handle it.
- *
- * SQLite runs the b-tree and table checks before it asks FTS5 about its index (pragma.c), so rows
- * are read one at a time and an FTS5 error arrives after theirs. FTS5 reading a damaged doclist or
- * structure record can ask for an absurd allocation (lib/db-unusable.mjs); that SQLITE_NOMEM goes
- * to the FTS check, as every quick_check outcome did before this gate.
- */
-function pageCheckFailure(db) {
-  const rows = [];
-  try {
-    for (const r of db.prepare('PRAGMA quick_check').iterate()) rows.push(r.quick_check);
-  } catch (e) {
-    const code = e?.code ?? '';
-    if (/^SQLITE_(CORRUPT|NOTADB)/.test(code)) rows.push(e.message);
-    else if (code !== 'SQLITE_NOMEM') throw e;
-  }
-  const bad = rows.filter((r) => r !== 'ok' && !FTS5_INDEX_ROW_RE.test(r));
-  if (bad.length === 0) return null;
-  const MALFORMED = 'database disk image is malformed';
-  const shown = bad
-    .slice(0, 3)
-    .map((r) => r.replace(/\s+/g, ' '))
-    .join('; ');
-  const more = bad.length > 3 ? `; ${bad.length - 3} more` : '';
-  const detail = shown === MALFORMED ? '' : ` (SQLite's integrity check: ${shown}${more})`;
-  return Object.assign(new Error(MALFORMED + detail), { code: 'SQLITE_CORRUPT' });
 }
 
 // ─── Install ────────────────────────────────────────────────────────────────
@@ -3177,11 +3109,7 @@ async function doctor() {
       const fts = db
         .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations_fts'")
         .get();
-      const damage = pageCheckFailure(db);
       db.close();
-      // To the catch below, which prints the ✗ line and the remedy: nothing past here may open
-      // a store whose pages fail the check for writing (D#525).
-      if (damage) throw damage;
       if (fts) {
         ok('FTS5 index: present');
         // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))

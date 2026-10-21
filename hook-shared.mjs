@@ -640,8 +640,9 @@ export function setHookDbDeadline(epochMs) {
 
 export function openDb() {
   try {
-    // WAL-corruption self-heal (was server.mjs-only): without it, hooks stayed
-    // silently dead (null DB) on a corrupt WAL until the next MCP server start.
+    // The open's recoveries (FTS rebuild, one retry on a corruption error), shared with the
+    // server and the CLI. A corruption that repeats leaves every file in place (D#521): null
+    // here, and SessionStart's notice carries doctor's remedy.
     const db = ensureDbWithWalRecovery();
     if (hookDbDeadline !== null) {
       const now = performance.timeOrigin + performance.now();

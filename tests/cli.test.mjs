@@ -2431,6 +2431,24 @@ describe('CLI maintain command', () => {
     expect(output).toContain(`Ready-to-use: ${CLI_INVOKE} maintain execute --ops dedup --merge-ids 1:2`);
   });
 
+  // D#464: a scan over every project paired rows of two projects, which execute then skips
+  // ("different projects"), so the printed command held pairs it would not merge.
+  it('scan pairs duplicates within a project only', async () => {
+    for (const project of ['test--project', 'other--project']) {
+      insertObs(testDb, {
+        sessionId: 'mem-s1',
+        project,
+        type: 'discovery',
+        title: 'Same title written twice by a hook',
+        text: 'x',
+      });
+    }
+    const output = await captureStdout(() => run(['maintain', 'scan']));
+    expect(output).toContain('Total active: 2');
+    expect(output).not.toContain('--merge-ids 1:2');
+    expect(output).not.toMatch(/Needs review|Auto-mergeable/);
+  });
+
   it('execute runs dedup with --merge-ids', async () => {
     insertObs(testDb, {
       sessionId: 'mem-s1',

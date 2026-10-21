@@ -1737,9 +1737,7 @@ export function ensureDb() {
 /**
  * Close a connection whose open failed, without letting the close checkpoint. The last connection
  * to close a WAL database copies the WAL into the main file first and checks no page, so a failed
- * open over a damaged frame wrote that frame into the main file, and the WAL recovery below then
- * deleted the WAL and retried on a main file that was damaged too: on the corrupt-WAL fixture of
- * tests/wal-recovery.test.mjs, 20 of 20 times (D#506, 2026-10-21). A read-only connection that has
+ * open over a damaged frame wrote that frame into the main file (D#506). A read-only connection that has
  * run a statement holds the shared lock, so the close below is not the last, and a read-only close
  * never checkpoints; one only opened holds nothing (20 of 20 corrupt). The statement may fail on
  * the damaged WAL; it took the lock all the same (0 of 20). With no guard, the close is the plain

@@ -467,7 +467,7 @@ const isStringEnd = (r, u) => u > 0 && r % (2 * u) < u;
 // The characters an escaped line acts on: breaks and backslashes; every other character only moves
 // it on. Steps past LINE_STEP_BUDGET of them are searched natively: a line that runs to the end of
 // the text, read once per BEGIN at its depth and once per pass, was 94.6% of the time of the
-// escape-depth shape (D#511). A line at depth 0 keeps the plain loop, which costs a short line less.
+// escape-depth shape (D#511). A line at depth 0 keeps the plain loop.
 const ESC_LINE_STOP_RE = /[\n\r\\]/g;
 const LINE_STEP_BUDGET = 32;
 

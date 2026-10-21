@@ -544,8 +544,7 @@ describe('a corruption error that does not repeat (D#427)', () => {
 // D#506. The last connection to close a WAL database checkpoints the WAL into the main file first,
 // without checking the pages, so a failed open over a damaged frame wrote that frame into the main
 // file when it closed its handle (or leaked it: `journal_mode = WAL` ran outside the try that closes
-// it, D#438, and better-sqlite3 closes a leaked handle at exit). Measured 2026-10-21 on this
-// fixture: the shipped recovery left the main file corrupt 20 of 20 times.
+// it, D#438, and better-sqlite3 closes a leaked handle at exit).
 describe('a failed open leaves the main file as it was (D#506)', () => {
   it('does not checkpoint the damaged WAL frame into the main file', () => {
     const dir = fixtureDir('no-ckpt');

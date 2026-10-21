@@ -40,6 +40,7 @@ import {
   makeEntryDesc,
   truncate,
   scrubSecrets,
+  scrubHead,
   stripPrivate,
   EDIT_TOOLS,
   debugCatch,
@@ -3643,8 +3644,9 @@ function recordUserPromptRow(db, { sessionId, project, promptText, hookData, now
     // Scrub BEFORE the 10k slice: a secret straddling char 10000 would otherwise
     // be cut to a sub-6-char head that scrubSecrets's value-length floor no longer
     // matches, persisting a partial secret into prompt_text (later re-emitted at
-    // server.mjs prompt_text + mem-cli recent). Scrubbing full text first is leak-free.
-    scrubSecrets(promptText).slice(0, 10000),
+    // server.mjs prompt_text + mem-cli recent). scrubHead reads 4096 characters past
+    // the cut, not the whole prompt (D#522).
+    scrubHead(promptText, 10000),
     promptNumber,
     ccSessionId,
     now.toISOString(),

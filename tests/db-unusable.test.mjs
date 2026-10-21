@@ -110,36 +110,6 @@ describe('dbUnusableRemedy', () => {
     expect(r.command, 'stale WAL/SHM would resurrect the broken state').toContain(`${db}-wal`);
   });
 
-  // D#521: the store no longer deletes a damaged WAL itself, so a corruption error with the WAL
-  // still there reaches this remedy. Its first step moves the WAL aside, keeping it: the damage
-  // may be in the WAL alone, and the commands below delete it and replace an intact main file.
-  it('moves a non-empty write-ahead log aside first, keeping it, even with a snapshot (D#521)', () => {
-    const dir = tmp('rem-wal-');
-    const db = join(dir, 'claude-mem-lite.db');
-    writeFileSync(db, 'garbage');
-    writeFileSync(`${db}-wal`, 'x'.repeat(4096));
-    writeFileSync(`${db}.2026-09-07.bak`, 'b');
-    const r = dbUnusableRemedy(db, new Error('database disk image is malformed'));
-    expect(r.kind).toBe('wal');
-    expect(r.command).toBe(
-      `mv ${shellWord(`${db}-wal`)} ${shellWord(`${db}-wal.corrupt`)} && rm -f ${shellWord(`${db}-shm`)}`,
-    );
-    expect(r.note).toMatch(/Close every Claude Code session first/);
-    const out = formatDbUnusableNotice({ dbPath: db, remedy: r });
-    expect(out).toContain(r.command);
-    expect(out).toContain('write-ahead log');
-  });
-
-  it('treats an empty write-ahead log as none, and a schema it cannot read as before (D#521)', () => {
-    const dir = tmp('rem-wal-empty-');
-    const db = join(dir, 'claude-mem-lite.db');
-    writeFileSync(db, 'garbage');
-    writeFileSync(`${db}-wal`, '');
-    expect(dbUnusableRemedy(db).kind).toBe('set-aside');
-    writeFileSync(`${db}-wal`, 'x'.repeat(4096));
-    expect(dbUnusableRemedy(db, new Error('malformed database schema (x)')).kind).toBe('schema');
-  });
-
   it('offers restore, naming the NEWEST snapshot, when one exists', () => {
     const dir = tmp('rem-snap-');
     const db = join(dir, 'claude-mem-lite.db');

@@ -74,15 +74,6 @@ describe('dbCheckRemedy', () => {
     expect(out).toContain('-shm');
   });
 
-  it('moves a damaged write-ahead log aside before anything else (D#521)', async () => {
-    const { db } = withDb(['claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak']);
-    writeFileSync(`${db}-wal`, 'x'.repeat(4096));
-    const out = await dbCheckRemedy(db, corrupt());
-    expect(out).toContain('-wal.corrupt');
-    expect(out).toMatch(/Close every Claude Code session/);
-    expect(out).not.toContain('cp ');
-  });
-
   it('says so plainly when no snapshot exists, and does not offer a restore', async () => {
     const { db } = withDb();
     const out = await dbCheckRemedy(db, corrupt());
@@ -173,15 +164,6 @@ describe('doctor prints the remedy it computes', () => {
     // output where the database line never appeared at all.
     expect(out).toMatch(/Database: .*not a database|Database: .*malformed/);
     expect(out).toMatch(/No backup snapshot exists beside the database/);
-  });
-
-  it('emits the write-ahead log step when a -wal is beside the broken file (D#521)', () => {
-    const { dir, db } = withDb();
-    writeFileSync(`${db}-wal`, 'x'.repeat(4096));
-    const out = runDoctor(dir).stdout;
-    expect(out).toMatch(/Database: .*not a database|Database: .*malformed/);
-    expect(out).toContain('-wal.corrupt');
-    expect(out).not.toMatch(/No backup snapshot exists beside the database/);
   });
 
   it('emits the restore remedy naming the newest snapshot', () => {

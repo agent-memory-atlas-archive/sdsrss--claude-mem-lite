@@ -12,7 +12,7 @@ import {
   checkWriteProject,
   unknownProjectNote,
 } from './project-utils.mjs';
-import { ensureDbWithWalRecovery, refreshPlannerStats, DB_DIR, CODE_DIR } from './schema.mjs';
+import { ensureDbWithWalRecovery, refreshPlannerStats, DB_PATH, DB_DIR, CODE_DIR } from './schema.mjs';
 // schema.mjs already imports this module for SCHEMA_SKEW_CODE, so it is in the graph before
 // the DB is touched — a static import here adds no cold-start cost.
 import {
@@ -94,7 +94,7 @@ import { recordHookError } from './lib/hook-telemetry.mjs';
 import { stripPrivate } from './lib/private-strip.mjs';
 // The partial-export warning points the caller at the CLI twin, which exports the complete
 // set by default — the invocation has to be the one that actually works on this install.
-import { CLI_INVOKE } from './cli-path.mjs';
+import { CLI_INVOKE, shellWord } from './cli-path.mjs';
 import { neutralizeContextDelimiters, neutralizeSkillDelimiters, queryLabel } from './format-utils.mjs';
 import {
   memSearchSchema,
@@ -139,7 +139,7 @@ import { saveWithClosures, formatSupersedeSkipped, formatSupersededNote } from '
 import { applyObsUpdate } from './lib/observation-write.mjs';
 import { EXPORT_COLUMNS_SQL, EXPORT_FIDELITY_NOTE, buildExportWhere } from './lib/export-columns.mjs';
 import { recallByFile } from './lib/recall-core.mjs';
-import { isFtsCorruptionError, isDbUnusableError, ftsCorruptionRemedy } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError, ftsCorruptionRemedy } from './lib/db-unusable.mjs';
 import { fetchRecent } from './lib/recent-core.mjs';
 import { AUTO_MERGE_THRESHOLD } from './lib/dedup-constants.mjs';
 import {
@@ -178,8 +178,8 @@ import {
   chmodSync,
 } from 'fs';
 
-// The open's recoveries live in schema.mjs (shared with hooks/CLI since the D#8-adjacent P3 fix);
-// the server keeps only its exit semantics. A busy open is retried for
+// Corruption-gated WAL recovery lives in schema.mjs (shared with hooks/CLI since the D#8-adjacent
+// P3 fix); the server keeps only its exit semantics. A busy open is retried for
 // SERVER_OPEN_BUSY_RETRY_MS first. Only an open that has to write (a migration, a pending
 // one-shot cleanup) waits for the lock, so this is the first open after an update meeting another
 // writer (another process migrating the store, a long maintain): waited out rather than costing
@@ -253,11 +253,9 @@ try {
   }
   // Fatal: log and exit with descriptive message (Claude Code shows stderr)
   console.error(`[claude-mem-lite] FATAL: Database cannot be opened: ${err.message}`);
-  if (isDbUnusableError(err)) {
-    // No command here: doctor computes it, and its first step for a damaged store with a WAL beside
-    // it moves the WAL aside only after every session is closed (D#521).
+  if (err.walRecoveryAttempted) {
     console.error(
-      `[claude-mem-lite] Its files were left as they are. Run \`${CLI_INVOKE} doctor\` for the repair step.`,
+      `[claude-mem-lite] Try: rm ${shellWord(`${DB_PATH}-wal`)} ${shellWord(`${DB_PATH}-shm`)} or reinstall with: node install.mjs install`,
     );
   } else {
     console.error(

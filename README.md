@@ -115,7 +115,7 @@ How claude-mem-lite differs from the major neighbors in the LLM-memory space (ve
 - **Result-dedup cooldown** -- User-prompt memory injection uses result-overlap detection (>80% ID overlap → skip) instead of time-based cooldown, allowing topic switches within seconds while preventing redundant injections
 - **OR query fallback** -- When AND-joined FTS5 queries return zero results, automatically relaxes to OR-joined queries for broader recall (applied in both user-prompt-search and hook-memory paths)
 - **Configurable LLM model** -- Switch between Haiku (fast/cheap) and Sonnet (deeper analysis) via `CLAUDE_MEM_MODEL` env var
-- **DB recovery** -- A damaged full-text index is rebuilt on open. A database SQLite reports as damaged is left as it is, with its write-ahead log beside it (SQLite needs the two together while any session has the store open): memory turns off for the session, and `doctor` gives the repair step. Periodic WAL checkpoints prevent unbounded growth
+- **DB auto-recovery** -- Detects and cleans corrupted WAL/SHM files on startup; periodic WAL checkpoints prevent unbounded growth
 - **Schema auto-migration** -- Idempotent `ALTER TABLE` migrations run on every startup, safely adding new columns and indexes without data loss
 - **LLM concurrency control** -- File-based semaphore limits background workers to 2 concurrent LLM calls, preventing resource contention
 - **stdin overflow protection** -- Hook input truncated at 256KB with regex-based action salvage for oversized tool outputs

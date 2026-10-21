@@ -229,26 +229,29 @@ describe('corruption recovery branch', () => {
     );
   });
 
-  // D#521. Until 6.31.0 a corruption error that repeated deleted -wal/-shm and retried, which with
-  // another session holding the store lost what it had committed (#696: all 2200 rows). SQLite
-  // says a WAL must stay beside its database (howtocorrupt §1.3/§1.4), so the files now stay as
-  // they are and the server names doctor, whose remedy moves the WAL aside once the user has
-  // closed every session. The guard test above proved this fixture fails a plain open.
-  it('leaves the WAL and the main file as they were on a corruption that repeats, and names doctor (D#521)', async () => {
+  // The guard test above proved this exact fixture makes a plain open throw a corruption error;
+  // the two stderr markers below then prove server.mjs matched the signature and ran the recovery
+  // arm (deleted -wal/-shm, retried ensureDb) rather than the transient fail-fast arm:
+  //   present: "DB corruption detected, attempting WAL recovery" (the recovery-arm log,
+  //            surfaced by the CLAUDE_MEM_DEBUG=1 that runServer sets)
+  //   absent:  "Left WAL/SHM intact" (the fail-fast arm's banner)
+  // Until D#506 this pinned exit 1: each failed open's close checkpointed the damaged frame into
+  // the main file, so the retry after the delete had no intact file to open. Those closes now
+  // leave the main file alone, and the server serves from it.
+  it('enters the WAL-delete recovery arm on a corruption signature', async () => {
     const dir = fixtureDir('recover');
     const dbPath = plantCorruptWal(dir);
-    const wal = readFileSync(dbPath + '-wal');
+    expect(existsSync(dbPath + '-wal')).toBe(true);
 
     const { stderr, exitCode, served } = await runServer(dir);
 
-    expect(served, 'the server must not come up on a damaged store').toBe(false);
-    expect(exitCode).toBe(1);
-    expect(stderr, 'premise: the open was retried').toContain('retrying the open with the WAL kept');
-    expect(stderr).not.toContain('attempting WAL recovery');
-    expect(stderr, 'no delete is handed to the reader either').not.toMatch(/\brm /);
-    expect(stderr).toMatch(/doctor/);
-    expect(readFileSync(dbPath + '-wal').equals(wal), 'the WAL was changed').toBe(true);
-    expect(readFileSync(dbPath).equals(PRISTINE_DB), 'the main file was changed').toBe(true);
+    expect(stderr, 'server must enter the corruption-recovery arm').toContain(
+      'DB corruption detected, attempting WAL recovery',
+    );
+    expect(stderr, 'must NOT take the transient fail-fast arm that preserves the WAL').not.toContain(
+      'Left WAL/SHM intact',
+    );
+    expect(served, `exit ${exitCode}: ${stderr.slice(-400)}`).toBe(true);
   }, 30000);
 });
 
@@ -328,10 +331,9 @@ describe('non-corruption open failure', () => {
 // freezes DB_PATH from CLAUDE_MEM_DIR at import time.
 
 describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', () => {
-  it('ensureDbWithWalRecovery throws on a corruption that repeats and leaves every file as it was (D#521)', () => {
+  it('ensureDbWithWalRecovery enters the recovery arm and recovers from the main file', () => {
     const dir = fixtureDir('shared-fn');
-    const dbPath = plantCorruptWal(dir);
-    const wal = readFileSync(dbPath + '-wal');
+    plantCorruptWal(dir);
     const out = execFileSync(
       process.execPath,
       [
@@ -343,21 +345,20 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
            db.close();
            console.log(JSON.stringify({ opened: true, msgs }));
          } catch (e) {
-           console.log(JSON.stringify({ opened: false, message: e.message, msgs }));
+           console.log(JSON.stringify({ opened: false, attempted: !!e.walRecoveryAttempted, msgs }));
          }
        })`,
       ],
       { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
     );
     const r = JSON.parse(out.trim());
-    expect(r.opened, JSON.stringify(r)).toBe(false);
-    expect(r.msgs.some((m) => m.includes('retrying the open with the WAL kept'))).toBe(true);
-    expect(r.msgs.some((m) => m.includes('attempting WAL recovery'))).toBe(false);
-    expect(readFileSync(dbPath + '-wal').equals(wal), 'the WAL was changed').toBe(true);
-    expect(readFileSync(dbPath).equals(PRISTINE_DB), 'the main file was changed').toBe(true);
+    expect(r.msgs.some((m) => m.includes('DB corruption detected, attempting WAL recovery'))).toBe(true);
+    // D#506: the failed opens no longer write the damaged frame into the main file, so the retry
+    // after the delete opens it (this case pinned opened=false before).
+    expect(r.opened, JSON.stringify(r)).toBe(true);
   }, 30000);
 
-  it('hook openDb() returns null on a corruption that repeats and keeps the WAL (D#521)', () => {
+  it('hook openDb() attempts WAL recovery instead of blind-nulling on a corrupt WAL', () => {
     const dir = fixtureDir('hook-open');
     const dbPath = plantCorruptWal(dir);
     const plantedWalSize = readFileSync(dbPath + '-wal').length;
@@ -380,35 +381,13 @@ describe('shared WAL recovery (schema.ensureDbWithWalRecovery / hook openDb)', (
       { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
     );
     const r = JSON.parse(out.trim());
-    // Memory is off for the session; SessionStart says so and names doctor (db-unusable-wiring).
-    expect(r.isNull).toBe(true);
-    expect(r.walSize).toBe(plantedWalSize);
-  }, 30000);
-
-  // What doctor and the SessionStart notice print for this store, run as printed with no session
-  // open: the store opens again, and the damaged WAL is kept beside it.
-  it('the printed remedy, run with no session open, reopens the store and keeps the WAL (D#521)', async () => {
-    const dir = fixtureDir('remedy');
-    const dbPath = plantCorruptWal(dir);
-    const wal = readFileSync(dbPath + '-wal');
-    const { dbUnusableRemedy } = await import('../lib/db-unusable.mjs');
-    const remedy = dbUnusableRemedy(dbPath, new Error('database disk image is malformed'));
-    expect(remedy.kind).toBe('wal');
-    execFileSync('bash', ['-c', remedy.command]);
-    const out = execFileSync(
-      process.execPath,
-      [
-        '-e',
-        `import(${JSON.stringify(SCHEMA_URL)}).then((m) => {
-           const db = m.ensureDbWithWalRecovery();
-           console.log(db.pragma('quick_check', { simple: true }));
-           db.close();
-         })`,
-      ],
-      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
-    );
-    expect(out.trim()).toBe('ok');
-    expect(readFileSync(`${dbPath}-wal.corrupt`).equals(wal), 'the WAL copy differs').toBe(true);
+    // Recovered (D#506): before, the failed opens had written the damaged frame into the main
+    // file, so this returned null and the hooks degraded.
+    expect(r.isNull).toBe(false);
+    // And the corrupt WAL must be GONE (or a fresh ~0-byte one recreated by the
+    // retry's reopen) — pre-fix openDb left the planted frames untouched, so
+    // every subsequent hook fire hit the same corruption until MCP restarted.
+    expect(r.walSize).toBeLessThan(100);
   }, 30000);
 });
 

@@ -478,13 +478,6 @@ export async function dbCheckRemedy(dbPath, err) {
   const remedy = dbUnusableRemedy(dbPath, err);
   if (remedy.kind === 'unknown') return remedy.note;
   if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
-  if (remedy.kind === 'wal') {
-    return (
-      `SQLite reports the database as damaged, and its write-ahead log is still beside it. Close ` +
-      `every Claude Code session, then move the log aside: ${remedy.command} — the log is kept as ` +
-      `a .corrupt copy; run doctor again, which gives the next step if the database file is damaged too.`
-    );
-  }
   if (remedy.kind === 'set-aside') {
     return (
       `No backup snapshot exists beside the database. Set the broken file aside so a fresh ` +

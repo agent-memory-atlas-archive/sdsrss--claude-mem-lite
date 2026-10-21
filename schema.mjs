@@ -1812,8 +1812,12 @@ export function refreshPlannerStats(db, { busyTimeoutMs } = {}) {
 }
 
 /**
- * Whether an open/init error carries a genuine corruption signature: ensureDbWithWalRecovery
- * retries the open once for these, and rethrows anything else at once.
+ * Whether an open/init error carries a genuine corruption signature. WAL-delete
+ * recovery runs ONLY for these: on a transient error (SQLITE_BUSY) or the
+ * forward-version guard throw, deleting the WAL would discard committed-but-
+ * uncheckpointed transactions — silent data loss. A corruption signature does not
+ * make the delete safe either while another connection has the file open (it loses
+ * that connection's commits the same way), so ensureDbWithWalRecovery retries first.
  */
 export function isDbCorruptionError(err) {
   // R10 P3-9: SQLITE_CORRUPT_VTAB is EXCLUDED. It means a damaged FTS5 index over an
@@ -1832,19 +1836,16 @@ export function isDbCorruptionError(err) {
 export { isFtsCorruptionError };
 
 /**
- * ensureDb with the recoveries that lose nothing, shared by the server, the hooks and the CLI.
+ * ensureDb with corruption-gated WAL recovery. Was inlined in server.mjs only,
+ * so hooks (openDb → silent null) and the CLI (raw throw) stayed degraded on a
+ * corrupt WAL until the next MCP server start. One shared implementation now
+ * serves all three openers.
  *
- * A damaged FTS index → rebuilt from its content tables, then the open retried. A corruption
- * signature → the open retried once with every file as it was; corruption again → rethrown, the
- * files still as they were. Anything else → rethrown at once.
- *
- * It never deletes or moves -wal/-shm (D#521). Until 6.31.0 a corruption that repeated deleted
- * them and retried, and with another session holding the store that lost every row it had
- * committed since its last checkpoint (#696: all 2200 in 5 of 6 runs) with integrity_check ok.
- * Two ways of telling when no one else holds it failed review (D#430 /proc/locks, D#506 a mode
- * change), and SQLite's own rule is that a WAL stays beside its database (howtocorrupt §1.3,
- * §1.4). The person who closes their sessions is the check: doctor and the SessionStart notice
- * give them the command that moves the WAL aside (lib/db-unusable.mjs).
+ * Non-corruption failure → rethrows the original error, WAL/SHM left intact.
+ * Corruption → retries once with the files untouched; corruption again → deletes
+ * -wal/-shm, retries once more; a still-failing retry rethrows
+ * with `err.walRecoveryAttempted = true` so callers can word their fatal hint
+ * accurately (recovery already tried vs WAL deliberately preserved).
  *
  * @param {{warn?: (msg: string) => void, info?: (msg: string) => void}} [opts]
  */
@@ -1889,13 +1890,45 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
       }
     }
     if (!isDbCorruptionError(firstErr)) throw firstErr;
-    // D#427: a corruption error that does not come from the file exists (3 of 43 first opens by
-    // 6.28.1 of fresh copies of one intact store threw one on one host, D#424; the other 40 did
-    // not), so the open is retried once before the error is reported.
+    // D#427: retry once with the files untouched before deleting anything. A corruption error
+    // that does not come from the file exists (3 of 43 first opens by 6.28.1 of fresh copies of one
+    // intact store threw one on one host, D#424; the other 40 did not), and for it the delete below
+    // is the only thing that loses data: with another connection open (the MCP server keeps one all
+    // session) it can discard what that connection committed since its last checkpoint, and until
+    // it closes the two connections overwrite each other's pages.
     warn?.(`DB corruption reported, retrying the open with the WAL kept: ${firstErr.message}`);
-    const db = ensureDb();
-    info?.('DB opened on the retry, WAL kept');
-    return db;
+    let walErr;
+    try {
+      const db = ensureDb();
+      info?.('DB opened on the retry, WAL kept');
+      return db;
+    } catch (retryErr) {
+      if (!isDbCorruptionError(retryErr)) throw retryErr;
+      walErr = retryErr;
+    }
+    warn?.(`DB corruption detected, attempting WAL recovery: ${walErr.message}`);
+    try {
+      rmSync(DB_PATH + '-wal', { force: true });
+    } catch {
+      /* best-effort */
+    }
+    try {
+      rmSync(DB_PATH + '-shm', { force: true });
+    } catch {
+      /* best-effort */
+    }
+    try {
+      const db = ensureDb();
+      info?.('DB recovered after WAL cleanup');
+      return db;
+    } catch (retryErr) {
+      try {
+        retryErr.walRecoveryAttempted = true;
+      } catch {
+        /* frozen error — fine */
+      }
+      throw retryErr;
+    }
   }
 }
 

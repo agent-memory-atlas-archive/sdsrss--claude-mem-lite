@@ -3679,12 +3679,16 @@ async function cmdOptimize(db, args) {
   // the default budget (tasks/project undefined → run-everything). Normalize
   // `--flag=value` into `--flag value` up front so both forms parse identically;
   // the `--execute=` special-case below already anticipated this for one flag.
+  // On/off flags are read as parseArgs and the dispatcher's dry-run check read them (isTrue): after
+  // the split below, `args.includes('--run')` took `--run=false` and `--run false` as a run, which
+  // that check had let through as no write (D#514).
+  const { flags } = parseArgs(args, { track: false });
   args = args.flatMap((a) => {
     const m = /^(--[a-z][a-z-]*)=([\s\S]*)$/.exec(a);
     return m ? [m[1], m[2]] : [a];
   });
-  const run = args.includes('--run');
-  const runAll = args.includes('--run-all');
+  const run = isTrue(flags.run);
+  const runAll = isTrue(flags['run-all']);
   // Sibling-command flag footgun: optimize executes with --run (compress uses
   // --execute, maintain uses positional `execute`). A bare --execute previously fell
   // through to a silent preview, so the user thought they ran a mutation but didn't.
@@ -3697,7 +3701,7 @@ async function cmdOptimize(db, args) {
     );
     return;
   }
-  const verbose = args.includes('--verbose') || args.includes('-v');
+  const verbose = isTrue(flags.verbose) || args.includes('-v');
   // T2-P1-D: --task accepts a single task or a comma-separated list, parity with MCP memOptimizeSchema.tasks.
   const VALID_TASKS = ['re-enrich', 'normalize', 'cluster-merge', 'smart-compress'];
   const taskIdx = args.indexOf('--task');
@@ -3932,15 +3936,16 @@ const MUTATING_FILTER_READS = {
 // A command not in MUTATING_FILTER_READS names here when its run writes (round-2 pre-tag review
 // P3-2: defer drop and fts-check rebuild ignored --dry-run silently; verify-apply --apply is left
 // to its digest, since --apply is verify-apply's own flag and the dispatcher may not read it).
-// A preview is the same command without the flag that makes it write (the user's other flags stay),
-// or another command (`preview`).
+// A preview is the same command without the flag that makes it write, or with its previewing
+// subcommand in place of the writing one (`swap`), so the user's other flags stay (`maintain scan`
+// alone previewed every project, D#514); else another command (`preview`).
 const DRY_RUN_UNREAD = {
   compress: { without: '--execute' },
-  maintain: { preview: 'maintain scan' },
+  maintain: { swap: 'scan in place of execute' },
   optimize: { without: '--run or --run-all' },
-  delete: { preview: null },
+  delete: { without: '--confirm' },
   'activity promote': { without: '--execute' },
-  'activity delete': { preview: null },
+  'activity delete': { without: '--confirm' },
   'import-jsonl': { preview: null, writes: () => true },
   'defer drop': { preview: null, writes: () => true },
   'fts-check': { preview: 'fts-check check', writes: ({ positional }) => positional[0] === 'rebuild' },
@@ -4064,11 +4069,18 @@ async function runDispatch(argv) {
 
   if (Object.hasOwn(DRY_RUN_UNREAD, mutatingKey)) {
     const parsed = parseArgs(cmdArgs, { track: false });
-    const { preview, without, writes } = DRY_RUN_UNREAD[mutatingKey];
+    const { preview, without, swap, writes } = DRY_RUN_UNREAD[mutatingKey];
     if ((mutating ? mutating.writes(parsed) : writes(parsed)) && asksDryRun(parsed.flags['dry-run'])) {
+      const how = without
+        ? `Run it again without ${without} to preview.`
+        : swap
+          ? `Run it again with ${swap} to preview.`
+          : preview
+            ? `Preview with: \`${CLI_INVOKE} ${preview}\`.`
+            : 'It has no preview.';
       fail(
         `[mem] ${mutatingKey} does not read --dry-run — nothing was changed, since the run would have ` +
-          `written. ${without ? `Run it again without ${without} to preview.` : preview ? `Preview with: \`${CLI_INVOKE} ${preview}\`.` : 'It has no preview.'}`,
+          `written. ${how}`,
       );
       return;
     }

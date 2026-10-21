@@ -228,22 +228,64 @@ describe('the CLI with a boolean flag before its positional (D#385)', () => {
   // v6.30.1 pre-tag defects review: the preview was printed as `Preview with: <cli> maintain scan.`,
   // so a copied command ended in the sentence's period, and three previews were prose
   // (`compress without --execute`) after the CLI's path.
-  it.each([
-    [['maintain', 'execute', '--dry-run'], 'maintain scan'],
-    [['fts-check', 'rebuild', '--dry-run'], 'fts-check check'],
-  ])('%j names a preview command that runs as printed', (args, preview) => {
-    expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
-    const r = run(...args);
-    expect(r.stderr).toContain(`Preview with: \`${CLI_INVOKE} ${preview}\`.`);
-  });
+  it.each([[['fts-check', 'rebuild', '--dry-run'], 'fts-check check']])(
+    '%j names a preview command that runs as printed',
+    (args, preview) => {
+      expect(run('save', 'redis pool leak', '--title', 'redis pool').status).toBe(0);
+      const r = run(...args);
+      expect(r.stderr).toContain(`Preview with: \`${CLI_INVOKE} ${preview}\`.`);
+    },
+  );
   // A writer that writes under a flag previews as the same command without it, so the user's other
   // flags (`--project`) stay; a bare `activity promote` previewed every project (v6.30.1 r2 P3-3).
+  // delete and activity delete preview without --confirm; they were told they had no preview
+  // (D#514 F1).
   it.each([
     [['compress', '--dry-run', '--execute'], '--execute'],
     [['activity', 'promote', '--execute', '--project', 'x', '--dry-run'], '--execute'],
+    [['delete', '1', '--confirm', '--dry-run'], '--confirm'],
+    [['activity', 'delete', '1', '--confirm', '--dry-run'], '--confirm'],
   ])('%j says to drop the writing flag', (args, flag) => {
     const r = run(...args);
     expect(r.stderr).toContain(`Run it again without ${flag} to preview.`);
+  });
+  // `maintain scan` previewed every project for `maintain execute --project x` (D#514 F3).
+  it('maintain execute --project x --dry-run says to run scan with the same flags', () => {
+    const r = run('maintain', 'execute', '--project', 'x', '--dry-run');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('Run it again with scan in place of execute to preview.');
+  });
+
+  // D#514 F4: cmdOptimize split `--run=false` into `--run false` and then looked for `--run`, so
+  // the run started, after the dry-run check above had read the same flag as no write.
+  const optimize = (...args) => {
+    const env = {
+      ...process.env,
+      HOME: join(root, 'home'),
+      CLAUDE_MEM_DIR: dataDir,
+      CLAUDE_PROJECT_DIR: projectDir,
+      CLAUDE_CODE_PATH: join(root, 'no-claude'),
+    };
+    delete env.CLAUDE_MEM_HOOK_RUNNING;
+    return spawnSync(process.execPath, [CLI, 'optimize', ...args], {
+      encoding: 'utf8',
+      timeout: 20000,
+      cwd: projectDir,
+      env,
+    });
+  };
+  it.each([[['--run=false']], [['--run-all=false']], [['--run=false', '--dry-run']], [['--run=0']]])(
+    'optimize %j previews and does not run',
+    (args) => {
+      const r = optimize(...args);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('LLM Optimization Preview');
+      expect(r.stdout).not.toContain('Running LLM optimization');
+    },
+  );
+  it.each([[['--run']], [['--run=true']]])('control: optimize %j runs', (args) => {
+    const r = optimize(...args);
+    expect(r.stdout).toContain('Running LLM optimization');
   });
 
   it('defer drop --dry-run refuses and leaves the item open', () => {

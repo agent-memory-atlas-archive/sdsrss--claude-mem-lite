@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { createRequire } from 'module';
@@ -471,14 +471,14 @@ function seedStore(tag, { behind = false } = {}) {
 
 /** ensureDbWithWalRecovery in a child where the first `site.at` call matching `site.match`
  *  throws `code` once. */
-function openWithInjectedFault(dir, { site, code, deadlineMs = null }) {
+function openWithInjectedFault(dir, { site, code, deadlineMs = null, times = 1 }) {
   const src = `
     Promise.all([import(${JSON.stringify(BSQ_URL)}), import(${JSON.stringify(SCHEMA_URL)})]).then(([{ default: Database }, m]) => {
       let thrown = 0;
       const re = new RegExp(${JSON.stringify(site.match)}, 'i');
       const orig = Database.prototype[${JSON.stringify(site.at)}];
       Database.prototype[${JSON.stringify(site.at)}] = function (sql, ...rest) {
-        if (thrown === 0 && re.test(sql)) {
+        if (thrown < ${times} && re.test(sql)) {
           thrown++;
           throw new Database.SqliteError('database disk image is malformed', ${JSON.stringify(code)});
         }
@@ -564,6 +564,96 @@ describe('a failed open leaves the main file as it was (D#506)', () => {
     expect(out.trim(), 'premise: this fixture fails the open').toMatch(/^threw /);
     expect(readFileSync(dbPath).equals(PRISTINE_DB), 'the failed open rewrote the main file').toBe(true);
     expect(readFileSync(dbPath + '-wal').equals(wal), 'the WAL is left for the recovery to judge').toBe(true);
+  }, 30000);
+});
+
+// D#506. The WAL is removed only while no other connection holds the store, and it is kept aside
+// rather than deleted. A read-write connection in EXCLUSIVE locking mode, with the -wal made
+// unopenable first, takes the lock without reading the WAL (SQLITE_CANTOPEN) or reports another
+// connection (SQLITE_BUSY): measured 2026-10-21, 40/40 holders seen, 0/60 false alarms.
+const asideFiles = (dir) => readdirSync(dir).filter((f) => f.startsWith(`${DB_NAME}-wal.corrupt-`));
+describe('the damaged WAL is moved aside, never under another connection (D#506)', () => {
+  it('with no other connection: the WAL is kept beside the store and the store opens', () => {
+    const dir = fixtureDir('aside');
+    const dbPath = plantCorruptWal(dir);
+    const wal = readFileSync(dbPath + '-wal');
+    const out = execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `import(${JSON.stringify(SCHEMA_URL)}).then((m) => {
+           const msgs = [];
+           try { m.ensureDbWithWalRecovery({ warn: (x) => msgs.push(x), info: (x) => msgs.push(x) }).close(); console.log(JSON.stringify({ opened: true, msgs })); }
+           catch (e) { console.log(JSON.stringify({ opened: false, code: e.code, msgs })); }
+         })`,
+      ],
+      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
+    );
+    const r = JSON.parse(out.trim());
+    expect(r.opened, JSON.stringify(r)).toBe(true);
+    expect(readFileSync(dbPath).equals(PRISTINE_DB), 'main file untouched').toBe(true);
+    const aside = asideFiles(dir);
+    expect(aside, 'one copy of the damaged WAL kept').toHaveLength(1);
+    expect(readFileSync(join(dir, aside[0])).equals(wal), 'the copy holds the WAL as it was').toBe(true);
+    expect(statSync(join(dir, aside[0])).mode & 0o777).toBe(0o600);
+    expect(r.msgs.join('\n')).toContain(aside[0]);
+  }, 30000);
+
+  it('with another connection holding the store: nothing is moved and its rows survive', async () => {
+    const { dir, dbPath } = seedStore('in-use');
+    const holder = startHolder(dbPath);
+    let r, walBefore;
+    try {
+      await holder.until('ready');
+      walBefore = readFileSync(dbPath + '-wal');
+      r = openWithInjectedFault(dir, { site: FAULT_SITES.pragma, code: 'SQLITE_CORRUPT', times: 2 });
+      expect(r.thrown, 'the fault fired on the open and on the retry').toBe(2);
+      expect(r.error, JSON.stringify(r)).toBe('CLAUDE_MEM_STORE_IN_USE');
+      expect(readFileSync(dbPath + '-wal').equals(walBefore), 'the WAL was left as it was').toBe(true);
+      expect(asideFiles(dir)).toEqual([]);
+      expect((statSync(dbPath + '-wal').mode & 0o777) !== 0, 'and readable again').toBe(true);
+      holder.send('more');
+      await holder.until('more-done');
+    } finally {
+      await holder.stop();
+    }
+    const v = new Database(dbPath);
+    expect(v.prepare('SELECT count(*) AS n FROM _holder').get().n, "the holder's rows").toBe(200);
+    expect(v.pragma('integrity_check', { simple: true })).toBe('ok');
+    v.close();
+  }, 30000);
+
+  it('with no WAL on disk: nothing to move, and the retry runs as before', () => {
+    const { dir, dbPath } = seedStore('no-wal');
+    expect(existsSync(dbPath + '-wal'), 'premise: a checkpointed store has no WAL').toBe(false);
+    const r = openWithInjectedFault(dir, { site: FAULT_SITES.pragma, code: 'SQLITE_CORRUPT', times: 2 });
+    expect(r.thrown).toBe(2);
+    expect(r.error, JSON.stringify(r)).toBe(null);
+    expect(r.opened).toBe(true);
+    expect(asideFiles(dir)).toEqual([]);
+  }, 30000);
+
+  it('keeps the newest three copies', () => {
+    const dir = fixtureDir('aside-cap');
+    for (const stamp of [
+      '20200101T000000Z-1',
+      '20200102T000000Z-1',
+      '20200103T000000Z-1',
+      '20200104T000000Z-1',
+    ])
+      writeFileSync(join(dir, `${DB_NAME}-wal.corrupt-${stamp}`), 'old');
+    plantCorruptWal(dir);
+    execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `import(${JSON.stringify(SCHEMA_URL)}).then((m) => { try { m.ensureDbWithWalRecovery().close(); } catch {} })`,
+      ],
+      { env: { ...process.env, CLAUDE_MEM_DIR: dir }, encoding: 'utf8' },
+    );
+    const aside = asideFiles(dir).sort();
+    expect(aside).toHaveLength(3);
+    expect(aside[0], 'the oldest went first').toBe(`${DB_NAME}-wal.corrupt-20200103T000000Z-1`);
   }, 30000);
 });
 

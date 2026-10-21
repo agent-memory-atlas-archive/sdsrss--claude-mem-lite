@@ -5,7 +5,17 @@
 import Database from 'better-sqlite3';
 import { homedir } from 'os';
 import { join } from 'path';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  chmodSync,
+  openSync,
+  closeSync,
+  statSync,
+} from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
 import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
@@ -1843,10 +1853,11 @@ export { isFtsCorruptionError };
  * serves all three openers.
  *
  * Non-corruption failure → rethrows the original error, WAL/SHM left intact.
- * Corruption → retries once with the files untouched; corruption again → deletes
- * -wal/-shm, retries once more; a still-failing retry rethrows
- * with `err.walRecoveryAttempted = true` so callers can word their fatal hint
- * accurately (recovery already tried vs WAL deliberately preserved).
+ * Corruption → retries once with the files untouched; corruption again → moves the WAL aside
+ * (moveWalAside: only while no other connection holds the store, else CLAUDE_MEM_STORE_IN_USE
+ * with every file as it was), drops -shm, retries once more; a still-failing retry rethrows
+ * with `err.walRecoveryAttempted = true` and `err.walMovedTo` so callers can word their fatal
+ * hint accurately (recovery already tried vs WAL deliberately preserved).
  *
  * @param {{warn?: (msg: string) => void, info?: (msg: string) => void}} [opts]
  */
@@ -1908,16 +1919,8 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
       walErr = retryErr;
     }
     warn?.(`DB corruption detected, attempting WAL recovery: ${walErr.message}`);
-    try {
-      rmSync(DB_PATH + '-wal', { force: true });
-    } catch {
-      /* best-effort */
-    }
-    try {
-      rmSync(DB_PATH + '-shm', { force: true });
-    } catch {
-      /* best-effort */
-    }
+    const aside = moveWalAside(walErr);
+    if (aside) warn?.(`The damaged WAL was moved to ${aside}`);
     try {
       const db = ensureDb();
       info?.('DB recovered after WAL cleanup');
@@ -1925,11 +1928,170 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
     } catch (retryErr) {
       try {
         retryErr.walRecoveryAttempted = true;
+        retryErr.walMovedTo = aside;
       } catch {
         /* frozen error — fine */
       }
       throw retryErr;
     }
+  }
+}
+
+/** Copies of a damaged WAL kept beside the store; the oldest go first. */
+const WAL_ASIDE_KEEP = 3;
+
+/**
+ * Move the WAL of a store whose open failed twice out of the way, only while no other connection
+ * holds the store, and keep it as `<db>-wal.corrupt-<stamp>-<pid>` rather than delete it (D#506).
+ * Deleting it under another connection (the MCP server holds one all session) discarded what that
+ * connection committed since its last checkpoint, 2200 rows in the D#427 probe, and the recovered
+ * open then saw none of its tables; deleting it at all discarded every intact commit after the
+ * damaged frame (D#512). Measured 2026-10-21 (session c9e45eae scratchpad d506, Linux):
+ *
+ * - A read-write connection in EXCLUSIVE locking mode, with a 0 busy wait, takes the lock on its
+ *   first statement or reports SQLITE_BUSY while another connection holds the store (40/40 seen,
+ *   0/60 false alarms). With the WAL unopenable first (mode 0), it never reads the WAL: it holds
+ *   the lock and fails SQLITE_CANTOPEN, and closing it checkpoints nothing. With the WAL
+ *   openable, it reads the damaged frames and its close writes them into the main file (20/20).
+ * - So the WAL's mode is set to 0 and this process tries to open it. When that is refused, the
+ *   exclusive check runs. When it is not (root, or a capability that bypasses modes, or Windows,
+ *   where the mode is only a read-only attribute), there is no safe check: the WAL is renamed
+ *   aside directly. On Windows a file another process has open cannot be renamed, which is read
+ *   as in use; on POSIX the rename does what the delete did, with the frames kept.
+ *
+ * Returns the path the WAL was moved to, or null when there was no WAL (then -shm goes, as before:
+ * with no WAL there is no WAL-mode connection). Throws CLAUDE_MEM_STORE_IN_USE when another
+ * connection holds the store, leaving every file as it was. Any other failure leaves the WAL in
+ * place and returns null, so the retry fails the way it did before this function.
+ */
+function moveWalAside(walErr) {
+  const wal = `${DB_PATH}-wal`;
+  const shm = `${DB_PATH}-shm`;
+  if (!existsSync(wal)) {
+    try {
+      rmSync(shm, { force: true });
+    } catch {
+      /* best-effort */
+    }
+    return null;
+  }
+  let mode;
+  let size;
+  try {
+    ({ mode, size } = statSync(wal));
+    mode &= 0o777;
+    chmodSync(wal, 0);
+  } catch {
+    return null;
+  }
+  let lock = null;
+  let gone = false;
+  try {
+    let unopenable = false;
+    try {
+      closeSync(openSync(wal, 'r'));
+    } catch {
+      unopenable = true;
+    }
+    if (unopenable) {
+      let code = null;
+      try {
+        lock = new Database(DB_PATH, { timeout: 0 });
+        lock.pragma('locking_mode = EXCLUSIVE');
+        lock.pragma('schema_version');
+      } catch (e) {
+        code = e.code;
+      }
+      if (code === 'SQLITE_BUSY') throw storeInUse(wal, walErr);
+      if (code !== 'SQLITE_CANTOPEN' || !lock) return null;
+    } else {
+      // The mode protects nothing here, and on Windows it is a read-only attribute that would make
+      // the delete below fail as though another process held the file.
+      try {
+        chmodSync(wal, mode);
+      } catch {
+        /* the rename or delete below reports what it can */
+      }
+    }
+    // An empty WAL holds no frames, so nothing is kept: a read-only connection leaves one behind on
+    // a store that had none. It goes under the same check, since another connection may be using
+    // it, and deleting it under that connection splits the two the way a full one does.
+    if (size === 0) {
+      try {
+        rmSync(wal);
+      } catch (e) {
+        if (!unopenable && (e.code === 'EBUSY' || e.code === 'EPERM')) throw storeInUse(wal, walErr);
+        return null;
+      }
+      gone = true;
+      try {
+        rmSync(shm, { force: true });
+      } catch {
+        /* best-effort */
+      }
+      return null;
+    }
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d+Z$/, 'Z');
+    const target = `${wal}.corrupt-${stamp}-${process.pid}`;
+    try {
+      renameSync(wal, target);
+    } catch (e) {
+      if (!unopenable && (e.code === 'EBUSY' || e.code === 'EPERM')) throw storeInUse(wal, walErr);
+      return null;
+    }
+    gone = true;
+    try {
+      chmodSync(target, 0o600); // private, like the store itself (ensureDb)
+    } catch {
+      /* the copy is kept either way */
+    }
+    try {
+      rmSync(shm, { force: true });
+    } catch {
+      /* best-effort */
+    }
+    pruneWalAside();
+    return target;
+  } finally {
+    if (!gone) {
+      try {
+        chmodSync(wal, mode);
+      } catch {
+        /* nothing more to do */
+      }
+    }
+    try {
+      lock?.close();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+function storeInUse(wal, walErr) {
+  return Object.assign(
+    new Error(
+      `the store failed to open twice and another process has it open, so its write-ahead log ` +
+        `(${wal}) was left in place: close the other Claude Code sessions using this memory, then ` +
+        `start again`,
+    ),
+    { code: 'CLAUDE_MEM_STORE_IN_USE', cause: walErr },
+  );
+}
+
+function pruneWalAside() {
+  const prefix = `${DB_PATH.slice(DB_DIR.length + 1)}-wal.corrupt-`;
+  try {
+    const kept = readdirSync(DB_DIR)
+      .filter((f) => f.startsWith(prefix))
+      .sort();
+    for (const f of kept.slice(0, Math.max(0, kept.length - WAL_ASIDE_KEEP)))
+      rmSync(join(DB_DIR, f), { force: true });
+  } catch {
+    /* best-effort */
   }
 }
 

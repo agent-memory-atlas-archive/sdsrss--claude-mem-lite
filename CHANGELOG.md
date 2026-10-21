@@ -2,6 +2,43 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.2 — a failed open no longer writes a damaged WAL frame into the database file
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.1`.
+
+- **A failed open no longer writes a damaged WAL frame into the database file** (D#506, D#438).
+  The last connection to close a WAL database copies the WAL into the database file without
+  checking it. A failed open closed its connection that way, or left it open when
+  `journal_mode = WAL` threw, and better-sqlite3 closed it when the process exited. A failed open
+  now closes while a read-only connection holds the database, so the close copies nothing. On the
+  corrupt-WAL test fixture, 6.30.1's recovery could not open the store in 20 of 20 fresh-process
+  trials; this release opens it in 20 of 20 and leaves the database file untouched. With six
+  processes recovering at once, 6.30.1 left the database file damaged in 10 of 20 runs and this
+  release in none of 40 (and none of 20 with three).
+- **A directory name is no longer enough to take a hook for ours** (D#479). `install`, `uninstall`
+  and `cleanup-hooks` deleted a hook such as `node ~/claude-mem-lite-notes/scripts/fmt.js` on the
+  directory name alone. A path there is ours only when its directory holds this package, or when it
+  names one of our entries and the file is gone. The one-time stale-hook warning setup.sh prints at
+  session start uses the same test (D#513).
+- **`optimize --run=false` previews** (D#514). It split into `--run false` and started the run,
+  LLM rewrites across every project included, and `optimize --run=false --dry-run` got past the
+  dry-run refusal the same way. `delete` and `activity delete` given `--confirm --dry-run` say to
+  run again without `--confirm` to preview, where they said they had no preview; `maintain execute
+  --dry-run` says to run `scan` in place of `execute`, which keeps your `--project`.
+- **`maintain scan` pairs duplicates within one project** (D#464). Across projects it printed
+  pairs, in the ready-to-run merge command too, that `execute` then skipped.
+- **The secret scrubber is faster on crafted inputs that read one long run of lines many times**
+  (D#511): a private-key header followed by a long run of blank, quoted or escaped lines, under a
+  chain of labelled values that holds the scrubber to its 32 passes. Output is byte-identical to
+  6.30.1's on 570,000 generated inputs. On the user-prompt hook at its 256 KiB input limit
+  (per-process CPU time as a multiple of plain text of the same size, one run), the measured
+  blank-line, quoted-line, escaped-line, closing-tag and twelve-escape-depth shapes went from
+  5.9–9.4 to 2.3–5.9. Other shapes, other escape-depth variants among them, are slower than in
+  6.30.1, by up to 21% in a review's measurements.
+- **`--project=<id>`** in the README upgrade notes and the `/verify` template, the form the CLI
+  prints (D#513): after `--project `, an id that starts with `-` reads as a flag.
+
 ## v6.30.1 — cut first lines of more private-key types are erased, and the stale-hook warning no longer says to uninstall the plugin
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

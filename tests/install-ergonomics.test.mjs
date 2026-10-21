@@ -334,7 +334,9 @@ describe('collectOrphanHookPaths (v2.79)', () => {
     // ones that look like a hook path; falls back to unquoted only if none qualify.
     // NOTE: the command string below is contrived to exercise the path-extractor
     // parser, NOT realistic hook execution (real `bash -c "..." "/...sh"` passes
-    // the trailing arg as $0 to the inline script). The parser is what we test.
+    // the trailing arg as $0 to the inline script). The parser is what we test, on one of our
+    // entry names: a missing script under a claude-mem-lite* directory that is not one of ours is
+    // the user's dead hook, not an orphan of ours (D#479).
     const settings = {
       hooks: {
         SessionStart: [
@@ -344,7 +346,7 @@ describe('collectOrphanHookPaths (v2.79)', () => {
               {
                 type: 'command',
                 command:
-                  'bash -c "claude-mem-lite tracer; exec bash" "/tmp/nonexistent-claude-mem-lite/scripts/wrapped.sh"',
+                  'bash -c "claude-mem-lite tracer; exec bash" "/tmp/nonexistent-claude-mem-lite/scripts/post-tool-use.sh"',
               },
             ],
           },
@@ -352,7 +354,7 @@ describe('collectOrphanHookPaths (v2.79)', () => {
       },
     };
     const orphans = collectOrphanHookPaths(settings);
-    expect(orphans).toEqual(['/tmp/nonexistent-claude-mem-lite/scripts/wrapped.sh']);
+    expect(orphans).toEqual(['/tmp/nonexistent-claude-mem-lite/scripts/post-tool-use.sh']);
     expect(orphans).not.toContain('claude-mem-lite tracer; exec bash');
   });
 

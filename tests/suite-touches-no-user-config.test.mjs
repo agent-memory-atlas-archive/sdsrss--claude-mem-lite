@@ -33,6 +33,9 @@ beforeEach(() => {
     join(REPO, 'scripts', 'hook-launcher.mjs'),
     join(fakeHome, '.claude-mem-lite', 'scripts', 'hook-launcher.mjs'),
   );
+  // Our package, as every install root has: the directory name alone no longer makes an existing
+  // launcher ours (D#479).
+  writeFileSync(join(fakeHome, '.claude-mem-lite', 'package.json'), '{"name":"claude-mem-lite"}');
   savedHome = process.env.HOME;
 });
 

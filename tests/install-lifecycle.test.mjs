@@ -955,6 +955,47 @@ describe('install lifecycle checks', () => {
       }
     });
 
+    // D#513(2): the warning matched `.claude-mem-lite/` as a substring, so a user's own hook kept
+    // there was listed, and the cleanup-hooks it names leaves that hook in place. It now asks the
+    // classifier cleanup-hooks uses.
+    it("a user's own hook under the data dir gets no residue warning", () => {
+      const home = profileHome();
+      try {
+        const cfg = join(home, '.claude');
+        mkdirSync(cfg, { recursive: true });
+        const own = (command) => ({ hooks: [{ type: 'command', command }] });
+        writeFileSync(
+          join(cfg, 'settings.json'),
+          JSON.stringify({
+            hooks: {
+              Stop: [own('bash ~/.claude-mem-lite/my-backup.sh')],
+              SessionEnd: [own(`bash "${join(home, '.claude-mem-lite', 'notify.sh')}"`)],
+            },
+          }),
+        );
+        const r = runSetup(home);
+        expect(r.status, r.stderr).toBe(0);
+        expect(r.stderr).not.toContain('Legacy direct-install hooks');
+        // Control: a stale hook of ours in the same file is still listed, and only its event.
+        writeFileSync(
+          join(cfg, 'settings.json'),
+          JSON.stringify({
+            hooks: {
+              Stop: [own('bash ~/.claude-mem-lite/my-backup.sh')],
+              PreCompact: [own('node ~/.claude-mem-lite/hook.mjs pre-compact')],
+            },
+          }),
+        );
+        for (const f of readdirSync(join(home, '.claude-mem-lite', 'runtime')))
+          if (f.startsWith('.residue-warned')) rmSync(join(home, '.claude-mem-lite', 'runtime', f));
+        const again = runSetup(home);
+        expect(again.stderr).toContain('Legacy direct-install hooks');
+        expect(again.stderr).toContain('Events with stale entries: PreCompact\n');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     it('a second profile gets its own MCP dedup and residue warning', () => {
       const home = profileHome();
       try {

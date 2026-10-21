@@ -314,6 +314,34 @@ describe('a hook is ours only when the product or one of OUR entries anchors it'
     }
   });
 
+  // D#479: the product name in a directory name was enough, so install, uninstall and
+  // cleanup-hooks deleted a user's `node ~/claude-mem-lite-notes/scripts/fmt.js`. Such a path is
+  // ours when its root carries our package, or when it names one of our entries and is gone.
+  it("a user's existing script under a claude-mem-lite* directory is not ours", () => {
+    const home = mkdtempSync(join(tmpdir(), 'cml-entry-'));
+    try {
+      const notes = join(home, 'claude-mem-lite-notes');
+      mkdirSync(join(notes, 'scripts'), { recursive: true });
+      for (const f of ['scripts/fmt.js', 'scripts/post-tool-use.sh', 'hook.mjs'])
+        writeFileSync(join(notes, f), '// mine');
+      expect(isMemHook(mk(`node "${join(notes, 'scripts', 'fmt.js')}"`))).toBe(false);
+      expect(isMemHook(mk(`node ${join(notes, 'scripts', 'fmt.js')} --check`))).toBe(false);
+      expect(isMemHook(mk(`bash "${join(notes, 'scripts', 'post-tool-use.sh')}"`))).toBe(false);
+      expect(isMemHook(mk(`node "${join(notes, 'hook.mjs')}" stop`))).toBe(false);
+      // A missing script that is not one of our entries is a dead hook of the user's.
+      expect(isMemHook(mk(`node "${join(notes, 'scripts', 'gone.js')}"`))).toBe(false);
+      expect(isMemHook(mk(`node "${join(notes, 'hook.mjs-old', 'hook.mjs')}" notify`))).toBe(false);
+      // Controls: one of our entries that is gone, and any entry in a root carrying our package.
+      expect(isMemHook(mk(`node "${join(notes, 'scripts', 'user-prompt-search.js')}"`))).toBe(true);
+      expect(isMemHook(mk(`node "${join(home, 'claude-mem-lite-old', 'hook.mjs')}" stop`))).toBe(true);
+      ourPackage(notes);
+      expect(isMemHook(mk(`node "${join(notes, 'scripts', 'fmt.js')}"`))).toBe(true);
+      expect(isMemHook(mk(`node "${join(notes, 'hook.mjs')}" stop`))).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   // The entry list is what recognises a relocated install whose directory is gone, so every
   // entry a release writes must be on it — read from the plugin manifest, whose entries
   // install.mjs writes too (tests/audit-silent-20260814.test.mjs diffs the two).

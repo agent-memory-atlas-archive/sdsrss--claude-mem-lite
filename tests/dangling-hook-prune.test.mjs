@@ -31,6 +31,9 @@ beforeEach(() => {
   // The launcher itself exists; so does one live entry. The removed one does not.
   writeFileSync(join(installDir, 'scripts', 'hook-launcher.mjs'), '// launcher');
   writeFileSync(join(installDir, 'scripts', 'pre-tool-recall.js'), '// live entry');
+  // Our package, as every install root has (SOURCE_FILES copies it): the directory name alone no
+  // longer makes an existing launcher ours (D#479).
+  writeFileSync(join(installDir, 'package.json'), '{"name":"claude-mem-lite"}');
 });
 
 afterEach(() => {

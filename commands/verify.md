@@ -33,7 +33,7 @@ otherwise ask. Always pass that exact name — `export --project` matches loosel
 neighbouring project from a short name.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" export --project <project> [--from <date>] > <scratch>/memories.json
+node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" export --project=<project> [--from <date>] > <scratch>/memories.json
 ```
 
 Every row carries `id`, `project`, `type`, `title`, `narrative`, `facts`, `lesson_learned`,
@@ -113,7 +113,7 @@ Write `<scratch>/proposals.json` — a JSON array, one entry per memory to chang
 ## Step 4 — Show the plan and get approval
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" verify-apply <scratch>/proposals.json --project <project>
+node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" verify-apply <scratch>/proposals.json --project=<project>
 ```
 
 This is a dry run: it validates every entry against the database, writes nothing, prints each
@@ -130,7 +130,7 @@ the old one will be refused.
 Run exactly the command the dry run printed:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" verify-apply <scratch>/proposals.json --project <project> --apply --digest <digest>
+node "${CLAUDE_PLUGIN_ROOT}/cli.mjs" verify-apply <scratch>/proposals.json --project=<project> --apply --digest <digest>
 ```
 
 It refuses if the proposals or the memories changed since the dry run. Otherwise it backs up

@@ -478,9 +478,9 @@ export async function dbCheckRemedy(dbPath, err) {
   const remedy = dbUnusableRemedy(dbPath, err);
   if (remedy.kind === 'unknown') return remedy.note;
   if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
-  // Both commands start by deleting the -wal and -shm, which loses the commits of a connection
-  // still open on the store (D#430), and then replace or move the database file under it (D#534).
-  // The SessionStart notice says the same before its copy of the command.
+  // Both commands start by deleting the -wal and -shm and then replace or move the database file,
+  // under any session still holding the store (D#534). The SessionStart notice says the same before
+  // its copy of the command.
   if (remedy.kind === 'set-aside') {
     return (
       `No backup snapshot exists beside the database. Once every Claude Code session is closed, ` +

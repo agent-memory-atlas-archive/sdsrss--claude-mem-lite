@@ -123,8 +123,8 @@ describe('dbCheckRemedy', () => {
     expect(out).not.toMatch(/rm -f|\bcp\b|\bmv\b|&&/);
   });
 
-  // D#534: both commands start by deleting the -wal and -shm, which loses the commits of a
-  // connection still open on the store (D#430), and then replace or move the database file.
+  // D#534: both commands start by deleting the -wal and -shm and then replace or move the
+  // database file, under any session still holding the store.
   it('says to close every Claude Code session before the restore or set-aside command', async () => {
     const snap = withDb(['claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak']).db;
     for (const [what, out] of [

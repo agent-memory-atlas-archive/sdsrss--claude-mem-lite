@@ -372,18 +372,6 @@ function scrubTruncate(str, max, window = DESC_SCRUB_WINDOW) {
   return truncate(_scrubSecrets(win), max);
 }
 
-// The scrubbed first `max` characters, from a scrub that reads DESC_SCRUB_WINDOW characters past
-// them rather than the whole text: whole, a 256 KiB prompt of crafted key headers took 2.0-2.6 s in
-// a hook the host kills at 5 s (D#522). The token the window's edge cuts is dropped, as in
-// scrubTruncate; a key whose END lies past the edge is a cut-off key, which the scrubber erases,
-// and a private span whose close lies past it is unclosed, which it erases to the end. Text that
-// fits the window is scrubbed whole.
-export function scrubHead(str, max) {
-  const window = max + DESC_SCRUB_WINDOW;
-  if (typeof str !== 'string' || str.length <= window) return _scrubSecrets(str).slice(0, max);
-  return _scrubSecrets(dropCutTokenAtEnd(str.slice(0, window), str[window])).slice(0, max);
-}
-
 // Head+tail cut for command output. A check usually prints its verdict last ("...parsed: 0",
 // "3 passed"); a head-only cut hands the episode summarizer an unresolved-looking fragment,
 // and it has written a bugfix narrative for a check that passed. The tail comes from its own

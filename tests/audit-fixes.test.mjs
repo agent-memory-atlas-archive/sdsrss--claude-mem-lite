@@ -1401,58 +1401,6 @@ describe('handleUserPrompt: secret scrub runs BEFORE the 10k prompt slice', () =
       db2.close();
     }
   });
-
-  // D#522: the scrub reads the first 14096 characters (the 10000 kept and a 4096 margin), not the
-  // whole prompt; up to the hook's 256 KiB input it took 2.0-2.6 s on crafted text.
-  const KEY_LINE = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7'.padEnd(64, 'Q');
-  const keyBlock = (lines) =>
-    `-----BEGIN PRIVATE KEY-----\n${`${KEY_LINE}\n`.repeat(lines)}-----END PRIVATE KEY-----\n`;
-  const storedPrompt = (prompt) => {
-    const { db, dbPath } = initHomeDb(tmpHome);
-    db.close();
-    runHookCmd('user-prompt', {
-      home: tmpHome,
-      cwd: projDir,
-      stdin: JSON.stringify({ prompt, session_id: 'cc-scrub' }),
-    });
-    const db2 = new Database(dbPath, { readonly: true });
-    try {
-      return db2.prepare('SELECT prompt_text FROM user_prompts ORDER BY id DESC LIMIT 1').get()?.prompt_text;
-    } finally {
-      db2.close();
-    }
-  };
-
-  it('stores nothing from past the first 14096 characters of a long prompt (D#522)', () => {
-    // 300 key lines, 19,500 characters, become one short mark when the scrub sees the END: the text
-    // after the key then moved into the 10000 kept.
-    const text = storedPrompt(`${keyBlock(300)}FAR_MARKER_D522 ${'word '.repeat(2000)}`);
-    expect(text).toContain('***PEM_KEY***');
-    expect(text).not.toContain(KEY_LINE.slice(0, 20));
-    expect(text).not.toContain('FAR_MARKER_D522');
-  });
-
-  it('drops the token the window edge cuts once the key before it has shrunk (D#522)', () => {
-    // The key shrinks by about 6,200 characters, so the window's edge lands inside the 10000 kept,
-    // with the first 10 characters of the token before it.
-    const head = `${keyBlock(95)}${'word '.repeat(2000)}`.slice(0, 14085);
-    const token = `ghp_${'a1B2c3D4e5'.repeat(4).slice(0, 36)}`;
-    const text = storedPrompt(`${head} ${token} tail`);
-    expect(text).toContain('***PEM_KEY***');
-    expect(text.length, 'premise: the edge is inside the kept text').toBeLessThan(10000);
-    expect(text).not.toMatch(/ghp_/);
-  });
-
-  // The hook strips private spans across the whole prompt before the scrub, so one that crosses the
-  // window's edge goes whole and the text after it is kept, as before the window.
-  it('removes a private span that crosses the window edge whole (D#522)', () => {
-    const head = `${keyBlock(95)}${'word '.repeat(2000)}`.slice(0, 12000);
-    const text = storedPrompt(
-      `${head} <private>${'HIDDEN_D522 '.repeat(250)}</private> AFTER_PRIVATE_D522 end`,
-    );
-    expect(text).not.toContain('HIDDEN_D522');
-    expect(text).toContain('AFTER_PRIVATE_D522');
-  });
 });
 
 // ─── P0: detectMemOverride wired into handleUserPrompt ──────────────────────

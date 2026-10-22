@@ -3126,9 +3126,9 @@ async function doctor() {
       else dwarn('FTS5 index: missing (will be created on server start)');
       // D#541, D#550. Read-only, and BEFORE the FTS check below, which opens the store read-write:
       // on a store whose log holds a damaged page, that connection's close folds the page into the
-      // main file, over the older, intact copy the main file held. v6.30.2 printed no ✗ while this
-      // check failed on 114 of 869 damaged-log plants. It runs when dbWriteBlocked too, which is
-      // about writing.
+      // main file, over the older, intact copy the main file held. On the 869 damaged-log plants this
+      // check fails 285 stores as found; 6.30.3's doctor printed no ✗ on 156 of them and changed the
+      // files of 153 of those. It runs when dbWriteBlocked too, which is about writing.
       let integrityPassed = false;
       // Its own catch: a module that will not load is not a database fault.
       let checked;

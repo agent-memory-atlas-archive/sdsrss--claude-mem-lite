@@ -1,7 +1,18 @@
 // Tests for lib/db-backup.mjs — pre-maintenance VACUUM INTO snapshots (audit MED-2).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'fs';
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  openSync,
+  writeSync,
+  writeFileSync,
+  closeSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { initSchema } from '../schema.mjs';
@@ -53,6 +64,54 @@ describe('snapshotDb', () => {
     initSchema(db);
     expect(snapshotDb(db)).toBeNull();
     db.close();
+  });
+
+  // D#551: on a damaged store VACUUM INTO creates its target and then fails, and a 0-byte
+  // `.bak` was left as the newest "snapshot" for a restore command to name.
+  it('leaves no file behind when VACUUM INTO fails on a damaged store', () => {
+    const { db, p, d } = fileDb();
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status) VALUES ('s','s','p','now',0,'active')`,
+    ).run();
+    const ins = db.prepare(
+      `INSERT INTO observations (memory_session_id, project, text, type, title, created_at, created_at_epoch) VALUES ('s','p','','discovery',?,'now',?)`,
+    );
+    db.transaction(() => {
+      for (let i = 0; i < 2000; i++) ins.run(`row ${i} ${'x'.repeat(80)}`, i);
+    })();
+    db.close();
+    const size = statSync(p).size;
+    const fd = openSync(p, 'r+');
+    for (const at of [0.3, 0.5, 0.7]) writeSync(fd, Buffer.alloc(64, 0x41), 0, 64, Math.floor(size * at));
+    closeSync(fd);
+    const damaged = new Database(p);
+    try {
+      expect(snapshotDb(damaged, { tag: 'pre-delete' }), 'premise: the snapshot fails').toBeNull();
+      expect(readdirSync(d).filter((n) => n.endsWith('.bak'))).toEqual([]);
+    } finally {
+      damaged.close();
+    }
+  });
+
+  it('keeps a file that was already at the target name when VACUUM INTO refuses it', () => {
+    const { db, p } = fileDb();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const at = new Date('2026-01-02T03:04:05.678Z');
+      vi.setSystemTime(at);
+      const stamp = at.toISOString().replace(/[:.]/g, '-');
+      // The per-process sequence number is not exported, so every value it can have here is taken.
+      const taken = Array.from({ length: 50 }, (_, i) => `${p}.pre-delete-${stamp}-${process.pid}-${i}.bak`);
+      for (const f of taken) writeFileSync(f, 'not ours');
+      expect(
+        snapshotDb(db, { tag: 'pre-delete' }),
+        'premise: VACUUM INTO refuses a non-empty target',
+      ).toBeNull();
+      for (const f of taken) expect(readFileSync(f, 'utf8')).toBe('not ours');
+    } finally {
+      vi.useRealTimers();
+      db.close();
+    }
   });
 
   it('returns null (does not throw) when the target dir is gone', () => {

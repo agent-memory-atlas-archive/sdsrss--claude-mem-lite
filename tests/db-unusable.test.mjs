@@ -129,6 +129,37 @@ describe('dbUnusableRemedy', () => {
     expect(r.command).not.toContain(older);
   });
 
+  // D#551: versions before 6.31.0 left a 0-byte `.bak` when a snapshot of a damaged store
+  // failed, and it was the newest; restoring it emptied the store.
+  it('skips an empty snapshot and names the newest one that holds data', () => {
+    const dir = tmp('rem-empty-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'garbage');
+    const good = `${db}.pre-maintain-2026-09-01.bak`;
+    const empty = `${db}.pre-delete-2026-09-07.bak`;
+    writeFileSync(good, 'a');
+    writeFileSync(empty, '');
+    const now = Date.now();
+    utimesSync(good, now / 1000 - 1000, now / 1000 - 1000);
+    utimesSync(empty, now / 1000, now / 1000);
+    const r = dbUnusableRemedy(db);
+    expect(r.kind).toBe('restore');
+    expect(r.snapshotCount).toBe(1);
+    expect(r.command).toContain(good);
+    expect(r.command).not.toContain(empty);
+  });
+
+  it('offers set-aside when every snapshot is empty, and says they were skipped', () => {
+    const dir = tmp('rem-allempty-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'garbage');
+    writeFileSync(`${db}.pre-delete-2026-09-07.bak`, '');
+    const r = dbUnusableRemedy(db);
+    expect(r.kind).toBe('set-aside');
+    expect(r.snapshotCount).toBe(0);
+    expect(r.note).toContain('1 empty .bak file');
+  });
+
   // Three outcomes, never two — "there is no backup" and "I could not look" must not print in
   // the same voice, which is the rule lib/schema-skew.mjs states and the v6.2.0 doctor check
   // broke. Driven with a path whose parent is a FILE, so readdirSync fails with ENOTDIR.

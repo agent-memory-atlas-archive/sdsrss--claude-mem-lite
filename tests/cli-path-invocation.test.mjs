@@ -414,7 +414,7 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
         expect.arrayContaining([`${db}-wal`, `${db}-shm`, db, `${db}.corrupt`]),
       );
       const bak = `${db}.2026-09-25T00-00-00Z.bak`;
-      writeFileSync(bak, '');
+      writeFileSync(bak, 'snapshot'); // an empty one is skipped (D#551)
       const restore = dbUnusableRemedy(db);
       expect(restore.kind).toBe('restore');
       expect(words(restore.command)).toEqual(expect.arrayContaining([`${db}-wal`, bak, db]));

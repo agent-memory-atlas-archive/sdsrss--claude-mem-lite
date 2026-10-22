@@ -1,18 +1,9 @@
 // D#541, D#550: doctor runs SQLite's integrity check read-only, before its FTS check (which opens
-// the store read-write), and under a failure names the README's recovery steps and the newest
-// backup snapshot, with no command that moves or replaces the store.
+// the store read-write), and under a failure points at the README's recovery steps, with no command
+// and no snapshot named.
 import { describe, it, expect, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
-import {
-  closeSync,
-  mkdtempSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -160,37 +151,41 @@ describe('doctor: database integrity', () => {
     expect({ main: sha(p), wal: sha(`${p}-wal`) }).toEqual(before);
   });
 
-  // The v6.31.0 round-3 claims review F2: a read-only integrity_check evaluates no CHECK constraint.
-  it('fails a store holding a value outside a CHECK list', () => {
-    const dir = newDir();
-    const p = buildStore(dir, 20);
-    const db = new Database(p);
-    db.prepare(`UPDATE observations SET type = 'decision' WHERE id = 7`).run();
-    db.close();
-    const buf = readFileSync(p);
-    const at = buf.indexOf(Buffer.from('decisionobs 6'));
-    expect(at, 'premise: the row is in the main file').toBeGreaterThan(0);
-    buf[at + 7] = 0x5a;
-    writeFileSync(p, buf);
-    expect(doctor(dir)).toMatch(/✗ Database integrity: CHECK constraint failed in observations \(1 row\)/);
-  });
-
-  it('names the newest backup snapshot and its time', () => {
+  // One picked by its time can be empty or hold the damage (the v6.31.0 round-1 reviews).
+  it('names no backup snapshot', () => {
     const dir = newDir();
     const p = buildStore(dir);
     plant(p, pages(p, 'idx_obs_project_live')[0], 1000, Array(64).fill(0x41));
-    let t = 1_790_000_000;
-    for (const stamp of ['2026-09-01T00-00-00-000Z', '2026-09-06T00-00-00-000Z']) {
-      const snap = join(dir, `${DB}.pre-maintain-${stamp}-1-1.bak`);
-      writeFileSync(snap, 'snap');
-      utimesSync(snap, t, t);
-      t += 3600;
-    }
-    const out = doctor(dir);
-    expect(out).toContain(
-      `the newest of 2 is ${join(dir, `${DB}.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak`)}`,
+    const snaps = ['2026-09-01T00-00-00-000Z', '2026-09-06T00-00-00-000Z'].map((stamp) =>
+      join(dir, `${DB}.pre-maintain-${stamp}-1-1.bak`),
     );
-    expect(out).toContain(`from ${new Date((t - 3600) * 1000).toISOString()}`);
+    writeFileSync(snaps[0], 'snap');
+    writeFileSync(snaps[1], '');
+    const out = doctor(dir);
+    expect(out).toMatch(/✗ Database integrity: /);
+    for (const snap of snaps) expect(out).not.toContain(snap);
+  });
+
+  // Not damage, and not a pass either: the read-write FTS check stays off.
+  it('says the check did not run on an index whose collation this build lacks, and writes nothing', () => {
+    const dir = newDir();
+    const p = buildStore(dir, 20);
+    const db = new Database(p);
+    db.exec(
+      `CREATE TABLE zz_n (n TEXT); CREATE INDEX zz_n_i ON zz_n (n COLLATE NOCASE); INSERT INTO zz_n VALUES ('a2'), ('a10')`,
+    );
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare(`UPDATE sqlite_master SET sql = replace(sql, 'NOCASE', 'ZZCASE') WHERE name = 'zz_n_i'`).run();
+    db.close();
+    const before = sha(p);
+    const out = doctor(dir);
+    expect(out).toMatch(/⚠ Database integrity: not checked — no such collation sequence: ZZCASE/);
+    expect(out).toMatch(
+      /FTS5 integrity: not checked — it writes to the database, and the integrity check above did not run/,
+    );
+    expect(out).not.toMatch(/✗ Database integrity/);
+    expect(sha(p)).toBe(before);
   });
 
   it('carries the recovery pointer in --json', () => {

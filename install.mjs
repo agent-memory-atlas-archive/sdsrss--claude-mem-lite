@@ -495,41 +495,12 @@ export async function dbCheckRemedy(dbPath, err) {
 }
 
 /**
- * doctor's lines under a failed integrity check (D#550). No command that moves or replaces the
- * store: it still opens, and setting it aside would leave the user with none of its memories. The
- * recovery takes the sqlite3 command-line tool, whose `.recover` this package cannot run (it needs
- * sqlite_dbpage, which better-sqlite3 does not build), so the steps are in the README, run on a
- * copy. A backup snapshot is the other way back, named with its time because restoring it loses
- * what was saved after it.
- * @param {string} dbPath
- * @returns {Promise<string[]>}
+ * Where the damaged-database steps live (README.md, "### Damaged database"), the one thing doctor
+ * prints under a failed integrity check (D#550). No command: the recovery takes the sqlite3
+ * command-line tool, whose `.recover` this package cannot run (it needs sqlite_dbpage, which
+ * better-sqlite3 does not build), on a copy. No snapshot named either: one picked by its time can
+ * be empty or hold the damage (the v6.31.0 round-1 reviews).
  */
-async function integrityRemedy(dbPath) {
-  const lines = [
-    'Rows on the damaged pages may be missing or hold damaged values. To recover the rows SQLite can',
-    `still find (with the sqlite3 command-line tool, on a copy), see "Damaged database" in ${DAMAGED_DB_DOC}`,
-  ];
-  try {
-    const { readSnapshots } = await import('./lib/db-backup.mjs');
-    const snap = readSnapshots(dbPath);
-    if (!snap.ok) {
-      lines.push(`Could not look for a backup snapshot beside it (${snap.reason}).`);
-    } else if (snap.snapshots.length > 0) {
-      const newest = snap.snapshots
-        .slice()
-        .sort((a, b) => b.mtimeMs - a.mtimeMs || (a.path < b.path ? 1 : -1))[0];
-      lines.push(
-        `Or restore a backup snapshot (the same section says how); the newest of ${snap.snapshots.length} is ` +
-          `${newest.path}, from ${new Date(newest.mtimeMs).toISOString()}: what was saved after it is lost.`,
-      );
-    }
-  } catch (e) {
-    lines.push(`Could not look for a backup snapshot beside it (${e?.message ?? e}).`);
-  }
-  return lines;
-}
-
-/** Where the damaged-database steps live (README.md, "### Damaged database"). */
 const DAMAGED_DB_DOC = 'https://github.com/sdsrss/claude-mem-lite#damaged-database';
 
 // ─── Install ────────────────────────────────────────────────────────────────
@@ -3170,13 +3141,12 @@ async function doctor() {
       if (checked?.ok) {
         ok('Database integrity: ok');
         integrityPassed = true;
-        if (checked.unchecked)
-          dwarn(`Database integrity: CHECK constraints not evaluated for ${checked.unchecked.join(', ')}`);
       } else if (checked?.notChecked) {
         dwarn(`Database integrity: not checked — ${checked.notChecked}`);
       } else if (checked) {
         fail(`Database integrity: ${checked.summarizeIntegrity(checked.problems)}`);
-        for (const line of await integrityRemedy(DB_PATH)) log(`    ${line}`);
+        log('    To recover the rows SQLite can still find (with the sqlite3 command-line tool, on a copy),');
+        log(`    or to restore a backup snapshot, see "Damaged database" in ${DAMAGED_DB_DOC}`);
         issues++;
       }
       // FTS5 integrity check (requires read-write access for INSERT INTO fts VALUES('integrity-check'))

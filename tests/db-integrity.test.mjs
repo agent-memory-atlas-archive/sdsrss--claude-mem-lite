@@ -18,8 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initSchema } from '../schema.mjs';
 import { insertObs, insertSession, makeFixtureTracker } from './test-helpers.mjs';
-import { readIntegrity, checkIntegrity, checkClauses, summarizeIntegrity } from '../lib/db-integrity.mjs';
-import { ensureSearchTelemetrySchema } from '../lib/search-telemetry.mjs';
+import { readIntegrity, checkIntegrity, summarizeIntegrity } from '../lib/db-integrity.mjs';
 
 const DB = 'claude-mem-lite.db';
 const fixtures = makeFixtureTracker();
@@ -112,8 +111,8 @@ describe('readIntegrity', () => {
     expect(r.notChecked).toMatch(/unable to open/);
   });
 
-  // An FTS5 table whose stored options are damaged fails to connect with SQLITE_ERROR.
-  it('reads an FTS5 table that will not connect as damage', () => {
+  // A damaged FTS5 config row fails integrity_check with SQLITE_ERROR.
+  it('reads an FTS5 table whose config row is damaged as damage', () => {
     const p = buildStore(newDir(), { rows: 3 });
     const db = new Database(p);
     db.unsafeMode(true);
@@ -123,28 +122,6 @@ describe('readIntegrity', () => {
     expect(r.ok).toBe(false);
     expect(r.notChecked).toBeUndefined();
     expect(r.problems.join(' ')).toMatch(/fts5/i);
-  });
-
-  // p61-v10: an FTS5 definition naming a column its content table lacks passes integrity_check.
-  it('reads an FTS5 definition that names a column its content table lacks as damage', () => {
-    const p = buildStore(newDir(), { rows: 20 });
-    const db = new Database(p);
-    db.unsafeMode(true);
-    db.pragma('writable_schema = ON');
-    db.prepare(
-      `UPDATE sqlite_master SET sql = replace(sql, 'learned,', 'AAAAAAAAed,') WHERE name = 'session_summaries_fts'`,
-    ).run();
-    db.close();
-    const ro = new Database(p, { readonly: true });
-    try {
-      expect(ro.pragma('integrity_check', { simple: true }), 'premise: integrity_check passes').toBe('ok');
-    } finally {
-      ro.close();
-    }
-    expect(checkIntegrity(p)).toMatchObject({
-      ok: false,
-      problems: [expect.stringMatching(/session_summaries_fts: no such column/)],
-    });
   });
 
   // A read-write close would checkpoint the log into the main file.
@@ -165,13 +142,44 @@ describe('readIntegrity', () => {
     expect(readFileSync(p).equals(keep), 'main file').toBe(true);
     expect(readFileSync(`${p}-wal`).equals(wal), 'log').toBe(true);
   });
+
+  // A collation the sqlite3 command-line tool provides (uint, say) is missing here: the check
+  // cannot compare that index's keys, which says nothing about the file.
+  it('says it did not check a store with an index whose collation this build lacks', () => {
+    const p = buildStore(newDir(), { rows: 3 });
+    const db = new Database(p);
+    db.exec(
+      `CREATE TABLE zz_n (n TEXT); CREATE INDEX zz_n_i ON zz_n (n COLLATE NOCASE); INSERT INTO zz_n VALUES ('a2'), ('a10')`,
+    );
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare(`UPDATE sqlite_master SET sql = replace(sql, 'NOCASE', 'ZZCASE') WHERE name = 'zz_n_i'`).run();
+    db.close();
+    const r = checkIntegrity(p);
+    expect(r.ok).toBe(false);
+    expect(r.problems).toEqual([]);
+    expect(r.notChecked).toMatch(/no such collation sequence: ZZCASE/);
+  });
+
+  // A virtual table of a module this build does not load (sqlite-vec's vec0, say) is the user's.
+  it('reads a sound store holding a virtual table of an unloaded module as ok', () => {
+    const p = buildStore(newDir(), { rows: 3 });
+    const db = new Database(p);
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare(
+      `INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql) VALUES ('table', 'zz_vec', 'zz_vec', 0, 'CREATE VIRTUAL TABLE zz_vec USING vec0(embedding float[4])')`,
+    ).run();
+    db.close();
+    expect(checkIntegrity(p)).toEqual({ ok: true, problems: [] });
+  });
 });
 
-// SQLite drops a table's CHECK constraints when it parses a read-only database's schema, so
-// integrity_check on a read-only handle never evaluates them (the v6.31.0 round-3 claims review,
-// F2: doctor showed ✓ on a store a read-write check failed).
-describe('CHECK constraints, on a read-only handle', () => {
-  function checkViolating() {
+// What a read-only check does not see; doctor's own FTS check, which opens the store read-write,
+// runs after it passes, as in 6.30.3. The header of lib/db-integrity.mjs says the same.
+describe('what a read-only check does not see', () => {
+  // SQLite drops a table's CHECK constraints when it parses a read-only database's schema.
+  it('reads a value outside a CHECK list as ok, where a read-write check fails it', () => {
     const p = buildStore(newDir(), { rows: 20 });
     const db = new Database(p);
     db.prepare(`UPDATE observations SET type = 'decision' WHERE id = 7`).run();
@@ -179,97 +187,28 @@ describe('CHECK constraints, on a read-only handle', () => {
     expect(patchBytes(p, Buffer.from('decisionobs 6'), 'decisioZobs 6'), 'premise: patched').toBeGreaterThan(
       0,
     );
-    return p;
-  }
-
-  it('reports a value outside a CHECK list as damage', () => {
-    const p = checkViolating();
-    const ro = new Database(p, { readonly: true });
     const rw = new Database(p);
     try {
-      expect(ro.pragma('integrity_check', { simple: true }), 'premise: read-only passes').toBe('ok');
       expect(rw.pragma('integrity_check', { simple: true }), 'premise: read-write fails').toMatch(
         /CHECK constraint failed in observations/,
       );
     } finally {
-      ro.close();
       rw.close();
     }
-    const r = checkIntegrity(p);
-    expect(r.ok).toBe(false);
-    expect(r.problems).toEqual(['CHECK constraint failed in observations (1 row)']);
-  });
-
-  it('passes NULL, as SQLite does', () => {
-    const p = join(newDir(), 'x.db');
-    const db = new Database(p);
-    db.exec(`CREATE TABLE t (a TEXT CHECK (a IN ('x', 'y'))); INSERT INTO t VALUES ('x'), (NULL)`);
-    db.close();
-    expect(checkIntegrity(p)).toEqual({ ok: true, problems: [] });
-  });
-});
-
-describe('CHECK constraints, evaluated', () => {
-  it("evaluates every CHECK constraint of this version's tables on a sound store", () => {
-    const p = buildStore(newDir(), { rows: 3 });
-    const db = new Database(p);
-    ensureSearchTelemetrySchema(db);
-    const withChecks = db
-      .prepare(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND sql LIKE '%CHECK%'`)
-      .pluck()
-      .get();
-    db.close();
-    expect(withChecks, 'premise: tables with CHECK constraints').toBeGreaterThanOrEqual(5);
     expect(checkIntegrity(p)).toEqual({ ok: true, problems: [] });
   });
 
-  it('says which table it could not evaluate, without failing the store', () => {
-    const p = join(newDir(), 'x.db');
+  // p61-v10 of the 869-plant sweep.
+  it('reads an FTS5 definition that names a column its content table lacks as ok', () => {
+    const p = buildStore(newDir(), { rows: 20 });
     const db = new Database(p);
-    db.function('twice', (x) => x * 2);
-    db.exec('CREATE TABLE t (a INTEGER CHECK (twice(a) > 0)); INSERT INTO t VALUES (1)');
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare(
+      `UPDATE sqlite_master SET sql = replace(sql, 'learned,', 'AAAAAAAAed,') WHERE name = 'session_summaries_fts'`,
+    ).run();
     db.close();
-    expect(checkIntegrity(p)).toEqual({ ok: true, problems: [], unchecked: ['t (no such function: twice)'] });
-  });
-});
-
-describe('checkClauses', () => {
-  it("reads this version's observations statement, a comment with parentheses after its CHECK", () => {
-    const db = new Database(':memory:');
-    initSchema(db);
-    const sql = db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'observations'`).pluck().get();
-    db.close();
-    expect(sql, 'premise: a comment holding parentheses').toMatch(/--[^\n]*\(/);
-    expect(checkClauses(sql)).toEqual([
-      "type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change')",
-    ]);
-  });
-
-  it('steps over strings, quoted identifiers and comments', () => {
-    expect(
-      checkClauses(
-        `CREATE TABLE t ("check" INT, [CHECK] INT, \`check\` INT, a TEXT DEFAULT 'x) CHECK(y', /* CHECK(z) */ b INT -- CHECK (w)
-         CHECK (b > 0))`,
-      ),
-    ).toEqual(['b > 0']);
-  });
-
-  it('reads column and table constraints, nested parentheses, and a comment before the parenthesis', () => {
-    expect(
-      checkClauses(
-        `CREATE TABLE t (a INT CHECK ((a + 1) * 2 > (0)), b TEXT CHECK /* why */ (b <> ')'), CONSTRAINT k CHECK (a < length(b)))`,
-      ),
-    ).toEqual(['(a + 1) * 2 > (0)', "b <> ')'", 'a < length(b)']);
-  });
-
-  it('does not read a word that only contains CHECK', () => {
-    expect(checkClauses(`CREATE TABLE t (rechecked INT, check_mark INT, ücheck INT, checks2 INT)`)).toEqual(
-      [],
-    );
-  });
-
-  it('returns null for a CHECK with no closing parenthesis', () => {
-    expect(checkClauses(`CREATE TABLE t (a INT CHECK (a > (0)`)).toBeNull();
+    expect(checkIntegrity(p)).toEqual({ ok: true, problems: [] });
   });
 });
 

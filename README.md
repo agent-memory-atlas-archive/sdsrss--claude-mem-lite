@@ -985,6 +985,61 @@ It resolves the latest **release** tag first. A shell one-liner cannot verify th
 
 After it finishes, `~/.claude-mem-lite/` is back in sync with the latest release and `claude-mem-lite repair` is available for next time.
 
+### Damaged database
+
+`doctor` runs SQLite's integrity check on the database, read-only. When it prints
+`✗ Database integrity:`, rows on the damaged pages may be missing or hold damaged values. The
+database still opens, and doctor changes nothing in it. Two ways back, both with every Claude Code
+session closed first:
+
+**Recover the rows SQLite can still find**, with the sqlite3 command-line tool's `.recover`
+(sqlite3 3.29 or newer), run on a copy. If you set `CLAUDE_MEM_DIR`, use that directory instead of
+`~/.claude-mem-lite`. One command; it stops at the first step that fails:
+
+```bash
+mkdir ~/cml-recover && cd ~/cml-recover &&
+  cp -p ~/.claude-mem-lite/claude-mem-lite.db . &&
+  { cp -p ~/.claude-mem-lite/claude-mem-lite.db-wal . 2>/dev/null || true; } &&
+  sqlite3 -readonly claude-mem-lite.db .recover > recovered.sql &&
+  sqlite3 -cmd '.dbconfig defensive off' recovered.db < recovered.sql > /dev/null &&
+  sqlite3 recovered.db "INSERT INTO observations_fts(observations_fts) VALUES('rebuild');
+    INSERT INTO session_summaries_fts(session_summaries_fts) VALUES('rebuild');
+    INSERT INTO user_prompts_fts(user_prompts_fts) VALUES('rebuild');
+    INSERT INTO events_fts(events_fts) VALUES('rebuild');" &&
+  sqlite3 recovered.db 'PRAGMA integrity_check'
+```
+
+Only when all it prints is `ok`, put the recovered database in place:
+
+```bash
+rm -f ~/.claude-mem-lite/claude-mem-lite.db-wal ~/.claude-mem-lite/claude-mem-lite.db-shm &&
+  cp ~/cml-recover/recovered.db ~/.claude-mem-lite/claude-mem-lite.db
+```
+
+Then run `claude-mem-lite doctor`. The copy is opened read-only, so `~/cml-recover` keeps the
+database as found; if a `~/cml-recover` is left from an earlier attempt, move it away first. Without
+`.dbconfig defensive off`, sqlite3 refuses the lines that recreate the search tables and
+claude-mem-lite cannot open the result; the search indexes are rebuilt because `.recover` copies
+them as they were. Rows whose table `.recover` cannot tell go into a `lost_and_found` table, which
+claude-mem-lite does not read. When it stops on an error, this way does not work for that damage:
+restore a backup snapshot if there is one; neither doctor nor the command changes the database.
+Measured on 2026-10-22 with sqlite3 3.46.1, on 1,643 damaged copies of test databases (damaged log
+frames and pages) that fail the integrity check: the command stopped on 102 (on 49 because
+`.recover` could not read the file, on 53 because a search table was too damaged to rebuild) and
+printed `ok` on 1,541. On all 1,541, doctor then passed and claude-mem-lite saved and searched. On
+157 of them, 3,285 rows SQLite could still read from the damaged database were missing or different
+in the recovered one; the copy in `~/cml-recover` still holds them. Text holding a NUL character
+comes back cut at it.
+
+**Or restore a backup snapshot**, which loses what was saved after it. doctor names the newest
+snapshot beside the database (`claude-mem-lite.db.<tag>-<time>.bak`). Copy the database as above
+first if you want to keep it, then:
+
+```bash
+rm -f ~/.claude-mem-lite/claude-mem-lite.db-wal ~/.claude-mem-lite/claude-mem-lite.db-shm
+cp <the snapshot doctor names> ~/.claude-mem-lite/claude-mem-lite.db
+```
+
 ## Uninstall
 
 ```bash

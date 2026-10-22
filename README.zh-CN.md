@@ -760,6 +760,52 @@ T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-li
 
 跑完之后，`~/.claude-mem-lite/` 就和最新 release 对齐，`claude-mem-lite repair` 下次再遇到类似问题也能直接用了。
 
+### 数据库损坏
+
+`doctor` 会只读地对数据库跑 SQLite 的完整性检查。它打印 `✗ Database integrity:` 时，损坏页上的行可能缺失，
+或者值已损坏；数据库仍然能打开，doctor 不会改动它。有两条路，都要先关闭所有 Claude Code 会话：
+
+**找回 SQLite 还能找到的行**：用 sqlite3 命令行工具的 `.recover`（sqlite3 3.29 或更新），在副本上跑。如果设置了
+`CLAUDE_MEM_DIR`，把下面的 `~/.claude-mem-lite` 换成那个目录。这是一条命令，任何一步失败就停下：
+
+```bash
+mkdir ~/cml-recover && cd ~/cml-recover &&
+  cp -p ~/.claude-mem-lite/claude-mem-lite.db . &&
+  { cp -p ~/.claude-mem-lite/claude-mem-lite.db-wal . 2>/dev/null || true; } &&
+  sqlite3 -readonly claude-mem-lite.db .recover > recovered.sql &&
+  sqlite3 -cmd '.dbconfig defensive off' recovered.db < recovered.sql > /dev/null &&
+  sqlite3 recovered.db "INSERT INTO observations_fts(observations_fts) VALUES('rebuild');
+    INSERT INTO session_summaries_fts(session_summaries_fts) VALUES('rebuild');
+    INSERT INTO user_prompts_fts(user_prompts_fts) VALUES('rebuild');
+    INSERT INTO events_fts(events_fts) VALUES('rebuild');" &&
+  sqlite3 recovered.db 'PRAGMA integrity_check'
+```
+
+只有它打印的只是一个 `ok` 时，才把恢复出的数据库放到位：
+
+```bash
+rm -f ~/.claude-mem-lite/claude-mem-lite.db-wal ~/.claude-mem-lite/claude-mem-lite.db-shm &&
+  cp ~/cml-recover/recovered.db ~/.claude-mem-lite/claude-mem-lite.db
+```
+
+然后运行 `claude-mem-lite doctor`。副本是只读打开的，所以 `~/cml-recover` 里保留着原样的数据库；如果之前试过、
+留下了 `~/cml-recover`，先把它挪走。不加 `.dbconfig defensive off`，sqlite3 会拒绝重建搜索表的那几行，
+claude-mem-lite 打不开结果；要重建搜索索引，是因为 `.recover` 原样复制了它们。`.recover` 分不清属于哪张表的行
+会放进 `lost_and_found` 表，claude-mem-lite 不读它。它因出错停下时，这条路对这种损坏走不通：有备份快照就恢复
+快照；doctor 和这条命令都不会改动数据库。2026-10-22 用 sqlite3 3.46.1 在 1,643 个完整性检查不通过的测试库损坏
+副本（日志帧损坏和页损坏）上测过：命令在 102 个上停下（49 个是 `.recover` 读不了文件，53 个是某张搜索表坏得
+无法重建），在 1,541 个上打印了 `ok`。这 1,541 个之后 doctor 全部通过，claude-mem-lite 能保存也能搜索。其中
+157 个上，有 3,285 行在损坏的数据库里 SQLite 还能读出，恢复出的库里却缺失或不同；`~/cml-recover` 里的副本仍然
+有这些行。含 NUL 字符的文本会在 NUL 处被截断。
+
+**或者恢复备份快照**，快照之后保存的内容会丢失。doctor 会给出数据库旁边最新的快照
+（`claude-mem-lite.db.<标签>-<时间>.bak`）。想保留原样的数据库，先按上面的方法复制一份，然后：
+
+```bash
+rm -f ~/.claude-mem-lite/claude-mem-lite.db-wal ~/.claude-mem-lite/claude-mem-lite.db-shm
+cp <doctor 给出的快照> ~/.claude-mem-lite/claude-mem-lite.db
+```
+
 ## 卸载
 
 ```bash

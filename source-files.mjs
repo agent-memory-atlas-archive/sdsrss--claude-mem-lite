@@ -283,9 +283,6 @@ export const SOURCE_FILES = [
   'lib/db-backup.mjs',
   'lib/db-unusable.mjs',
   'schema.mjs',
-  // doctor's integrity check (D#541, D#550), imported by install.mjs on demand; it imports only
-  // better-sqlite3.
-  'lib/db-integrity.mjs',
   'cli/doctor.mjs',
   'hook-memory.mjs',
   'haiku-client.mjs',

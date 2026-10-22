@@ -760,67 +760,6 @@ T=$(mktemp -d) && U=$(curl -sL https://api.github.com/repos/sdsrss/claude-mem-li
 
 跑完之后，`~/.claude-mem-lite/` 就和最新 release 对齐，`claude-mem-lite repair` 下次再遇到类似问题也能直接用了。
 
-### 数据库损坏
-
-`doctor` 会只读地对数据库跑 SQLite 的完整性检查。它打印 `✗ Database integrity:` 时，doctor 不改动数据库，
-也会跳过它那项会写库的搜索索引检查。处理好之前不要开新会话：遇到某些损坏时，claude-mem-lite 下一次打开数据库
-会删掉它的日志（`claude-mem-lite.db-wal`）和只在日志里的那些行。有两条路，都要先关闭所有 Claude Code 会话：
-
-**找回 SQLite 还能找到的行**：用 sqlite3 命令行工具的 `.recover`（sqlite3 3.29 或更新），在副本上跑。如果设置了
-`CLAUDE_MEM_DIR`，把下面的 `~/.claude-mem-lite` 换成那个目录。这是一条命令，任何一步失败就停下；数据库文件是
-符号链接时第一步就停下（它的日志在链接指向的那个文件旁边）：
-
-```bash
-test ! -L ~/.claude-mem-lite/claude-mem-lite.db &&
-  mkdir ~/cml-recover && cd ~/cml-recover &&
-  cp -p ~/.claude-mem-lite/claude-mem-lite.db . &&
-  { test ! -e ~/.claude-mem-lite/claude-mem-lite.db-wal || cp -p ~/.claude-mem-lite/claude-mem-lite.db-wal .; } &&
-  sqlite3 -readonly claude-mem-lite.db .recover > recovered.sql &&
-  sqlite3 -cmd '.dbconfig defensive off' recovered.db < recovered.sql > /dev/null &&
-  sqlite3 recovered.db "INSERT INTO observations_fts(observations_fts) VALUES('rebuild');
-    INSERT INTO session_summaries_fts(session_summaries_fts) VALUES('rebuild');
-    INSERT INTO user_prompts_fts(user_prompts_fts) VALUES('rebuild');
-    INSERT INTO events_fts(events_fts) VALUES('rebuild');" &&
-  sqlite3 recovered.db 'PRAGMA integrity_check'
-```
-
-只有它打印的只是一个 `ok` 时，才把恢复出的数据库放到位：
-
-```bash
-test ! -L ~/.claude-mem-lite/claude-mem-lite.db &&
-  rm -f ~/.claude-mem-lite/claude-mem-lite.db-wal ~/.claude-mem-lite/claude-mem-lite.db-shm &&
-  cp ~/cml-recover/recovered.db ~/.claude-mem-lite/claude-mem-lite.db
-```
-
-然后运行 `claude-mem-lite doctor`。副本是只读打开的，所以 `~/cml-recover` 里保留着原样的数据库；如果之前试过、
-留下了 `~/cml-recover`，先把它挪走。不加 `.dbconfig defensive off`，sqlite3 会拒绝重建搜索表的那几行，
-claude-mem-lite 打不开结果；要重建搜索索引，是因为 `.recover` 原样复制了它们。`.recover` 分不清属于哪张表的行
-会放进 `lost_and_found` 表，claude-mem-lite 不读它。违反所在表约束的行（值不在 CHECK 列表里、NOT NULL 列里是
-NULL、UNIQUE 的值重复）会被丢掉，不报错，也不进 `lost_and_found`。命令因出错停下时，数据库没有被改动。
-2026-10-22 用 sqlite3 3.46.1 在 1,641 个完整性检查不通过的测试库损坏副本（日志帧损坏和页损坏）上测过：
-命令在 101 个上停下（49 个停在 `.recover`，52 个停在之后的步骤，其中 51 个出错在搜索表上），在 1,540 个上打印了
-`ok`。这 1,540 个之后，doctor 的数据库和搜索索引那几行全部通过，claude-mem-lite 能保存也能搜索。其中 157 个上，
-有 3,285 行在损坏的数据库里 SQLite 还能读出，恢复出的库里却缺失或不同；`~/cml-recover` 里的副本仍然有这些行。
-含 NUL 字符的文本会在 NUL 处被截断。
-
-**或者恢复备份快照**：claude-mem-lite 在维护或删除之前给数据库做的副本，名字是
-`claude-mem-lite.db.<标签>-<时间>.bak`；`ls -lt ~/.claude-mem-lite/*.bak` 按从新到旧列出。先检查你选的那个，
-它应该打印 `ok`，然后是一个数字：
-
-```bash
-sqlite3 -readonly <快照路径> 'PRAGMA integrity_check; SELECT count(*) FROM observations'
-```
-
-然后在两处填同一个路径（文件不存在或为空时第一步就停下）：
-
-```bash
-test -s <快照路径> && test ! -L ~/.claude-mem-lite/claude-mem-lite.db &&
-  rm -f ~/.claude-mem-lite/claude-mem-lite.db-wal ~/.claude-mem-lite/claude-mem-lite.db-shm &&
-  cp <快照路径> ~/.claude-mem-lite/claude-mem-lite.db
-```
-
-恢复快照会用它替换数据库；想保留原样的数据库，先按上面的方法复制一份。
-
 ## 卸载
 
 ```bash

@@ -282,7 +282,12 @@ describe('SessionStart after an episode worker was killed', () => {
     const f = deadSessionFixture('killed');
     sessionStart(f);
     let saved = [];
-    await until(() => (saved = savedRows(f.dbPath)).length > 0, 15000);
+    // Both conditions: the worker inserts the row, closes the db, and only then unlinks its
+    // file, so a wait on the row alone can end inside that gap (D#556, CI run 39826920131).
+    await until(
+      () => (saved = savedRows(f.dbPath)).length > 0 && flushFilesIn(f.runtime).length === 0,
+      15000,
+    );
     // The worker's model (mock) title, under the dead session's project: an event for a
     // bugfix, an observation otherwise.
     expect(saved).toEqual([{ project: 'work--invoice-app', title: 'Mock episode summary' }]);

@@ -2,6 +2,25 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.4 — a failed backup snapshot no longer leaves an empty file for the restore command to name
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.3`.
+
+- **A failed backup snapshot no longer leaves an empty file** (D#551). The snapshot taken before a
+  delete or maintenance can fail on a damaged database, and it left a 0-byte `.bak`, newer than
+  every real snapshot. When the database later stopped opening, the `✗ Database:` restore command
+  (doctor, and the notice at session start) named that file, and running the command emptied the
+  database. A failed snapshot now removes the file it created, and the restore command skips empty
+  snapshots that earlier versions left; doctor's set-aside note then says no non-empty snapshot
+  exists. On the 1,641 of 2,769 damaged copies of test databases that fail SQLite's integrity
+  check, one `delete --confirm` left a 0-byte `.bak` on 639 with 6.30.3 and on none with this
+  release.
+- **Still as in 6.30.3** (D#553, D#554): apart from skipping empty snapshots, the restore command
+  does not check the snapshot it names, and one taken after the damage can hold it; and when no
+  snapshot exists, the set-aside note says the memories in the file are not recoverable without a
+  backup, which is not always so.
+
 ## v6.30.3 — doctor's restore and set-aside commands say to close every Claude Code session first
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

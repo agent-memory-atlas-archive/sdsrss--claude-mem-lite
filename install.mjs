@@ -483,7 +483,7 @@ export async function dbCheckRemedy(dbPath, err) {
   // its copy of the command.
   if (remedy.kind === 'set-aside') {
     return (
-      `No backup snapshot exists beside the database. Once every Claude Code session is closed, ` +
+      `No non-empty backup snapshot exists beside the database. Once every Claude Code session is closed, ` +
       `set the broken file aside so a fresh store is created on the next session: ${remedy.command} ` +
       `— memories in that file are not recoverable without a backup.`
     );

@@ -77,9 +77,22 @@ describe('dbCheckRemedy', () => {
   it('says so plainly when no snapshot exists, and does not offer a restore', async () => {
     const { db } = withDb();
     const out = await dbCheckRemedy(db, corrupt());
-    expect(out).toMatch(/no backup snapshot/i);
+    expect(out).toMatch(/no non-empty backup snapshot/i);
     expect(out).not.toContain('cp ');
     expect(out).toContain('mv ');
+  });
+
+  // D#551: an empty .bak (what a failed snapshot of a damaged store left before 6.30.4) is
+  // skipped, so the set-aside arm runs with a .bak beside the database; it is not "none exists".
+  it('does not say no snapshot exists when it skipped an empty one', async () => {
+    const dir = dataDir();
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'not actually sqlite');
+    writeFileSync(join(dir, 'claude-mem-lite.db.pre-delete-2026-09-07T00-00-00-000Z-1-0.bak'), '');
+    const out = await dbCheckRemedy(db, corrupt());
+    expect(out).toContain('mv ');
+    expect(out).not.toMatch(/No backup snapshot exists/);
+    expect(out).toMatch(/No non-empty backup snapshot exists beside the database/);
   });
 
   it('distinguishes "could not look" from "there are none"', async () => {
@@ -90,7 +103,7 @@ describe('dbCheckRemedy', () => {
     expect(out).toMatch(/could not read/i);
     expect(out).toContain('ENOTDIR');
     // The whole point of the third outcome: it must NOT assert the absence it never checked.
-    expect(out).not.toMatch(/no backup snapshot/i);
+    expect(out).not.toMatch(/no (non-empty )?backup snapshot/i);
   });
 
   it('hands a native-binding failure the binding repair chain, not a backup', async () => {
@@ -140,7 +153,7 @@ describe('dbCheckRemedy', () => {
   it('accepts the other spellings SQLite uses for a damaged file', async () => {
     const { db } = withDb();
     for (const msg of ['database disk image is malformed', 'file is encrypted or is not a database']) {
-      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(/no backup snapshot/i);
+      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(/no non-empty backup snapshot/i);
     }
   });
 });
@@ -177,7 +190,7 @@ describe('doctor prints the remedy it computes', () => {
     // Premise: the check really did fail. Without this the remedy assertion could pass on
     // output where the database line never appeared at all.
     expect(out).toMatch(/Database: .*not a database|Database: .*malformed/);
-    expect(out).toMatch(/No backup snapshot exists beside the database/);
+    expect(out).toMatch(/No non-empty backup snapshot exists beside the database/);
   });
 
   it('emits the restore remedy naming the newest snapshot', () => {
@@ -201,7 +214,7 @@ describe('doctor prints the remedy it computes', () => {
     // first draft of this control matched that unrelated line and failed. A control that
     // greps too widely reports the wrong thing as a regression.
     expect(out).toMatch(/Database: not found/);
-    expect(out).not.toMatch(/No backup snapshot exists beside the database/);
+    expect(out).not.toMatch(/No (non-empty )?backup snapshot exists beside the database/);
     expect(out).not.toMatch(/Restore the newest of/);
     expect(out).not.toMatch(/Could not read .* to look for a backup snapshot/);
   });

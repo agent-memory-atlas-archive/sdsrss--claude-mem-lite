@@ -110,6 +110,20 @@ describe('dbUnusableRemedy', () => {
     expect(r.command, 'stale WAL/SHM would resurrect the broken state').toContain(`${db}-wal`);
   });
 
+  // D#554: the set-aside note said the memories in the set-aside file were not recoverable
+  // without a backup. A store whose damage is in its log can read most of its rows once the log
+  // is gone (200 of 241 in the v6.31.0 round-2 review), so the note no longer says either way.
+  it('does not say the set-aside file cannot be recovered', () => {
+    const dir = tmp('rem-none-note-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'garbage');
+    const r = dbUnusableRemedy(db);
+    expect(r.kind).toBe('set-aside');
+    expect(r.note).toBe(
+      'No backup snapshot exists beside the database. That command sets the broken file aside so a fresh store is created on the next session.',
+    );
+  });
+
   it('offers restore, naming the NEWEST snapshot, when one exists', () => {
     const dir = tmp('rem-snap-');
     const db = join(dir, 'claude-mem-lite.db');

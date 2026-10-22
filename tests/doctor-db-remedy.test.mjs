@@ -80,6 +80,8 @@ describe('dbCheckRemedy', () => {
     expect(out).toMatch(/no non-empty backup snapshot/i);
     expect(out).not.toContain('cp ');
     expect(out).toContain('mv ');
+    // D#554: a store whose damage is in its log can read most of its rows once the log is gone.
+    expect(out).not.toMatch(/not recoverable/);
   });
 
   // D#551: an empty .bak (what a failed snapshot of a damaged store left before 6.30.4) is

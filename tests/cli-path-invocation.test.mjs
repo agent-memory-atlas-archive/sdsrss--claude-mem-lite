@@ -405,6 +405,8 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
 
   test('dbUnusableRemedy: the set-aside and the restore commands', async () => {
     const { dbUnusableRemedy } = await import('../lib/db-unusable.mjs');
+    const { default: Database } = await import('better-sqlite3');
+    const { writeSnapshotFixture } = await import('./test-helpers.mjs');
     withHostileDir((dir) => {
       const db = join(dir, 'claude-mem-lite.db');
       writeFileSync(db, '');
@@ -413,9 +415,8 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
       expect(words(setAside.command)).toEqual(
         expect.arrayContaining([`${db}-wal`, `${db}-shm`, db, `${db}.corrupt`]),
       );
-      const bak = `${db}.2026-09-25T00-00-00Z.bak`;
-      writeFileSync(bak, 'snapshot'); // an empty one is skipped (D#551)
-      const restore = dbUnusableRemedy(db);
+      const bak = writeSnapshotFixture(`${db}.2026-09-25T00-00-00Z.bak`); // named once it passes (D#553)
+      const restore = dbUnusableRemedy(db, undefined, { Database });
       expect(restore.kind).toBe('restore');
       expect(words(restore.command)).toEqual(expect.arrayContaining([`${db}-wal`, bak, db]));
     });

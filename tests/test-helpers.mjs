@@ -2,7 +2,7 @@
 // Single source of truth: uses initSchema — no DDL duplication
 
 import Database from 'better-sqlite3';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { initSchema } from '../schema.mjs';
@@ -17,6 +17,37 @@ export function createTestDb() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = OFF');
   return initSchema(db);
+}
+
+/**
+ * A backup snapshot in the shape lib/db-backup.mjs's snapshotDb writes (VACUUM INTO of a WAL
+ * store), holding `rows` rows of table `t`. `damage: true` garbles the cell pointers of page 3, a
+ * leaf of `t`: the file still opens and SQLite's integrity check fails on it, the shape of a
+ * snapshot taken after the store was damaged (D#553).
+ * @param {string} path
+ * @param {{rows?: number, damage?: boolean}} [opts]
+ * @returns {string} `path`
+ */
+export function writeSnapshotFixture(path, { rows = 200, damage = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'cml-snapfx-'));
+  try {
+    const live = new Database(join(dir, 'live.db'));
+    live.pragma('journal_mode = WAL');
+    live.exec('CREATE TABLE t (a TEXT)');
+    const insert = live.prepare('INSERT INTO t VALUES (?)');
+    for (let i = 0; i < rows; i++) insert.run(`row ${i} ${'x'.repeat(40)}`);
+    live.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
+    live.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (damage) {
+    const image = readFileSync(path);
+    const page3 = 2 * image.readUInt16BE(16);
+    for (let i = 8; i < 40; i++) image[page3 + i] ^= 0xff;
+    writeFileSync(path, image);
+  }
+  return path;
 }
 
 export function insertSession(db, { id, project = 'test', memoryId = null }) {

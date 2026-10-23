@@ -1658,6 +1658,27 @@ function capBusyWaits(db) {
 }
 
 /**
+ * Move a store left in the unhidden data dir of versions before v0.5 (~/claude-mem-lite/) into
+ * DB_DIR. Only the store's own files move (the database, then its -wal and -shm, under the same
+ * name; ensureDb then renames claude-mem.db), and only into a DB_DIR holding no file of a store's
+ * family: a database, a log, a snapshot or a kept copy. Nothing is removed. It used to rename the
+ * whole directory over a DB_DIR it first removed when DB_DIR held no `*.db` name (D#561): after
+ * the set-aside command that took the kept file and every snapshot, DB_DIR is also the code dir
+ * of a direct install, and README method 3 leaves a git clone of this repository at that path.
+ */
+function migrateUnhiddenStore() {
+  const oldDir = join(homedir(), 'claude-mem-lite');
+  const name = ['claude-mem-lite.db', 'claude-mem.db'].find((n) => existsSync(join(oldDir, n)));
+  if (!name) return;
+  const storeFile = (f) => f.startsWith('claude-mem-lite.db') || f.startsWith('claude-mem.db');
+  if (existsSync(DB_DIR) && readdirSync(DB_DIR).some(storeFile)) return;
+  mkdirSync(DB_DIR, { recursive: true, mode: 0o700 });
+  for (const ext of ['', '-wal', '-shm']) {
+    if (existsSync(join(oldDir, name + ext))) renameSync(join(oldDir, name + ext), join(DB_DIR, name + ext));
+  }
+}
+
+/**
  * Ensure DB directory, database file, and all tables exist.
  * Safe to call from any process (hook or server). Idempotent.
  * Returns an opened Database instance with WAL + busy_timeout configured; under a busy deadline
@@ -1671,19 +1692,7 @@ export function ensureDb() {
       code: 'CLAUDE_MEM_DATA_DIR_GONE',
     });
   }
-  // Auto-migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
-  // Check DB_PATH (not DB_DIR) because hook-shared.mjs module-level init may create DB_DIR early
-  const oldUnhidden = join(homedir(), 'claude-mem-lite');
-  if (existsSync(oldUnhidden) && !existsSync(DB_PATH)) {
-    // Remove DB_DIR only if it has no user data (no .db files)
-    if (existsSync(DB_DIR)) {
-      try {
-        const hasDbFiles = readdirSync(DB_DIR).some((f) => f.endsWith('.db'));
-        if (!hasDbFiles) rmSync(DB_DIR, { recursive: true, force: true });
-      } catch {}
-    }
-    if (!existsSync(DB_DIR)) renameSync(oldUnhidden, DB_DIR);
-  }
+  if (!existsSync(DB_PATH)) migrateUnhiddenStore();
 
   if (!existsSync(DB_DIR)) mkdirSync(DB_DIR, { recursive: true, mode: 0o700 });
 

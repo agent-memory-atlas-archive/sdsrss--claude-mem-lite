@@ -530,18 +530,12 @@ export async function withSwapBarrier(fn) {
   }
 }
 
-// Creates the data dirs the swap barrier then writes its marker into. The legacy-dir migration
-// here runs only under CLAUDE_MEM_DIR relocation: in the default shape runLockedInstall's
-// install.lock has created ~/.claude-mem-lite before install() starts (pre-existing, D#238).
+// Creates the data dirs the swap barrier then writes its marker into. A store left in the
+// unhidden dir of versions before v0.5 (~/claude-mem-lite/) is moved by ensureDb at the first
+// open, into the data dir. Install no longer renames that directory into the code dir (D#561): it
+// did so only under CLAUDE_MEM_DIR relocation, where the code dir does not exist yet, and README
+// method 3 runs install from a git clone at exactly that path.
 function prepareInstallDirs() {
-  // Auto-migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
-  const oldUnhidden = join(homedir(), 'claude-mem-lite');
-  if (!existsSync(DATA_DIR) && existsSync(oldUnhidden)) {
-    log('Migrating ~/claude-mem-lite/ → ~/.claude-mem-lite/...');
-    renameSync(oldUnhidden, DATA_DIR);
-    ok('Directory migrated');
-  }
-
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   // Under relocation the DB/managed/runtime live here, not in the code dir — create it too.
   if (!existsSync(MEM_DATA_DIR)) mkdirSync(MEM_DATA_DIR, { recursive: true });

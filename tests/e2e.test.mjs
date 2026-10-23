@@ -2101,7 +2101,7 @@ describe('Suite 8a: Additional E2E', () => {
     expect(existsSync(newHiddenDir)).toBe(false);
 
     // Session-start triggers ensureDb() which:
-    //   1. Renames ~/claude-mem-lite/ → ~/.claude-mem-lite/
+    //   1. Moves the store's files (claude-mem.db) into ~/.claude-mem-lite/; nothing else (D#561)
     //   2. Renames claude-mem.db → claude-mem-lite.db
     const migrateProjDir = join(migrateHome, 'parent', 'migrateproj');
     mkdirSync(migrateProjDir, { recursive: true });
@@ -2110,8 +2110,9 @@ describe('Suite 8a: Additional E2E', () => {
     });
     expect(exitCode).toBe(0);
 
-    // Old unhidden dir should be gone
-    expect(existsSync(oldUnhiddenDir)).toBe(false);
+    // The store left the old unhidden dir; the dir and its other entries stay
+    expect(existsSync(oldDbPath)).toBe(false);
+    expect(existsSync(join(oldUnhiddenDir, 'runtime'))).toBe(true);
     // New hidden dir should exist with renamed DB
     const newDbPath = join(newHiddenDir, 'claude-mem-lite.db');
     expect(existsSync(newDbPath)).toBe(true);
@@ -2602,8 +2603,9 @@ describe('Suite 9: Hidden Data Dir Migration', () => {
     });
     expect(exitCode).toBe(0);
 
-    // Old dir should be gone, data should be in new hidden dir
-    expect(existsSync(oldDir)).toBe(false);
+    // The store left the old dir (the dir and its other entries stay, D#561); data in the hidden dir
+    expect(existsSync(oldDbPath)).toBe(false);
+    expect(existsSync(join(oldDir, 'runtime'))).toBe(true);
     const newDbPath = join(newDir, 'claude-mem-lite.db');
     expect(existsSync(newDbPath)).toBe(true);
 
@@ -2714,8 +2716,9 @@ describe('Suite 9: Hidden Data Dir Migration', () => {
     });
     expect(exitCode).toBe(0);
 
-    // Old dir gone, new hidden dir has the DB
-    expect(existsSync(oldDir)).toBe(false);
+    // The store left the old dir (the dir and its other entries stay, D#561); the hidden dir has it
+    expect(existsSync(dbPath)).toBe(false);
+    expect(existsSync(join(oldDir, 'runtime'))).toBe(true);
     const newDir = join(home, '.claude-mem-lite');
     const newDbPath = join(newDir, 'claude-mem-lite.db');
     expect(existsSync(newDbPath)).toBe(true);

@@ -29,9 +29,8 @@ export function createTestDb() {
  * - 'fts-config': observations_fts_config's version set to 0, which FTS5 refuses to open and no
  *   rebuild repairs;
  * - 'lost-rows': all but 3 observations gone from the table while every index on it still lists
- *   all of them, the shape a VACUUM INTO of a store with damaged table pages leaves (the corpus
- *   shows "wrong # of entries in index idx_obs_epoch_project"); REINDEX makes it consistent and
- *   short;
+ *   all of them, the shape 73 of the D#558 corpus snapshots have ("wrong # of entries in index
+ *   idx_obs_epoch_project"); REINDEX makes it consistent and short;
  * - 'page': the cell pointers of the observations table's first leaf page garbled;
  * - 'header': the 16-byte file header overwritten.
  * @param {string} path

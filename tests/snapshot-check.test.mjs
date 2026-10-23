@@ -95,9 +95,9 @@ describe('checkSnapshot restores a private copy and opens it with the product op
     expect(du.checkSnapshot(snap)).toMatchObject({ verdict: 'ok', observations: 12 });
   });
 
-  // D#558's "compare row counts": a snapshot taken from a store with damaged table pages lost the
-  // rows on them while its indexes kept listing them; REINDEX makes it consistent, and short. 73 of
-  // the 605 corpus snapshots that pass are this shape. It still restores cleanly; the result says by
+  // D#558's "compare row counts": a snapshot whose indexes list more rows than its table holds.
+  // REINDEX makes it consistent, and short; 73 of the 605 corpus snapshots that pass are this shape,
+  // each listing exactly the damaged store's count. It still restores cleanly; the result says by
   // how much it is short of its own index.
   it('passes a snapshot that lost rows its indexes still list, and says how many it lists', () => {
     const dir = dataDir();

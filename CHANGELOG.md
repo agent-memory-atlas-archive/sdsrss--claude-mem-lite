@@ -2,6 +2,20 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.5 — ip-address 10.7.4, and the set-aside note no longer says the file's memories are unrecoverable
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.4`.
+
+- **ip-address 10.7.4** (GHSA-rxp7-6hxx-x8q5, moderate). 6.30.4 shipped 10.7.2, which matches an
+  IPv6 zone identifier in quadratic time on a long crafted string. It comes in through
+  `@modelcontextprotocol/sdk`'s dependency on express-rate-limit.
+- **The set-aside note no longer says the memories in the file are not recoverable without a
+  backup** (D#554). That was not always so: a review read 200 of the 241 observations in one such
+  file once its damaged log was gone.
+- **Still as in 6.30.4** (D#553): the `✗ Database:` restore command names the newest non-empty
+  snapshot without checking it, and one taken after the damage can hold it.
+
 ## v6.30.4 — a failed backup snapshot no longer leaves an empty file for the restore command to name
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

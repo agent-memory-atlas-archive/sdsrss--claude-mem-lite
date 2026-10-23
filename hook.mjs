@@ -2780,7 +2780,7 @@ async function emitDbUnusableNotice() {
     const mod = await import('./lib/db-unusable.mjs');
     // TWO DIFFERENT STRINGS, unlike the skew twin, and the asymmetry is the point: the
     // human channel carries the repair command, the model channel carries only the fact.
-    // See formatDbUnusableModelNotice — this family's remedy overwrites the database.
+    // See formatDbUnusableModelNotice — this family's remedy moves the database file aside.
     queueHookSystemMessage(
       mod.formatDbUnusableNotice({
         dbPath: DB_PATH,

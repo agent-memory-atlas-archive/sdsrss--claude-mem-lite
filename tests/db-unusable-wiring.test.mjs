@@ -131,13 +131,14 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
   });
 
   // …but the two channels do NOT carry the same string here, unlike the schema-skew twin.
-  // That remedy is `git pull` / `plugin update`; this one is
-  // `rm -f …-wal …-shm && cp "<snapshot>" "<db>"`, which OVERWRITES the database. Handing a
-  // ready-to-run irreversible command to an agent holding Bash is not the same act as
-  // printing it for a human, and the restore arm defeats its own "keep the broken file for
-  // inspection" advice if acted on.
+  // That remedy is `git pull` / `plugin update`; this one moves the database file and its log
+  // out from under every session, safe only once every session is closed. Handing it
+  // ready-to-run to an agent holding Bash, from inside one of those sessions, is not the same
+  // act as printing it for a human.
   it('keeps the destructive repair command OUT of the model channel', () => {
-    const dataDir = corruptDataDir({ withSnapshot: true });
+    // No snapshot, so the human channel carries the set-aside command (with one, SessionStart
+    // names no command at all: the case below).
+    const dataDir = corruptDataDir();
     const r = run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
     const envelope = JSON.parse(
       r.stdout
@@ -146,22 +147,24 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
         .pop(),
     );
     const model = envelope.hookSpecificOutput.additionalContext;
-    expect(model, 'no shell command reaches the model').not.toMatch(/rm -f|\bcp\b|\bmv\b/);
+    expect(model, 'no shell command reaches the model').not.toMatch(/rm -f|\bcp\b|\bmv\b|test ! -e/);
     expect(model, 'it still learns memory is off').toMatch(/Memory is OFF/);
     expect(model).toContain(`${CLI_INVOKE} doctor`);
     // The premise: the human channel really does carry the command the model must not get.
-    expect(envelope.systemMessage).toMatch(/rm -f/);
-    expect(envelope.systemMessage).toContain('.v1.bak');
+    expect(envelope.systemMessage).toMatch(/test ! -e .* && .*\bmv\b/);
   });
 
-  it('offers the RESTORE remedy when a snapshot exists, not the set-aside one', () => {
-    // The two remedies are not interchangeable: telling a user to move the file aside when a
-    // backup is sitting next to it throws away recoverable memories.
+  // D#558: which snapshot restores cleanly is decided by doctor, which copies and opens each
+  // candidate; a session start does not pay for that while the store is broken. So with a
+  // snapshot present it offers no command: in particular not the set-aside one, which would
+  // throw away a backup sitting next to the file.
+  it('with a snapshot present, offers no command and points at doctor', () => {
     const dataDir = corruptDataDir({ withSnapshot: true });
     const r = run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
-    expect(r.stdout).toMatch(/backup snapshot/i);
-    expect(r.stdout).toContain('.v1.bak');
+    expect(r.stdout).toMatch(/1 backup snapshot\(s\) exist beside the database/);
+    expect(r.stdout).toContain(`${CLI_INVOKE} doctor`);
     expect(r.stdout).not.toMatch(/No backup snapshot exists/);
+    expect(r.stdout).not.toMatch(/test ! -e|\bmv\b|\bcp\b/);
   });
 
   it('says nothing on a healthy database', () => {
@@ -190,8 +193,10 @@ describe('SessionStart speaks when the database schema cannot be read', () => {
         .pop(),
     );
     expect(envelope.systemMessage).toMatch(/Memory is OFF/);
-    expect(envelope.systemMessage).toContain('.v1.bak');
-    expect(envelope.systemMessage).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
+    // D#558: which snapshot restores cleanly is doctor's to say; the notice counts them.
+    expect(envelope.systemMessage).toMatch(/1 backup snapshot\(s\) exist beside the database/);
+    expect(envelope.systemMessage).toContain(`${CLI_INVOKE} doctor`);
+    expect(envelope.systemMessage).not.toMatch(/rm -f|\bcp\b|\bmv\b|test ! -e/);
     expect(envelope.hookSpecificOutput?.additionalContext).toMatch(/Memory is OFF/);
     expect(r.status).toBe(0);
   });

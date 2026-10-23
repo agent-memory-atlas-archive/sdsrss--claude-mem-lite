@@ -2,7 +2,7 @@
 // Single source of truth: uses initSchema — no DDL duplication
 
 import Database from 'better-sqlite3';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { initSchema } from '../schema.mjs';
@@ -17,6 +17,76 @@ export function createTestDb() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = OFF');
   return initSchema(db);
+}
+
+/**
+ * A backup snapshot the way lib/db-backup.mjs's snapshotDb writes one: VACUUM INTO of a WAL store
+ * initSchema built, holding `observations` rows (D#558). `damage`:
+ * - 'fts': the leaf rows of observations_fts_data deleted before the VACUUM, so the snapshot's
+ *   search index is damaged and every observation is intact;
+ * - 'page': the cell pointers of the observations table's first leaf page garbled;
+ * - 'header': the 16-byte file header overwritten.
+ * @param {string} path
+ * @param {{observations?: number, damage?: 'fts'|'page'|'header'|null}} [opts]
+ * @returns {string} `path`
+ */
+export function writeStoreSnapshot(path, { observations = 12, damage = null } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'cml-storefx-'));
+  try {
+    const live = new Database(join(dir, 'live.db'));
+    live.pragma('journal_mode = WAL');
+    live.pragma('foreign_keys = OFF');
+    initSchema(live);
+    live
+      .prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+         VALUES ('c-s1', 's1', 'p', datetime('now'), 1)`,
+      )
+      .run();
+    const insert = live.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, title, narrative, created_at, created_at_epoch)
+       VALUES ('s1', 'p', 'discovery', ?, ?, datetime('now'), ?)`,
+    );
+    for (let i = 0; i < observations; i++) {
+      insert.run(`title ${i} alpha`, `narrative ${i} ${'x'.repeat(200)}`, 1_700_000_000_000 + i);
+    }
+    if (damage === 'fts') {
+      live.unsafeMode(true);
+      const n = live.prepare('DELETE FROM observations_fts_data WHERE id > 10').run().changes;
+      if (n === 0) throw new Error('fixture did not damage anything: observations_fts_data had no leaf rows');
+      live.unsafeMode(false);
+    }
+    live.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
+    live.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (damage === 'page' || damage === 'header') {
+    const image = readFileSync(path);
+    if (damage === 'header') {
+      image.write('not a database!!', 0, 'latin1');
+    } else {
+      // The page number from dbstat on an in-memory copy: a read-only open of the WAL-mode file
+      // would leave a -wal and -shm beside it, and memdb opens only rollback-mode images.
+      const copy = Buffer.from(image);
+      copy[18] = 1;
+      copy[19] = 1;
+      const mem = new Database(copy);
+      const pageno = mem
+        .prepare(
+          "SELECT pageno FROM dbstat WHERE name = 'observations' AND pagetype = 'leaf' ORDER BY pageno LIMIT 1",
+        )
+        .pluck()
+        .get();
+      mem.close();
+      if (!pageno) throw new Error('fixture found no leaf page of observations');
+      const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
+      const at = (pageno - 1) * pageSize + (pageno === 1 ? 100 : 0);
+      for (let i = at + 8; i < at + 40; i++) image[i] ^= 0xff;
+    }
+    writeFileSync(path, image);
+  }
+  return path;
 }
 
 export function insertSession(db, { id, project = 'test', memoryId = null }) {

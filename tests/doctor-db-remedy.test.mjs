@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dbCheckRemedy } from '../install.mjs';
 import { readSnapshots } from '../lib/db-backup.mjs';
-import { makeFixtureTracker } from './test-helpers.mjs';
+import { makeFixtureTracker, writeStoreSnapshot } from './test-helpers.mjs';
 
 const fixtures = makeFixtureTracker();
 afterAll(() => fixtures.disposeAll());
@@ -32,7 +32,8 @@ function withDb(snapshotNames = []) {
   let t = 1_700_000_000;
   for (const n of snapshotNames) {
     const p = join(dir, n);
-    writeFileSync(p, 'snap');
+    // A real snapshot: since D#558 the restore command names only one that restores cleanly.
+    writeStoreSnapshot(p);
     // Deterministic ordering: the newest snapshot is the one the remedy must name, and
     // two files written in the same millisecond would make "newest" arbitrary (D#9).
     utimesSync(p, t, t);
@@ -77,7 +78,7 @@ describe('dbCheckRemedy', () => {
   it('says so plainly when no snapshot exists, and does not offer a restore', async () => {
     const { db } = withDb();
     const out = await dbCheckRemedy(db, corrupt());
-    expect(out).toMatch(/no non-empty backup snapshot/i);
+    expect(out).toMatch(/No backup snapshot exists beside the database/);
     expect(out).not.toContain('cp ');
     expect(out).toContain('mv ');
     // D#554: a store whose damage is in its log can read most of its rows once the log is gone.
@@ -94,7 +95,9 @@ describe('dbCheckRemedy', () => {
     const out = await dbCheckRemedy(db, corrupt());
     expect(out).toContain('mv ');
     expect(out).not.toMatch(/No backup snapshot exists/);
-    expect(out).toMatch(/No non-empty backup snapshot exists beside the database/);
+    expect(out).toMatch(
+      /No backup snapshot beside the database holds any data \(1 empty \.bak file skipped\)/,
+    );
   });
 
   it('distinguishes "could not look" from "there are none"', async () => {
@@ -148,14 +151,16 @@ describe('dbCheckRemedy', () => {
     ]) {
       const at = out.indexOf('every Claude Code session is closed');
       expect(at, what).toBeGreaterThan(-1);
-      expect(at, `${what}: before the command`).toBeLessThan(out.indexOf('rm -f'));
+      expect(at, `${what}: before the command`).toBeLessThan(out.indexOf('test ! -e'));
     }
   });
 
   it('accepts the other spellings SQLite uses for a damaged file', async () => {
     const { db } = withDb();
     for (const msg of ['database disk image is malformed', 'file is encrypted or is not a database']) {
-      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(/no non-empty backup snapshot/i);
+      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(
+        /No backup snapshot exists beside the database/,
+      );
     }
   });
 });
@@ -192,7 +197,7 @@ describe('doctor prints the remedy it computes', () => {
     // Premise: the check really did fail. Without this the remedy assertion could pass on
     // output where the database line never appeared at all.
     expect(out).toMatch(/Database: .*not a database|Database: .*malformed/);
-    expect(out).toMatch(/No non-empty backup snapshot exists beside the database/);
+    expect(out).toMatch(/No backup snapshot exists beside the database/);
   });
 
   it('emits the restore remedy naming the newest snapshot', () => {
@@ -201,7 +206,7 @@ describe('doctor prints the remedy it computes', () => {
       'claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak',
     ]);
     const out = runDoctor(dir).stdout;
-    expect(out).toMatch(/Restore the newest of 2 backup snapshot\(s\)/);
+    expect(out).toMatch(/The newest of the 2 backup snapshot\(s\) beside the database restores cleanly/);
     expect(out).toContain('2026-09-06T00-00-00-000Z');
   });
 
@@ -217,7 +222,7 @@ describe('doctor prints the remedy it computes', () => {
     // greps too widely reports the wrong thing as a regression.
     expect(out).toMatch(/Database: not found/);
     expect(out).not.toMatch(/No (non-empty )?backup snapshot exists beside the database/);
-    expect(out).not.toMatch(/Restore the newest of/);
+    expect(out).not.toMatch(/Restore the newest of|restores cleanly/);
     expect(out).not.toMatch(/Could not read .* to look for a backup snapshot/);
   });
 });

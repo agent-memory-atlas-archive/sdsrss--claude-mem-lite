@@ -88,7 +88,7 @@ describe('dbCheckRemedy', () => {
     expect(out).toContain('cp ');
     expect(out).toContain('pre-maintain-2026-09-01T00-00-00-000Z');
     expect(out).not.toContain('pre-delete-2026-09-06T00-00-00-000Z');
-    expect(out).toMatch(/fails SQLite's integrity check; the next one passes/);
+    expect(out).toMatch(/fails SQLite's integrity check or holds no observations table; the next one passes/);
   });
 
   it('offers set-aside when no snapshot passes the integrity check', async () => {
@@ -96,7 +96,7 @@ describe('dbCheckRemedy', () => {
     const { db } = withDb([name], { damaged: [name] });
     const out = await dbCheckRemedy(db, corrupt());
     expect(out).toMatch(
-      /^None of the 1 backup snapshot\(s\) beside the database passes SQLite's integrity check\./,
+      /^None of the 1 backup snapshot\(s\) beside the database passes SQLite's integrity check and holds an observations table\./,
     );
     expect(out).not.toContain('cp ');
     expect(out).toContain('mv ');

@@ -159,12 +159,12 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
   // D#553: a snapshot taken after the damage can hold it, and checking one means reading it
   // whole, on every session start while the store is broken. So SessionStart names none: it
   // counts them and sends the user to doctor, which checks them. It does not offer set-aside
-  // either, which with a backup beside the file would throw away recoverable memories.
+  // either, which would start an empty store while a backup sits beside the file.
   it('with a snapshot beside it, names none and points at doctor', () => {
     const dataDir = corruptDataDir({ withSnapshot: true });
     const r = run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
     expect(r.stdout).toMatch(/1 backup snapshot\(s\) exist beside the database/);
-    expect(r.stdout).toContain(`${CLI_INVOKE} doctor\` checks them`);
+    expect(r.stdout).toContain(`${CLI_INVOKE} doctor\` checks them before it names one`);
     expect(r.stdout).not.toContain('.v1.bak');
     expect(r.stdout).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
   });

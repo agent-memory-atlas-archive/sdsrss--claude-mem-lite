@@ -2,15 +2,24 @@
 // tests/db-unusable-wiring.test.mjs proves anything CALLS them.
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync, utimesSync } from 'fs';
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  utimesSync,
+} from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import Database from 'better-sqlite3';
 import { shellWord } from '../cli-path.mjs';
 import {
   isDbUnusableError,
   dbUnusableRemedy,
-  snapshotPassesIntegrityCheck,
+  checkSnapshot,
   formatDbUnusableNotice,
   formatDbUnusableModelNotice,
   DB_UNUSABLE_MARKER_PREFIX,
@@ -145,7 +154,7 @@ describe('dbUnusableRemedy', () => {
     expect(r.command).toContain(newer);
     expect(r.command).not.toContain(older);
     expect(r.found).toBe(
-      "The newest of the 2 backup snapshot(s) beside the database passes SQLite's integrity check.",
+      "The newest of the 2 backup snapshot(s) beside the database passes SQLite's integrity check and holds an observations table.",
     );
   });
 
@@ -164,7 +173,7 @@ describe('dbUnusableRemedy', () => {
     expect(r.command).toContain(good);
     expect(r.command).not.toContain(damaged);
     expect(r.found).toBe(
-      "The newest one of the 2 backup snapshot(s) beside the database fails SQLite's integrity check; the next one passes.",
+      "The newest one of the 2 backup snapshot(s) beside the database fails SQLite's integrity check or holds no observations table; the next one passes SQLite's integrity check and holds an observations table.",
     );
   });
 
@@ -176,7 +185,7 @@ describe('dbUnusableRemedy', () => {
     expect(r.kind).toBe('set-aside');
     expect(r.command).not.toMatch(/\bcp\b/);
     expect(r.found).toBe(
-      "None of the 2 backup snapshot(s) beside the database passes SQLite's integrity check.",
+      "None of the 2 backup snapshot(s) beside the database passes SQLite's integrity check and holds an observations table.",
     );
   });
 
@@ -185,11 +194,13 @@ describe('dbUnusableRemedy', () => {
   it('names no snapshot without the binding, and points at doctor', () => {
     const db = garbageDb('rem-unchecked-');
     age(writeSnapshotFixture(`${db}.pre-delete-2026-09-07.bak`, { damage: true }), 0);
+    writeFileSync(`${db}.pre-maintain-2026-09-01.bak`, '');
     const r = dbUnusableRemedy(db);
+    expect(r.found).toBe('1 backup snapshot(s) exist beside the database (1 empty .bak file skipped).');
     expect(r.kind).toBe('unchecked');
     expect(r.command).toBe('');
     expect(r.snapshotCount).toBe(1);
-    expect(r.note).not.toContain('.bak');
+    expect(r.note).not.toContain(`${db}.pre-delete`);
     expect(r.note).toContain(`${CLI_INVOKE} doctor`);
   });
 
@@ -219,6 +230,107 @@ describe('dbUnusableRemedy', () => {
     );
   });
 
+  // v6.30.5 pre-tag review P2-2: a hand-made `cp db x.bak` of a WAL store taken before a
+  // checkpoint is a main file with no table in it and every row in `x.bak-wal`. It passes
+  // SQLite's integrity check, and restoring it (the command copies the main file alone) left no
+  // observations table.
+  it('skips a newer snapshot that passes the integrity check but holds no store', () => {
+    const db = garbageDb('rem-nostore-');
+    const good = age(writeSnapshotFixture(`${db}.pre-maintain-2026-09-01.bak`), 2000);
+    const live = new Database(join(dirname(db), 'live.db'));
+    live.pragma('journal_mode = WAL');
+    live.pragma('wal_autocheckpoint = 0');
+    live.exec("CREATE TABLE observations (a TEXT); INSERT INTO observations VALUES ('in the log')");
+    const copy = `${db}.before-upgrade.bak`;
+    writeFileSync(copy, readFileSync(join(dirname(db), 'live.db')));
+    writeFileSync(`${copy}-wal`, readFileSync(join(dirname(db), 'live.db-wal')));
+    live.close();
+    age(copy, 0);
+    const main = new Database(readFileSync(copy).fill(1, 18, 20));
+    expect(main.prepare('PRAGMA integrity_check').pluck().get(), 'premise: the main file passes').toBe('ok');
+    expect(main.prepare("SELECT count(*) FROM sqlite_master WHERE name = 'observations'").pluck().get()).toBe(
+      0,
+    );
+    main.close();
+    const r = dbUnusableRemedy(db, undefined, { Database });
+    expect(r.kind).toBe('restore');
+    expect(r.command).toContain(good);
+    expect(r.command).not.toContain(copy);
+  });
+
+  // v6.30.5 pre-tag review P2-1: a snapshot the check could not read (permissions, a file over
+  // readFileSync's 2 GiB limit, a directory) was reported as failing it, and the remedy moved on
+  // to an older snapshot or the set-aside command. It cannot say the snapshot is bad, so it names
+  // nothing and says why.
+  it('names nothing when the newest snapshot cannot be checked, and says why', () => {
+    const db = garbageDb('rem-cannotcheck-');
+    age(writeSnapshotFixture(`${db}.pre-maintain-2026-09-01.bak`), 2000);
+    const unreadable = `${db}.pre-delete-2026-09-07.bak`;
+    mkdirSync(unreadable);
+    writeFileSync(join(unreadable, 'pad'), 'x');
+    age(unreadable, 0);
+    const r = dbUnusableRemedy(db, undefined, { Database });
+    expect(r.kind).toBe('unknown');
+    expect(r.command).toBe('');
+    expect(r.note).toContain(unreadable);
+    expect(r.note).toContain('EISDIR');
+    expect(r.note).not.toMatch(/None of the/);
+  });
+
+  // The order is total: equal times fall back to the path, so the answer never depends on readdir.
+  it('breaks a tie in mtime by path', () => {
+    const db = garbageDb('rem-tie-');
+    const a = writeSnapshotFixture(`${db}.pre-delete-2026-09-07.bak`);
+    const b = writeSnapshotFixture(`${db}.pre-maintain-2026-09-01.bak`);
+    utimesSync(a, 1_700_000_000, 1_700_000_000);
+    utimesSync(b, 1_700_000_000, 1_700_000_000);
+    expect(statSync(a).mtimeMs, 'premise: equal mtimes').toBe(statSync(b).mtimeMs);
+    const r = dbUnusableRemedy(db, undefined, { Database });
+    expect(r.command).toContain(b);
+    expect(r.command).not.toContain(a);
+  });
+
+  // integrity_check, not quick_check: a stale index passes the second and fails the first.
+  it('skips a newer snapshot whose index disagrees with its table', () => {
+    const db = garbageDb('rem-index-');
+    const good = age(writeSnapshotFixture(`${db}.pre-maintain-2026-09-01.bak`), 2000);
+    const stale = `${db}.pre-delete-2026-09-07.bak`;
+    const s = new Database(stale);
+    s.exec(
+      "CREATE TABLE observations (a TEXT); CREATE INDEX obs_a ON observations(a); INSERT INTO observations VALUES ('x'), ('y')",
+    );
+    const idx = s
+      .prepare("SELECT type, name, tbl_name, rootpage, sql FROM sqlite_master WHERE name = 'obs_a'")
+      .get();
+    s.unsafeMode(true);
+    s.pragma('writable_schema = ON');
+    s.prepare("DELETE FROM sqlite_master WHERE name = 'obs_a'").run();
+    s.close();
+    const s2 = new Database(stale);
+    s2.exec("UPDATE observations SET a = a || '!'");
+    s2.unsafeMode(true);
+    s2.pragma('writable_schema = ON');
+    s2.prepare('INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql) VALUES (?, ?, ?, ?, ?)').run(
+      idx.type,
+      idx.name,
+      idx.tbl_name,
+      idx.rootpage,
+      idx.sql,
+    );
+    s2.close();
+    age(stale, 0);
+    const ro = new Database(stale, { readonly: true });
+    expect(ro.prepare('PRAGMA quick_check').pluck().get(), 'premise: quick_check passes').toBe('ok');
+    expect(ro.prepare('PRAGMA integrity_check').pluck().get(), 'premise: integrity_check fails').not.toBe(
+      'ok',
+    );
+    ro.close();
+    const r = dbUnusableRemedy(db, undefined, { Database });
+    expect(r.kind).toBe('restore');
+    expect(r.command).toContain(good);
+    expect(r.command).not.toContain(stale);
+  });
+
   // Three outcomes, never two — "there is no backup" and "I could not look" must not print in
   // the same voice, which is the rule lib/schema-skew.mjs states and the v6.2.0 doctor check
   // broke. Driven with a path whose parent is a FILE, so readdirSync fails with ENOTDIR.
@@ -234,21 +346,21 @@ describe('dbUnusableRemedy', () => {
   });
 });
 
-describe('snapshotPassesIntegrityCheck', () => {
+describe('checkSnapshot', () => {
   // A hand-made `cp db x.bak` of a live store is in WAL mode. A read-only open of it creates its
   // -wal and -shm and leaves them; the check reads the file into memory instead.
   it('checks a WAL-mode copy and writes nothing beside it', () => {
     const dir = tmp('snapcheck-wal-');
     const live = new Database(join(dir, 'live.db'));
     live.pragma('journal_mode = WAL');
-    live.exec("CREATE TABLE t (a); INSERT INTO t VALUES ('kept')");
+    live.exec("CREATE TABLE observations (a); INSERT INTO observations VALUES ('kept')");
     live.pragma('wal_checkpoint(TRUNCATE)');
     const copy = join(dir, 'claude-mem-lite.db.before-upgrade.bak');
     writeFileSync(copy, readFileSync(join(dir, 'live.db')));
     live.close();
     expect([...readFileSync(copy).subarray(18, 20)], 'premise: the copy is in WAL mode').toEqual([2, 2]);
     const before = readdirSync(dir).sort();
-    expect(snapshotPassesIntegrityCheck(copy, Database)).toBe(true);
+    expect(checkSnapshot(copy, Database)).toEqual({ verdict: 'ok' });
     expect(readdirSync(dir).sort()).toEqual(before);
     expect([...readFileSync(copy).subarray(18, 20)], 'the file itself is not touched').toEqual([2, 2]);
   });
@@ -267,17 +379,22 @@ describe('snapshotPassesIntegrityCheck', () => {
       'ok',
     );
     ro.close();
-    expect(snapshotPassesIntegrityCheck(path, Database)).toBe(false);
+    expect(checkSnapshot(path, Database)).toEqual({ verdict: 'bad' });
   });
 
-  // A 0-byte file reads as an empty database, which passes; dbUnusableRemedy drops empty
-  // snapshots before it checks any (D#551).
-  it('is false, not a throw, for a file that is missing or not a database', () => {
+  // A 0-byte file reads as an empty database: it passes SQLite's check and holds no table.
+  it('tells a file that is not a store from one it could not check', () => {
     const dir = tmp('snapcheck-bad-');
     writeFileSync(join(dir, 'text.bak'), 'not a database');
-    for (const name of ['missing.bak', 'text.bak']) {
-      expect(snapshotPassesIntegrityCheck(join(dir, name), Database), name).toBe(false);
-    }
+    writeFileSync(join(dir, 'empty.bak'), '');
+    mkdirSync(join(dir, 'dir.bak'));
+    expect(checkSnapshot(join(dir, 'text.bak'), Database)).toEqual({ verdict: 'bad' });
+    expect(checkSnapshot(join(dir, 'empty.bak'), Database)).toEqual({ verdict: 'bad' });
+    expect(checkSnapshot(join(dir, 'missing.bak'), Database)).toEqual({
+      verdict: 'unchecked',
+      reason: 'ENOENT',
+    });
+    expect(checkSnapshot(join(dir, 'dir.bak'), Database)).toEqual({ verdict: 'unchecked', reason: 'EISDIR' });
   });
 });
 
@@ -313,6 +430,17 @@ describe('a schema SQLite cannot read', () => {
     expect(unchecked.kind).toBe('schema');
     expect(unchecked.note).not.toContain('.bak');
     expect(unchecked.note).toContain(`${CLI_INVOKE} doctor`);
+  });
+
+  it('gives no command when no snapshot passes either', () => {
+    const dir = tmp('rem-schema-bad-');
+    const db = join(dir, 'claude-mem-lite.db');
+    writeFileSync(db, 'x');
+    writeSnapshotFixture(`${db}.2026-09-07.bak`, { damage: true });
+    const r = dbUnusableRemedy(db, err, { Database });
+    expect(r.kind).toBe('schema');
+    expect(r.command).toBe('');
+    expect(r.note).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
   });
 
   it('says so when no snapshot exists, still with no command', () => {
@@ -355,7 +483,7 @@ describe('the two notices', () => {
     kind: 'restore',
     command: `rm -f "${db}-wal" "${db}-shm" && cp "${db}.v1.bak" "${db}"`,
     snapshotCount: 1,
-    note: "The newest of the 1 backup snapshot(s) beside the database passes SQLite's integrity check.",
+    note: "The newest of the 1 backup snapshot(s) beside the database passes SQLite's integrity check and holds an observations table.",
   };
 
   it('the human notice carries the path, the command and the note', () => {

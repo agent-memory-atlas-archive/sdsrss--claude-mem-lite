@@ -21,9 +21,9 @@ export function createTestDb() {
 
 /**
  * A backup snapshot in the shape lib/db-backup.mjs's snapshotDb writes (VACUUM INTO of a WAL
- * store), holding `rows` rows of table `t`. `damage: true` garbles the cell pointers of page 3, a
- * leaf of `t`: the file still opens and SQLite's integrity check fails on it, the shape of a
- * snapshot taken after the store was damaged (D#553).
+ * store), holding `rows` rows of an `observations` table. `damage: true` garbles the cell pointers
+ * of page 3, a leaf of that table: the file still opens and SQLite's integrity check fails on it
+ * (D#553).
  * @param {string} path
  * @param {{rows?: number, damage?: boolean}} [opts]
  * @returns {string} `path`
@@ -33,8 +33,8 @@ export function writeSnapshotFixture(path, { rows = 200, damage = false } = {}) 
   try {
     const live = new Database(join(dir, 'live.db'));
     live.pragma('journal_mode = WAL');
-    live.exec('CREATE TABLE t (a TEXT)');
-    const insert = live.prepare('INSERT INTO t VALUES (?)');
+    live.exec('CREATE TABLE observations (a TEXT)');
+    const insert = live.prepare('INSERT INTO observations VALUES (?)');
     for (let i = 0; i < rows; i++) insert.run(`row ${i} ${'x'.repeat(40)}`);
     live.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
     live.close();
@@ -43,7 +43,8 @@ export function writeSnapshotFixture(path, { rows = 200, damage = false } = {}) 
   }
   if (damage) {
     const image = readFileSync(path);
-    const page3 = 2 * image.readUInt16BE(16);
+    const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
+    const page3 = 2 * pageSize;
     for (let i = 8; i < 40; i++) image[page3 + i] ^= 0xff;
     writeFileSync(path, image);
   }

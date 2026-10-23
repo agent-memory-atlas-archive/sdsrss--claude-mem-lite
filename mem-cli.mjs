@@ -3454,7 +3454,8 @@ Commands:
     --session-audit     Audit session/episode state for orphans and drift
     --json              Machine-readable output (plain doctor run)
 
-  fts-check <check|rebuild>  FTS5 index check or rebuild
+  fts-check <check|rebuild>  FTS5 index check, or a rebuild of the FTS5 indexes and then
+                        every other index (REINDEX)
                         Exit 0 when every index is healthy / rebuilt, 1 otherwise —
                         so "fts-check rebuild && <next step>" is safe to chain.
 

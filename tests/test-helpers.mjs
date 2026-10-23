@@ -2,7 +2,7 @@
 // Single source of truth: uses initSchema — no DDL duplication
 
 import Database from 'better-sqlite3';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { initSchema } from '../schema.mjs';
@@ -17,6 +17,137 @@ export function createTestDb() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = OFF');
   return initSchema(db);
+}
+
+/**
+ * A backup snapshot the way lib/db-backup.mjs's snapshotDb writes one: VACUUM INTO of a WAL store
+ * initSchema built, holding `observations` rows (D#558). `damage`:
+ * - 'fts': the leaf rows of observations_fts_data deleted before the VACUUM, so the snapshot's
+ *   search index is damaged and every observation is intact;
+ * - 'index': one index on observations given a definition its entries do not match, so
+ *   integrity_check fails on that index alone and REINDEX repairs it;
+ * - 'fts-config': observations_fts_config's version set to 0, which FTS5 refuses to open and no
+ *   rebuild repairs;
+ * - 'lost-rows': all but 3 observations gone from the table while every index on it still lists
+ *   all of them, the shape a VACUUM INTO of a store with damaged table pages leaves (the corpus
+ *   shows "wrong # of entries in index idx_obs_epoch_project"); REINDEX makes it consistent and
+ *   short;
+ * - 'page': the cell pointers of the observations table's first leaf page garbled;
+ * - 'header': the 16-byte file header overwritten.
+ * @param {string} path
+ * @param {{observations?: number, damage?: 'fts'|'index'|'fts-config'|'lost-rows'|'page'|'header'|null}} [opts]
+ * @returns {string} `path`
+ */
+export function writeStoreSnapshot(path, { observations = 12, damage = null } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'cml-storefx-'));
+  try {
+    const live = new Database(join(dir, 'live.db'));
+    live.pragma('journal_mode = WAL');
+    live.pragma('foreign_keys = OFF');
+    initSchema(live);
+    live
+      .prepare(
+        `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+         VALUES ('c-s1', 's1', 'p', datetime('now'), 1)`,
+      )
+      .run();
+    const insert = live.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, title, narrative, created_at, created_at_epoch)
+       VALUES ('s1', 'p', 'discovery', ?, ?, datetime('now'), ?)`,
+    );
+    for (let i = 0; i < observations; i++) {
+      insert.run(`title ${i} alpha`, `narrative ${i} ${'x'.repeat(200)}`, 1_700_000_000_000 + i);
+    }
+    if (damage === 'fts') {
+      live.unsafeMode(true);
+      const n = live.prepare('DELETE FROM observations_fts_data WHERE id > 10').run().changes;
+      if (n === 0) throw new Error('fixture did not damage anything: observations_fts_data had no leaf rows');
+      live.unsafeMode(false);
+    }
+    live.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
+    live.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (damage === 'index' || damage === 'fts-config') {
+    // On the snapshot itself, which VACUUM INTO writes in rollback mode, so nothing is left beside it.
+    const db = new Database(path);
+    db.unsafeMode(true);
+    if (damage === 'index') {
+      // An index whose definition no longer matches its entries: integrity_check reports rows
+      // missing from it, and REINDEX rebuilds it from the table (the D#562a shape).
+      const idx = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'observations' AND sql IS NOT NULL ORDER BY name LIMIT 1",
+        )
+        .pluck()
+        .get();
+      if (!idx) throw new Error('fixture found no index on observations');
+      db.pragma('writable_schema = ON');
+      db.prepare('UPDATE sqlite_master SET sql = ? WHERE name = ?').run(
+        `CREATE INDEX ${idx} ON observations(title)`,
+        idx,
+      );
+    } else {
+      // "invalid fts5 file format (found 0, expected 4 or 5)", which no rebuild repairs (D#562b).
+      const n = db.prepare("UPDATE observations_fts_config SET v = 0 WHERE k = 'version'").run().changes;
+      if (n === 0)
+        throw new Error('fixture did not damage anything: observations_fts_config had no version row');
+    }
+    db.close();
+  }
+  if (damage === 'lost-rows') {
+    // The indexes leave the schema while the rows go, so nothing removes their entries.
+    const db = new Database(path);
+    db.unsafeMode(true);
+    const idx = db
+      .prepare(
+        "SELECT type, name, tbl_name, rootpage, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'observations' AND sql IS NOT NULL",
+      )
+      .all();
+    if (idx.length === 0) throw new Error('fixture found no index on observations');
+    db.pragma('writable_schema = ON');
+    db.prepare(
+      "DELETE FROM sqlite_master WHERE type = 'index' AND tbl_name = 'observations' AND sql IS NOT NULL",
+    ).run();
+    db.close();
+    const h = new Database(path);
+    h.pragma('foreign_keys = OFF');
+    if (h.prepare('DELETE FROM observations WHERE id > 3').run().changes === 0) {
+      throw new Error('fixture removed no observation: ask for more than 3');
+    }
+    h.unsafeMode(true);
+    h.pragma('writable_schema = ON');
+    const put = h.prepare(
+      'INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql) VALUES (?, ?, ?, ?, ?)',
+    );
+    for (const r of idx) put.run(r.type, r.name, r.tbl_name, r.rootpage, r.sql);
+    h.close();
+  }
+  if (damage === 'page' || damage === 'header') {
+    const image = readFileSync(path);
+    if (damage === 'header') {
+      image.write('not a database!!', 0, 'latin1');
+    } else {
+      // The page number from dbstat on an in-memory copy of the image (a Buffer opens as a memdb),
+      // so the snapshot file itself is never opened.
+      const copy = Buffer.from(image);
+      const mem = new Database(copy);
+      const pageno = mem
+        .prepare(
+          "SELECT pageno FROM dbstat WHERE name = 'observations' AND pagetype = 'leaf' ORDER BY pageno LIMIT 1",
+        )
+        .pluck()
+        .get();
+      mem.close();
+      if (!pageno) throw new Error('fixture found no leaf page of observations');
+      const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
+      const at = (pageno - 1) * pageSize + (pageno === 1 ? 100 : 0);
+      for (let i = at + 8; i < at + 40; i++) image[i] ^= 0xff;
+    }
+    writeFileSync(path, image);
+  }
+  return path;
 }
 
 export function insertSession(db, { id, project = 'test', memoryId = null }) {

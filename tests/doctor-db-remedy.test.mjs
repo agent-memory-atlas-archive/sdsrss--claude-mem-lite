@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dbCheckRemedy } from '../install.mjs';
 import { readSnapshots } from '../lib/db-backup.mjs';
-import { makeFixtureTracker, writeSnapshotFixture } from './test-helpers.mjs';
+import { makeFixtureTracker } from './test-helpers.mjs';
 
 const fixtures = makeFixtureTracker();
 afterAll(() => fixtures.disposeAll());
@@ -25,14 +25,14 @@ function dataDir() {
   return fixtures.track(mkdtempSync(join(tmpdir(), 'cml-db-remedy-')));
 }
 
-// Snapshots oldest first; a name in `damaged` gets a snapshot that fails SQLite's integrity check.
-function withDb(snapshotNames = [], { damaged = [] } = {}) {
+function withDb(snapshotNames = []) {
   const dir = dataDir();
   const db = join(dir, 'claude-mem-lite.db');
   writeFileSync(db, 'not actually sqlite');
   let t = 1_700_000_000;
   for (const n of snapshotNames) {
-    const p = writeSnapshotFixture(join(dir, n), { damage: damaged.includes(n) });
+    const p = join(dir, n);
+    writeFileSync(p, 'snap');
     // Deterministic ordering: the newest snapshot is the one the remedy must name, and
     // two files written in the same millisecond would make "newest" arbitrary (D#9).
     utimesSync(p, t, t);
@@ -74,38 +74,10 @@ describe('dbCheckRemedy', () => {
     expect(out).toContain('-shm');
   });
 
-  // D#553: the restore command named the newest non-empty snapshot by its time alone, and one
-  // taken after the damage can hold it.
-  it('skips a newer snapshot that fails the integrity check', async () => {
-    const { db } = withDb(
-      [
-        'claude-mem-lite.db.pre-maintain-2026-09-01T00-00-00-000Z-1-1.bak',
-        'claude-mem-lite.db.pre-delete-2026-09-06T00-00-00-000Z-1-1.bak',
-      ],
-      { damaged: ['claude-mem-lite.db.pre-delete-2026-09-06T00-00-00-000Z-1-1.bak'] },
-    );
-    const out = await dbCheckRemedy(db, corrupt());
-    expect(out).toContain('cp ');
-    expect(out).toContain('pre-maintain-2026-09-01T00-00-00-000Z');
-    expect(out).not.toContain('pre-delete-2026-09-06T00-00-00-000Z');
-    expect(out).toMatch(/fails SQLite's integrity check or holds no observations table; the next one passes/);
-  });
-
-  it('offers set-aside when no snapshot passes the integrity check', async () => {
-    const name = 'claude-mem-lite.db.pre-delete-2026-09-06T00-00-00-000Z-1-1.bak';
-    const { db } = withDb([name], { damaged: [name] });
-    const out = await dbCheckRemedy(db, corrupt());
-    expect(out).toMatch(
-      /^None of the 1 backup snapshot\(s\) beside the database passes SQLite's integrity check and holds an observations table\./,
-    );
-    expect(out).not.toContain('cp ');
-    expect(out).toContain('mv ');
-  });
-
   it('says so plainly when no snapshot exists, and does not offer a restore', async () => {
     const { db } = withDb();
     const out = await dbCheckRemedy(db, corrupt());
-    expect(out).toMatch(/^No backup snapshot exists beside the database\./);
+    expect(out).toMatch(/no non-empty backup snapshot/i);
     expect(out).not.toContain('cp ');
     expect(out).toContain('mv ');
     // D#554: a store whose damage is in its log can read most of its rows once the log is gone.
@@ -122,9 +94,7 @@ describe('dbCheckRemedy', () => {
     const out = await dbCheckRemedy(db, corrupt());
     expect(out).toContain('mv ');
     expect(out).not.toMatch(/No backup snapshot exists/);
-    expect(out).toMatch(
-      /No backup snapshot beside the database holds any data \(1 empty \.bak file skipped\)/,
-    );
+    expect(out).toMatch(/No non-empty backup snapshot exists beside the database/);
   });
 
   it('distinguishes "could not look" from "there are none"', async () => {
@@ -135,7 +105,7 @@ describe('dbCheckRemedy', () => {
     expect(out).toMatch(/could not read/i);
     expect(out).toContain('ENOTDIR');
     // The whole point of the third outcome: it must NOT assert the absence it never checked.
-    expect(out).not.toMatch(/no backup snapshot|none of the/i);
+    expect(out).not.toMatch(/no (non-empty )?backup snapshot/i);
   });
 
   it('hands a native-binding failure the binding repair chain, not a backup', async () => {
@@ -185,9 +155,7 @@ describe('dbCheckRemedy', () => {
   it('accepts the other spellings SQLite uses for a damaged file', async () => {
     const { db } = withDb();
     for (const msg of ['database disk image is malformed', 'file is encrypted or is not a database']) {
-      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(
-        /^No backup snapshot exists beside the database/,
-      );
+      expect(await dbCheckRemedy(db, new Error(msg)), msg).toMatch(/no non-empty backup snapshot/i);
     }
   });
 });
@@ -224,7 +192,7 @@ describe('doctor prints the remedy it computes', () => {
     // Premise: the check really did fail. Without this the remedy assertion could pass on
     // output where the database line never appeared at all.
     expect(out).toMatch(/Database: .*not a database|Database: .*malformed/);
-    expect(out).toMatch(/No backup snapshot exists beside the database/);
+    expect(out).toMatch(/No non-empty backup snapshot exists beside the database/);
   });
 
   it('emits the restore remedy naming the newest snapshot', () => {
@@ -233,19 +201,8 @@ describe('doctor prints the remedy it computes', () => {
       'claude-mem-lite.db.pre-maintain-2026-09-06T00-00-00-000Z-1-1.bak',
     ]);
     const out = runDoctor(dir).stdout;
-    expect(out).toMatch(/The newest of the 2 backup snapshot\(s\) beside the database passes/);
-    expect(out).toMatch(/cp \S*2026-09-06T00-00-00-000Z/);
-  });
-
-  // D#553 through the shipped doctor: the damaged newest snapshot is skipped.
-  it('names the snapshot that passes, not a newer damaged one', () => {
-    const damaged = 'claude-mem-lite.db.pre-delete-2026-09-06T00-00-00-000Z-1-1.bak';
-    const { dir } = withDb(['claude-mem-lite.db.pre-maintain-2026-09-01T00-00-00-000Z-1-1.bak', damaged], {
-      damaged: [damaged],
-    });
-    const out = runDoctor(dir).stdout;
-    expect(out).toMatch(/cp \S*pre-maintain-2026-09-01T00-00-00-000Z/);
-    expect(out).not.toContain('pre-delete-2026-09-06T00-00-00-000Z');
+    expect(out).toMatch(/Restore the newest of 2 backup snapshot\(s\)/);
+    expect(out).toContain('2026-09-06T00-00-00-000Z');
   });
 
   it('says nothing extra when the database opens cleanly (control)', () => {
@@ -259,8 +216,8 @@ describe('doctor prints the remedy it computes', () => {
     // first draft of this control matched that unrelated line and failed. A control that
     // greps too widely reports the wrong thing as a regression.
     expect(out).toMatch(/Database: not found/);
-    expect(out).not.toMatch(/No backup snapshot exists beside the database/);
-    expect(out).not.toMatch(/backup snapshot\(s\) beside the database/);
+    expect(out).not.toMatch(/No (non-empty )?backup snapshot exists beside the database/);
+    expect(out).not.toMatch(/Restore the newest of/);
     expect(out).not.toMatch(/Could not read .* to look for a backup snapshot/);
   });
 });

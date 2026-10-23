@@ -475,9 +475,7 @@ export async function dbCheckRemedy(dbPath, err) {
   // imports doctor already uses.
   const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
-  // Given the binding, the remedy names only a snapshot that passes SQLite's integrity check (D#553).
-  const Database = (await import('better-sqlite3')).default;
-  const remedy = dbUnusableRemedy(dbPath, err, { Database });
+  const remedy = dbUnusableRemedy(dbPath, err);
   if (remedy.kind === 'unknown') return remedy.note;
   if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
   // Both commands start by deleting the -wal and -shm and then replace or move the database file,
@@ -485,13 +483,13 @@ export async function dbCheckRemedy(dbPath, err) {
   // its copy of the command.
   if (remedy.kind === 'set-aside') {
     return (
-      `${remedy.found} Once every Claude Code session is closed, ` +
+      `No non-empty backup snapshot exists beside the database. Once every Claude Code session is closed, ` +
       `set the broken file aside so a fresh store is created on the next session: ${remedy.command}`
     );
   }
   return (
-    `${remedy.found} Once every Claude Code session is closed, restore it: ${remedy.command} ` +
-    `— move the broken file aside first if you want to keep it for inspection.`
+    `Restore the newest of ${remedy.snapshotCount} backup snapshot(s) once every Claude Code session ` +
+    `is closed: ${remedy.command} — move the broken file aside first if you want to keep it for inspection.`
   );
 }
 

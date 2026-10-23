@@ -137,9 +137,7 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
   // printing it for a human, and the restore arm defeats its own "keep the broken file for
   // inspection" advice if acted on.
   it('keeps the destructive repair command OUT of the model channel', () => {
-    // No snapshot: the set-aside command. With one, SessionStart names none and leaves the
-    // checked restore command to doctor (D#553).
-    const dataDir = corruptDataDir();
+    const dataDir = corruptDataDir({ withSnapshot: true });
     const r = run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
     const envelope = JSON.parse(
       r.stdout
@@ -153,20 +151,17 @@ describe('SessionStart speaks when the database cannot be opened at all', () => 
     expect(model).toContain(`${CLI_INVOKE} doctor`);
     // The premise: the human channel really does carry the command the model must not get.
     expect(envelope.systemMessage).toMatch(/rm -f/);
-    expect(envelope.systemMessage).toContain('.corrupt');
+    expect(envelope.systemMessage).toContain('.v1.bak');
   });
 
-  // D#553: a snapshot taken after the damage can hold it, and checking one means reading it
-  // whole, on every session start while the store is broken. So SessionStart names none: it
-  // counts them and sends the user to doctor, which checks them. It does not offer set-aside
-  // either, which would start an empty store while a backup sits beside the file.
-  it('with a snapshot beside it, names none and points at doctor', () => {
+  it('offers the RESTORE remedy when a snapshot exists, not the set-aside one', () => {
+    // The two remedies are not interchangeable: telling a user to move the file aside when a
+    // backup is sitting next to it throws away recoverable memories.
     const dataDir = corruptDataDir({ withSnapshot: true });
     const r = run([join(REPO, 'hook.mjs'), 'session-start'], dataDir);
-    expect(r.stdout).toMatch(/1 backup snapshot\(s\) exist beside the database/);
-    expect(r.stdout).toContain(`${CLI_INVOKE} doctor\` checks them before it names one`);
-    expect(r.stdout).not.toContain('.v1.bak');
-    expect(r.stdout).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
+    expect(r.stdout).toMatch(/backup snapshot/i);
+    expect(r.stdout).toContain('.v1.bak');
+    expect(r.stdout).not.toMatch(/No backup snapshot exists/);
   });
 
   it('says nothing on a healthy database', () => {
@@ -195,9 +190,7 @@ describe('SessionStart speaks when the database schema cannot be read', () => {
         .pop(),
     );
     expect(envelope.systemMessage).toMatch(/Memory is OFF/);
-    // The snapshot is counted, not named: doctor checks it first (D#553).
-    expect(envelope.systemMessage).toMatch(/1 backup snapshot\(s\) exist beside the database/);
-    expect(envelope.systemMessage).not.toContain('.v1.bak');
+    expect(envelope.systemMessage).toContain('.v1.bak');
     expect(envelope.systemMessage).not.toMatch(/rm -f|\bcp\b|\bmv\b/);
     expect(envelope.hookSpecificOutput?.additionalContext).toMatch(/Memory is OFF/);
     expect(r.status).toBe(0);

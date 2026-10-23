@@ -283,9 +283,6 @@ export const SOURCE_FILES = [
   'lib/db-backup.mjs',
   'lib/db-unusable.mjs',
   'schema.mjs',
-  // Imports schema.mjs. lib/db-unusable.mjs runs it as a child by path (not an import), and a swap
-  // killed between the two leaves its check reporting the snapshot unchecked (the probe exits non-zero).
-  'lib/snapshot-probe.mjs',
   'cli/doctor.mjs',
   'hook-memory.mjs',
   'haiku-client.mjs',

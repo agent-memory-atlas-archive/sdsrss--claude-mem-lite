@@ -473,24 +473,24 @@ export async function dbCheckRemedy(dbPath, err) {
   // only inside the Database check's catch, so the cost of loading it lazily is paid by
   // the rare failure rather than by every invocation. Same shape as the six dynamic
   // imports doctor already uses.
-  const { isDbUnusableError, dbUnusableRemedy, checkSnapshot } = await import('./lib/db-unusable.mjs');
+  const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
-  // doctor checks the snapshots (D#558): each candidate is restored into a private copy and opened
-  // by the product's opener in a child process, so only one that restores cleanly is named.
-  const remedy = dbUnusableRemedy(dbPath, err, { check: checkSnapshot });
+  const remedy = dbUnusableRemedy(dbPath, err);
   if (remedy.kind === 'unknown') return remedy.note;
   if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
-  // Both commands move the database file and its -wal aside and delete the -shm, under any session
-  // still holding the store (D#534). The SessionStart notice says the same before its copy of the
-  // command.
-  const kept = `The broken file and its log are kept as ${remedy.keptAs} and ${remedy.keptAs}-wal.`;
+  // Both commands start by deleting the -wal and -shm and then replace or move the database file,
+  // under any session still holding the store (D#534). The SessionStart notice says the same before
+  // its copy of the command.
   if (remedy.kind === 'set-aside') {
     return (
-      `${remedy.found} Once every Claude Code session is closed, set the broken file aside so a fresh ` +
-      `store is created on the next session: ${remedy.command} — ${kept}`
+      `No non-empty backup snapshot exists beside the database. Once every Claude Code session is closed, ` +
+      `set the broken file aside so a fresh store is created on the next session: ${remedy.command}`
     );
   }
-  return `${remedy.found} Once every Claude Code session is closed, restore it: ${remedy.command} — ${kept}`;
+  return (
+    `Restore the newest of ${remedy.snapshotCount} backup snapshot(s) once every Claude Code session ` +
+    `is closed: ${remedy.command} — move the broken file aside first if you want to keep it for inspection.`
+  );
 }
 
 // ─── Install ────────────────────────────────────────────────────────────────

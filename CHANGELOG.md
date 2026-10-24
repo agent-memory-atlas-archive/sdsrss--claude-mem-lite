@@ -2,6 +2,37 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.6 — the first open no longer deletes a data directory when `~/claude-mem-lite` exists, and body-parser 2.4.0
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.5`.
+
+- **The first open no longer deletes the data directory when `~/claude-mem-lite` exists** (D#561).
+  When `~/claude-mem-lite` existed (the unhidden data directory of versions before the first
+  release, 2.0.0, or a git clone of this repository made in the home directory) and the database
+  file did not, the open removed the data directory if no name in it ended in `.db`, and moved
+  `~/claude-mem-lite` into its place. After the set-aside command, that removed the kept file. With
+  no `CLAUDE_MEM_DIR`, the data directory is also where a direct install keeps its code, which went
+  the same way. Now only a database left in `~/claude-mem-lite` moves, with its `-wal` and `-shm`,
+  and only into a data directory that holds no database, log, snapshot or kept copy of a
+  claude-mem-lite store. Nothing is removed, and `install` no longer renames `~/claude-mem-lite`.
+- **body-parser 2.4.0 and fast-uri 3.1.9**, lockfile only. `npm audit --omit=dev` reported
+  body-parser 2.0.0–2.3.0 (high, GHSA-27r3-jxmh-p828) and fast-uri 3.0.0–3.1.8 (moderate, four
+  advisories); both come in through `@modelcontextprotocol/sdk`.
+- **Known issue** (D#573): with the plugin, `CLAUDE_MEM_DIR` on another filesystem than
+  `~/claude-mem-lite`, a database left there while `~/.claude-mem-lite` exists, and an original
+  claude-mem store in `~/.claude-mem`, each session start adds another copy of that claude-mem store
+  to the data directory. 6.30.5 deleted the data directory at each open in the same case.
+- **Still as in 6.30.5:**
+  - The plugin's session-start script (`scripts/setup.sh`) moves the whole `~/claude-mem-lite` into
+    `~/.claude-mem-lite` when that directory does not exist; with `CLAUDE_MEM_DIR` set, nothing then
+    reads the database it moved (D#568).
+  - With `CLAUDE_MEM_DIR` on another filesystem than `~/claude-mem-lite`, the move fails, and so does
+    every open until the database and its `-wal` and `-shm` are moved by hand (D#569).
+  - doctor's restore command names the newest non-empty backup snapshot without checking it (D#558).
+  - When opening the store fails twice on damage, the open deletes the `-wal` and retries, so rows
+    committed only in that log are lost (D#557).
+
 ## v6.30.5 — ip-address 10.7.4, and the set-aside note no longer says the file's memories are unrecoverable
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

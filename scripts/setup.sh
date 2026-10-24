@@ -99,8 +99,6 @@ if [[ -n "${CLAUDE_MEM_DIR:-}" || -n "${CLAUDE_MEM_RUNTIME_DIR:-}" ]] && [[ -f "
   unset _resolved _db _rt
 fi
 
-OLD_UNHIDDEN_DIR="$HOME/claude-mem-lite"
-
 # Colors
 if [[ -t 2 ]]; then
   GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; RED='\033[0;31m'; NC='\033[0m'
@@ -120,17 +118,12 @@ log_warn() { echo -e "${YELLOW}⚠${NC} $*" >&2; }
 # day GitHub bumps the runner image. Keep SC2317 for anyone on an older shellcheck.
 log_err()  { echo -e "${RED}✗${NC} $*" >&2; }
 
-# 1. Migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
-#    CODE_DIR, not DB_DIR, and deliberately: the unhidden directory of versions before the
-#    first release held the INSTALL — server.mjs, hook.mjs, package.json — and CODE_DIR is the
-#    one location that must never follow the relocation env var. Moving it into a relocated
-#    DB_DIR would strand every absolute path settings.json and the MCP registration baked.
-if [[ -d "$OLD_UNHIDDEN_DIR" && ! -d "$CODE_DIR" ]]; then
-  mv "$OLD_UNHIDDEN_DIR" "$CODE_DIR"
-  log_ok "Migrated ~/claude-mem-lite/ → ~/.claude-mem-lite/"
-fi
+# 1. ~/claude-mem-lite/ (the unhidden dir of versions before the first release) is not moved
+#    here: the first open moves a store left there into DB_DIR, and only the store
+#    (schema.mjs migrateUnhiddenStore). This script moved the whole directory into a missing
+#    CODE_DIR, and a git clone of this repository made in ~ is at that path (D#568).
 
-# 2. Ensure both locations exist (runtime created after migration check)
+# 2. Ensure both locations exist
 mkdir -p "$CODE_DIR"
 mkdir -p "$DB_DIR"
 if [[ "$DB_DIR" == "$CODE_DIR" ]]; then
@@ -169,7 +162,7 @@ if [[ -f "$DB_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" ]]; then
   log_ok "Database renamed: claude-mem.db → claude-mem-lite.db"
 fi
 
-# 5. Ensure runtime directories exist (after migration to not mask migration check).
+# 5. Ensure runtime directories exist.
 #    Both: RUNTIME_DIR carries the cross-component flag below, while CODE_DIR/runtime keeps
 #    the two run-once install markers at the bottom of this file.
 mkdir -p "$RUNTIME_DIR"

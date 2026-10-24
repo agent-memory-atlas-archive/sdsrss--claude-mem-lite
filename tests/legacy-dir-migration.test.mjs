@@ -255,3 +255,49 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
     expectKept(legacy, clone);
   }, 130000);
 });
+
+/**
+ * The plugin's SessionStart script, run from this repository against a plugin root holding a stub
+ * better-sqlite3 and the binding marker (as tests/setup-sh-legacy-db-relocation.test.mjs does), so
+ * it neither installs nor symlinks anything into the repository.
+ */
+function runSetup(root, home, dataDir) {
+  const plugin = join(root, 'plugin-root');
+  mkdirSync(join(plugin, 'node_modules', 'better-sqlite3'), { recursive: true });
+  writeFileSync(join(plugin, 'node_modules', `.mem-binding-ok-${process.versions.modules}`), '');
+  mkdirSync(join(plugin, 'lib'), { recursive: true });
+  copyFileSync(join(REPO, 'lib', 'resolve-data-dir.mjs'), join(plugin, 'lib', 'resolve-data-dir.mjs'));
+  const r = spawnSync('bash', [join(REPO, 'scripts', 'setup.sh')], {
+    encoding: 'utf8',
+    timeout: 60000,
+    env: { ...childEnv(home, dataDir), CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_MEM_RUNTIME_DIR: '' },
+  });
+  expect(r.status, r.stderr).toBe(0);
+}
+
+describe("the plugin's setup.sh leaves ~/claude-mem-lite where it is (D#568)", () => {
+  // FAILS IF setup.sh still moves ~/claude-mem-lite into a missing ~/.claude-mem-lite: the clone,
+  // uncommitted files included, becomes the code dir that the documented uninstall deletes.
+  it('a clone at ~/claude-mem-lite and no ~/.claude-mem-lite: the clone stays', () => {
+    const { root, home, legacy, dataDir } = sandbox();
+    writeClone(legacy);
+    write(join(legacy, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    write(join(legacy, 'MY-UNCOMMITTED-NOTES.txt'), 'work in progress');
+    const clone = listing(legacy);
+    runSetup(root, home);
+    expect(listing(legacy)).toEqual(clone);
+    expect(existsSync(join(dataDir, 'MY-UNCOMMITTED-NOTES.txt'))).toBe(false);
+  });
+
+  // FAILS IF dropping setup.sh's move strands a store from before the first release: the plugin's
+  // session start (setup.sh, then the first open) must still bring its rows into the data dir.
+  it('a legacy store and no ~/.claude-mem-lite: setup.sh then the first open move the store only', () => {
+    const { root, home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-via-plugin', { walOnly: true });
+    write(join(legacy, 'runtime', 'keep.txt'), 'runtime file');
+    runSetup(root, home);
+    openStore(home);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-via-plugin')).toBe(1);
+    expect(readFileSync(join(legacy, 'runtime', 'keep.txt'), 'utf8')).toBe('runtime file');
+  });
+});

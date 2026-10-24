@@ -174,8 +174,8 @@ node install.mjs install
 - **原 `~/.claude-mem/` 保持不变**（不删除、不覆盖）
 
 **从首个发布版（2.0.0）之前的非隐藏目录（`~/claude-mem-lite/`）：**
-- 它的数据库（`claude-mem-lite.db` 或 `claude-mem.db`，连同 `-wal` 和 `-shm`）在第一次打开时移入数据目录，前提是数据目录里还没有 claude-mem-lite 的数据库、日志、快照或保留副本。其他文件都不移动，两个目录里都不删除任何东西
-- 移动用的是改名：`CLAUDE_MEM_DIR` 在另一个文件系统上时会失败，之后每次打开都失败，直到手动把数据库连同 `-wal` 和 `-shm` 移过去
+- 它的数据库（`claude-mem-lite.db` 或 `claude-mem.db`，连同 `-wal` 和 `-shm`）在第一次打开时移入数据目录，前提是数据目录里还没有 claude-mem-lite 的数据库、日志、快照或保留副本。其他文件都不移动，两个目录里也不删除别的东西。名字对得上、但不是 SQLite 数据库的文件留在原处
+- `CLAUDE_MEM_DIR` 在另一个文件系统上时，这些文件先复制进数据目录，再从 `~/claude-mem-lite/` 删除
 
 **就地重命名：**
 - 已有的 `~/.claude-mem-lite/claude-mem.db` 会自动重命名为 `claude-mem-lite.db`

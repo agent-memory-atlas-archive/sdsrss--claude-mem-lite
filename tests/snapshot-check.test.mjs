@@ -803,7 +803,7 @@ describe('the remedy names the data directory and never stops silently', () => {
       check: () => ({ verdict: 'ok', withLog: false, observations: 3, listed: 12 }),
     });
     expect(short.found).toContain(
-      'holds 3 observation(s), 9 fewer than its own index lists: rows its table lost before the snapshot was taken.',
+      'holds 3 observation(s), 9 fewer than its own index lists: rows its table lost.',
     );
     const whole = du.dbUnusableRemedy(db, undefined, {
       stampMs: NOW,
@@ -838,7 +838,7 @@ describe('the remedy names the data directory and never stops silently', () => {
 // stopped at the first snapshot that passed, and one whose table lost rows its indexes still list
 // passes once REINDEX makes it consistent, so doctor named it, 3 observations of 410, over an older
 // intact one holding 400. A user's delete removes a row's index entries with it, so a snapshot short
-// of its own index lost those rows before it was taken; one that is not short is named as before.
+// of its own index lost those rows; one that is not short is named as before.
 describe('a snapshot short of its own index is not named alone over an older complete one (D#570)', () => {
   const NOW = Date.UTC(2026, 9, 24, 12, 0, 0, 0);
   /** A broken store and snapshots named `names`, oldest first. */

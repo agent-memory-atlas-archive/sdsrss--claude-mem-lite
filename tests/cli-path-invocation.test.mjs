@@ -367,7 +367,7 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
   const HOSTILE = 'sp ace$HOME`echo INJECTED`"dq\'sq\\bs';
   // Every verb a remedy starts with is shadowed, so evaluating the printed command only
   // reports the words bash split it into — nothing is removed, moved or installed.
-  const PRELUDE = ['node', 'cd', 'rm', 'mv', 'cp', 'npm', 'restart', 'test', 'touch']
+  const PRELUDE = ['node', 'cd', 'rm', 'mv', 'cp', 'npm', 'restart']
     .map((v) => `${v}() { printf '%s\\n' "$@"; }`)
     .join('\n');
   const words = (cmd) => {
@@ -410,20 +410,14 @@ describe('printed remedies keep a hostile path as one exact word (D#61)', () => 
       writeFileSync(db, '');
       const setAside = dbUnusableRemedy(db);
       expect(setAside.kind).toBe('set-aside');
-      const kept = setAside.keptAs;
       expect(words(setAside.command)).toEqual(
-        expect.arrayContaining([`${db}-wal`, `${db}-shm`, db, kept, `${kept}-wal`]),
+        expect.arrayContaining([`${db}-wal`, `${db}-shm`, db, `${db}.corrupt`]),
       );
       const bak = `${db}.2026-09-25T00-00-00Z.bak`;
       writeFileSync(bak, 'snapshot'); // an empty one is skipped (D#551)
-      writeFileSync(`${bak}-wal`, 'log');
-      const restore = dbUnusableRemedy(db, undefined, {
-        check: () => ({ verdict: 'ok', observations: 1, withLog: true }),
-      });
+      const restore = dbUnusableRemedy(db);
       expect(restore.kind).toBe('restore');
-      expect(words(restore.command)).toEqual(
-        expect.arrayContaining([`${db}-wal`, bak, db, restore.keptAs, `${bak}-wal`, CLI_PATH, 'fts-check']),
-      );
+      expect(words(restore.command)).toEqual(expect.arrayContaining([`${db}-wal`, bak, db]));
     });
   });
 

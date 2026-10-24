@@ -1948,59 +1948,32 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
 /**
  * Rebuild all FTS5 indexes. Use after suspected index corruption (e.g. crash mid-trigger).
  * Safe to call at any time — rebuilds are idempotent.
- * `codes[i]` is the SQLite code of `errors[i]` (null for a table that is missing), so a caller
- * can tell its own disk filling up from damage: the restore check does (D#558).
  * @param {Database} db Opened database instance
- * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} Results per FTS table
+ * @returns {{rebuilt: string[], errors: string[]}} Results per FTS table
  */
 export function rebuildFTS(db) {
   const FTS_TABLES = ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts'];
   const idRe = /^[a-z][a-z0-9_]*$/;
   const rebuilt = [];
   const errors = [];
-  const codes = [];
   for (const fts of FTS_TABLES) {
     try {
       if (!idRe.test(fts)) {
         errors.push(`${fts}: invalid identifier`);
-        codes.push(null);
         continue;
       }
       const exists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(fts);
       if (!exists) {
         errors.push(`${fts}: not found`);
-        codes.push(null);
         continue;
       }
       db.exec(`INSERT INTO ${fts}(${fts}) VALUES('rebuild')`);
       rebuilt.push(fts);
     } catch (e) {
       errors.push(`${fts}: ${e.message}`);
-      codes.push(e.code ?? null);
     }
   }
-  return { rebuilt, errors, codes };
-}
-
-/**
- * Rebuild every index the store derives from its tables: the FTS5 indexes (rebuildFTS), then
- * every other index (REINDEX). What `fts-check rebuild` runs, and what the restore check runs on
- * its copy after the open, so the two cannot drift (D#558). REINDEX repairs an index whose entries
- * no longer match its table, which no FTS rebuild touches and doctor's checks never read (D#562).
- * @param {Database} db Opened database instance
- * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} as rebuildFTS, with
- *   'indexes' standing for the REINDEX
- */
-export function rebuildIndexes(db) {
-  const result = rebuildFTS(db);
-  try {
-    db.exec('REINDEX');
-    result.rebuilt.push('indexes');
-  } catch (e) {
-    result.errors.push(`indexes: ${e.message}`);
-    result.codes.push(e.code ?? null);
-  }
-  return result;
+  return { rebuilt, errors };
 }
 
 /**

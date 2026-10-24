@@ -143,8 +143,11 @@ fi
 #    a relocation it never closed — nothing ever writes a database THERE — so this block
 #    copied the legacy database again on every single SessionStart, without bound. Measured
 #    2026-09-14: control arm stable at 1 backup across three runs, relocated arm 1 → 3.
+#    A backup already in DB_DIR closes it as well: while every open fails before creating the
+#    database (D#569's EXDEV did), the first condition never closes (D#573).
 OLD_DIR="$HOME/.claude-mem"
-if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" && ! -f "$DB_DIR/claude-mem.db" ]]; then
+if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" && ! -f "$DB_DIR/claude-mem.db" ]] &&
+  ! compgen -G "$DB_DIR/claude-mem-lite.db.legacy-backup-*" >/dev/null; then
   BACKUP="$DB_DIR/claude-mem-lite.db.legacy-backup-$(date +%s)"
   if cp "$OLD_DIR/claude-mem.db" "$BACKUP" 2>/dev/null; then
     log_info "Legacy ~/.claude-mem/ DB is schema-incompatible; backed up to $(basename "$BACKUP") (a fresh DB will be created). Old ~/.claude-mem/ preserved."

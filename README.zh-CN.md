@@ -169,9 +169,9 @@ node install.mjs install
 所有安装方式自动检测并从旧版本迁移：
 
 **从 claude-mem 原版（`~/.claude-mem/`）：**
-- 复制 `claude-mem.db` → `~/.claude-mem-lite/claude-mem-lite.db`（重命名）
-- 复制 `runtime/` 目录
-- **原 `~/.claude-mem/` 保持不变**（不删除、不覆盖）
+- `claude-mem.db` 连同 `-wal`/`-shm` 以 `.legacy-backup-<时间>` 的名字（`claude-mem-lite.db.legacy-backup-<时间>`、`claude-mem-lite.db-wal.legacy-backup-<时间>`）移入 `~/.claude-mem-lite/`，前提是 `~/.claude-mem-lite/claude-mem-lite.db` 还不存在
+- 插件安装只把 `claude-mem.db` 以上面第一个名字复制进数据目录，`~/.claude-mem/` 原样不动；数据目录里既没有数据库、也没有这样的备份时才复制
+- 新建一个数据库：原版 claude-mem 的 schema 没有升级路径
 
 **从首个发布版（2.0.0）之前的非隐藏目录（`~/claude-mem-lite/`）：**
 - 它的数据库（`claude-mem-lite.db` 或 `claude-mem.db`，连同 `-wal` 和 `-shm`）在第一次打开时移入数据目录，前提是数据目录里还没有 claude-mem-lite 的数据库、日志、快照或保留副本。其他文件都不移动，两个目录里也不删除别的东西。名字对得上、但不是 SQLite 数据库的文件留在原处

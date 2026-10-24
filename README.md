@@ -208,6 +208,7 @@ All installation methods auto-detect and migrate from previous versions:
 
 **From claude-mem (original `~/.claude-mem/`):**
 - `claude-mem.db` and its `-wal`/`-shm` are moved into `~/.claude-mem-lite/` under `.legacy-backup-<time>` names (`claude-mem-lite.db.legacy-backup-<time>`, `claude-mem-lite.db-wal.legacy-backup-<time>`), when `~/.claude-mem-lite/claude-mem-lite.db` does not exist yet
+- The plugin install copies `claude-mem.db` alone into the data directory under the first of those names and leaves `~/.claude-mem/` as it is; it does so while the data directory holds neither a database nor such a backup
 - A fresh database is created: the original claude-mem schema has no upgrade path
 
 **From the unhidden directory of versions before the first release, 2.0.0 (`~/claude-mem-lite/`):**

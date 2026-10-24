@@ -117,6 +117,22 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
     expect(legacyBackups(join(home, '.claude-mem-lite'))).toHaveLength(0);
   });
 
+  it('a backup it already made closes the guard while no database exists yet (D#573)', () => {
+    // While every open failed before creating the database (D#569: the unhidden-dir move threw
+    // EXDEV), the "no database yet" guard never closed and each session start added another full
+    // copy of the claude-mem store. The backup is this block's own output, so it closes it too.
+    const home = join(sandbox, 'home');
+    const dataDir = join(home, '.claude-mem-lite');
+    mkdirSync(dataDir, { recursive: true });
+    plantLegacyClaudeMem(home);
+    writeFileSync(join(dataDir, 'claude-mem-lite.db.legacy-backup-1700000000'), 'LEGACY-DB-BYTES');
+
+    const r = runSetup({ home, dataDir: undefined });
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+    expect(legacyBackups(dataDir)).toEqual(['claude-mem-lite.db.legacy-backup-1700000000']);
+  });
+
   it('writes no legacy backup when the RELOCATED dir already holds a database', () => {
     // The unbounded-copy bug stated as one run: this user has a working relocated install,
     // so the legacy backup has nothing to offer and must not be written — anywhere. Before

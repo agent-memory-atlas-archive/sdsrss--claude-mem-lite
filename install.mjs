@@ -531,10 +531,10 @@ export async function withSwapBarrier(fn) {
 }
 
 // Creates the data dirs the swap barrier then writes its marker into. A store left in the
-// unhidden dir of versions before v0.5 (~/claude-mem-lite/) is moved by ensureDb at the first
-// open, into the data dir. Install no longer renames that directory into the code dir (D#561): it
-// did so only under CLAUDE_MEM_DIR relocation, where the code dir does not exist yet, and README
-// method 3 runs install from a git clone at exactly that path.
+// unhidden dir of versions before v0.5 (~/claude-mem-lite/) is ensureDb's to move
+// (migrateUnhiddenStore). Install no longer renames that directory into the code dir (D#561): it
+// did so only under CLAUDE_MEM_DIR relocation, where the code dir does not exist yet, and that
+// directory can be a git clone of this repository made in ~.
 function prepareInstallDirs() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   // Under relocation the DB/managed/runtime live here, not in the code dir — create it too.

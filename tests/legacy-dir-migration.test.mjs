@@ -1,8 +1,8 @@
 // D#561: the migration of the unhidden data dir (~/claude-mem-lite/, before v0.5) moves only a
 // store, and only into a data dir that holds none of a store's files. It used to remove a data dir
 // holding no `*.db` name and rename ~/claude-mem-lite into its place: after the set-aside command
-// that took the kept file and every snapshot, and README method 3 (`git clone` run from ~) puts a
-// clone of this repository at that path. Each case opens the store in a child, since DB_DIR is
+// that took the kept file and every snapshot, and a `git clone` of this repository run from ~ is
+// at that path. Each case opens the store in a child, since DB_DIR is
 // fixed from CLAUDE_MEM_DIR when lib/data-paths.mjs is first imported.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -23,6 +23,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { initSchema } from '../schema.mjs';
+import { migrateLegacyClaudeMemData } from '../install.mjs';
 import { pathWithClaudeStub } from './claude-stub.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -121,7 +122,7 @@ function markers(dbPath, marker) {
   }
 }
 
-/** A clone of this repository, as README method 3 leaves it at ~/claude-mem-lite. */
+/** A clone of this repository at ~/claude-mem-lite. */
 function writeClone(dir) {
   write(join(dir, 'README.md'), '# claude-mem-lite\n');
   write(join(dir, 'package.json'), '{"name":"claude-mem-lite"}\n');
@@ -205,6 +206,22 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
     expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-stays')).toBe(0);
   });
 
+  // FAILS IF the backup install makes of an original claude-mem store (~/.claude-mem) counts as one
+  // of this store's files: the pre-v0.5 store stays behind and the open creates an empty one.
+  it('a legacy store beside a data dir holding only the claude-mem backup: the store moves', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-beside-backup');
+    const claudeMem = join(home, '.claude-mem');
+    write(join(claudeMem, 'claude-mem.db'), 'original claude-mem store');
+    write(join(claudeMem, 'claude-mem.db-wal'), 'original claude-mem log');
+    expect(migrateLegacyClaudeMemData(claudeMem, dataDir).action).toBe('backed-up'); // premise
+    const data = listing(dataDir);
+    expect(Object.keys(data)).toHaveLength(2); // premise: the backup and its log
+    openStore(home);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-beside-backup')).toBe(1);
+    expectKept(dataDir, data);
+  });
+
   // FAILS IF the relocated data dir gets the same removal as the default one.
   it('under CLAUDE_MEM_DIR: a clone beside a set-aside data dir both stay', () => {
     const { root, home, legacy } = sandbox();
@@ -219,7 +236,7 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
   });
 
   // FAILS IF install, under relocation (its code dir does not exist yet), renames ~/claude-mem-lite
-  // into the code dir: that is the clone the install runs from in README method 3.
+  // into the code dir.
   it('install under CLAUDE_MEM_DIR leaves a clone at ~/claude-mem-lite in place', () => {
     const { root, home, legacy } = sandbox();
     writeClone(legacy);

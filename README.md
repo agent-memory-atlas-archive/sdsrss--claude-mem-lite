@@ -197,7 +197,7 @@ node install.mjs install
 2. **Register MCP server** -- `mem-lite` server with 19 tool definitions (10 core + 9 hidden-but-callable; `mem_search_feedback` is registered only when search telemetry is enabled). The pre-v2.78 generic server name `mem` is renamed to `mem-lite` for namespace hygiene; the tool names themselves (`mem_search`, `mem_recall`, ...) are unchanged.
 3. **Configure hooks** -- all seven lifecycle events: `SessionStart`, `PreCompact`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`
 4. **Create data directory** -- `~/.claude-mem-lite/` (hidden) for database, runtime, and managed resource files
-5. **Auto-migrate** -- `~/.claude-mem/claude-mem.db` (original claude-mem) is moved into `~/.claude-mem-lite/` as a `.legacy-backup-<time>` file and a fresh database is created. A database left in `~/claude-mem-lite/` (the unhidden directory before v0.5) is moved into `~/.claude-mem-lite/` at the first open, when that directory holds no database, log, snapshot or kept copy yet; nothing else in either directory is moved or removed
+5. **Auto-migrate** -- `~/.claude-mem/claude-mem.db` (original claude-mem) is moved into `~/.claude-mem-lite/` as a `.legacy-backup-<time>` file and a fresh database is created. A database left in `~/claude-mem-lite/` (the unhidden directory before v0.5) is moved into the data directory at the first open, when the data directory holds no database, log, snapshot or kept copy of a claude-mem-lite store yet; nothing else in either directory is moved or removed (the plugin install differs: see Migration)
 6. **Initialize database** -- SQLite with WAL mode, FTS5 indexes created on first server start
 
 Restart Claude Code after installation to activate.
@@ -211,13 +211,14 @@ All installation methods auto-detect and migrate from previous versions:
 - A fresh database is created: the original claude-mem schema has no upgrade path
 
 **From pre-v0.5 unhidden directory (`~/claude-mem-lite/`):**
-- Its database (`claude-mem-lite.db` or `claude-mem.db`, with its `-wal` and `-shm`) is moved to `~/.claude-mem-lite/` at the first open, when that directory holds no database, log, snapshot or kept copy yet
-- Nothing else is moved, and nothing in either directory is removed
+- Its database (`claude-mem-lite.db` or `claude-mem.db`, with its `-wal` and `-shm`) is moved into the data directory at the first open, when the data directory holds no database, log, snapshot or kept copy of a claude-mem-lite store yet. Nothing else is moved, and nothing in either directory is removed
+- The move is a rename: with `CLAUDE_MEM_DIR` on another filesystem it fails, and so does every open, until the database is moved there by hand
+- The plugin install differs: at session start, when `~/.claude-mem-lite/` does not exist, `scripts/setup.sh` moves the whole `~/claude-mem-lite/` directory there, whatever it holds
 
 **In-place rename:**
 - Existing `claude-mem.db` in `~/.claude-mem-lite/` is automatically renamed to `claude-mem-lite.db`
 
-Remove old directories manually after confirming:
+Remove old directories manually once nothing in them is needed. A database still in `~/claude-mem-lite/` has not moved (see above), and the command below deletes it:
 ```bash
 rm -rf ~/.claude-mem/       # original claude-mem
 rm -rf ~/claude-mem-lite/   # pre-v0.5 unhidden data dir (not a git clone of this repository)

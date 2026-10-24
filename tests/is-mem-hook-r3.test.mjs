@@ -57,7 +57,7 @@ describe('isMemHook leaves user hooks that merely mention the product', () => {
     expect(isMemHook(mk('node /home/me/.claude-mem-lite/hook.mjs post-tool-use'))).toBe(true);
     expect(isMemHook(mk('node "/home/me/.claude-mem-lite/scripts/user-prompt-search.js"'))).toBe(true);
     expect(isMemHook(mk('node "/home/me/.claude-mem-lite/scripts/pre-skill-bridge.js"'))).toBe(true);
-    expect(isMemHook(mk('node "/home/me/claude-mem-lite/hook.mjs" session-start'))).toBe(true); // pre-v0.5 dir
+    expect(isMemHook(mk('node "/home/me/claude-mem-lite/hook.mjs" session-start'))).toBe(true); // pre-2.0.0 unhidden dir
     expect(isMemHook(mk('node "/home/me/src/claude-mem-lite-main/hook.mjs" stop'))).toBe(true); // zip checkout
     expect(isMemHook(mk('node "C:\\Users\\me\\.claude-mem-lite\\hook.mjs" stop'))).toBe(true);
     expect(isMemHook(mk('bash "/home/me/.claude-mem-lite/scripts/pre-tool-recall-bash.sh"'))).toBe(true);

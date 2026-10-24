@@ -159,7 +159,7 @@ node install.mjs install
 > **想把托管块改写进 `CLAUDE.md`**（例如与团队共享）？运行 `claude-mem-lite adopt`：它向 `<cwd>/CLAUDE.md` 写入 slug 限定的托管块和详情文件，块以外的内容逐字保留，并删除自动写入的那份本地副本（`CLAUDE.local.md` 或 rules 文件）。`CLAUDE.md` 一存在，Claude Code 就不再读 `AGENTS.md`，所以 adopt 在 `AGENTS.md`（或 `.claude/AGENTS.md`）旁边新建 `CLAUDE.md` 时，会在文件开头导入它（`@AGENTS.md`，前面一行是 Claude Code 不加载的标记注释），`AGENTS.md` 因此继续加载；上层目录里的、或 git 跟踪在子目录里的 `AGENTS.md` 不能这样导入，adopt 会在输出里列出它们，并给出保留它们的设置（Project instructions 设为 `claude-md-and-agents-md`）。已经有你自己的 `CLAUDE.md` 时不导入，因为那里本来就不读 `AGENTS.md`。`unadopt` 会删除只剩这些行和托管块的 `CLAUDE.md`。带托管块的项目在**每次 SessionStart** 都会同步，出货模板变了会刷新，且不会再叠加本地副本或注入，从子目录启动的会话也一样。只有托管块的 `CLAUDE.md`（旧版本自动 adopt 写的）会在下一次从它所在目录启动的会话里补上同样的 `AGENTS.md` 导入，并给一次性提示。从子目录启动的会话看来，这个导入指向工作目录之外，Claude Code 会请你批准一次。插件创建过、又被你删掉（或被 `claude-mem-lite unadopt` 删掉）的本地托管块（`CLAUDE.local.md` 或 rules 文件）不会被写回，改为注入，直到运行 `claude-mem-lite adopt --enable`（在 `CLAUDE.local.md` 会让 `AGENTS.md` 失效的仓库里，还要设 `CLAUDE_MEM_RULES_STEERING=1` 才会再写文件）。关闭方式：项目级 `claude-mem-lite adopt --disable`（同时删除本地托管块；`CLAUDE.md` 托管块保留到 `unadopt`；重新启用用 `--enable`）；全局 `export MEM_NO_AUTO_ADOPT=1`（已写入的托管块保留并继续加载，直到 `unadopt`）；只冻结模板刷新用 `CLAUDE_MEM_NO_TEMPLATE_REFRESH=1`。`claude-mem-lite unadopt` 会移除 `CLAUDE.md` 托管块、详情文件，以及本地托管块（`CLAUDE.local.md` 或 `.claude/rules/claude-mem-lite.md`）和它的 exclude 条目。
 3. **配置钩子** -- 全部七个生命周期事件：`SessionStart`、`PreCompact`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Stop`、`UserPromptSubmit`
 4. **创建数据目录** -- `~/.claude-mem-lite/`（隐藏目录），存放数据库与运行时文件
-5. **自动迁移** -- 自动检测 `~/.claude-mem/`（原版 claude-mem）或 `~/claude-mem-lite/`（v0.5 前的非隐藏目录），将数据库和运行时文件迁移到 `~/.claude-mem-lite/`，原目录保持不变
+5. **自动迁移** -- `~/.claude-mem/claude-mem.db`（原版 claude-mem）以 `.legacy-backup-<时间>` 文件的形式移入 `~/.claude-mem-lite/`，并新建一个数据库。`~/claude-mem-lite/`（首个发布版 2.0.0 之前的非隐藏目录）里留下的数据库在第一次打开时移入数据目录，前提是数据目录里还没有 claude-mem-lite 的数据库、日志、快照或保留副本；两个目录里的其他文件都不移动、不删除（插件安装不同，见"迁移"）
 6. **初始化数据库** -- SQLite WAL 模式，FTS5 索引在服务器首次启动时创建
 
 安装后重启 Claude Code 以激活。
@@ -173,16 +173,18 @@ node install.mjs install
 - 复制 `runtime/` 目录
 - **原 `~/.claude-mem/` 保持不变**（不删除、不覆盖）
 
-**从 v0.5 前的非隐藏目录（`~/claude-mem-lite/`）：**
-- 整个目录移动到 `~/.claude-mem-lite/`（隐藏目录）
+**从首个发布版（2.0.0）之前的非隐藏目录（`~/claude-mem-lite/`）：**
+- 它的数据库（`claude-mem-lite.db` 或 `claude-mem.db`，连同 `-wal` 和 `-shm`）在第一次打开时移入数据目录，前提是数据目录里还没有 claude-mem-lite 的数据库、日志、快照或保留副本。其他文件都不移动，两个目录里都不删除任何东西
+- 移动用的是改名：`CLAUDE_MEM_DIR` 在另一个文件系统上时会失败，之后每次打开都失败，直到手动把数据库连同 `-wal` 和 `-shm` 移过去
+- 插件安装不同：会话开始时，如果 `~/.claude-mem-lite/` 不存在，`scripts/setup.sh` 会把整个 `~/claude-mem-lite/` 目录移过去，不管里面有什么；设了 `CLAUDE_MEM_DIR` 时，移过去的数据库之后没有人读
 
 **就地重命名：**
 - 已有的 `~/.claude-mem-lite/claude-mem.db` 会自动重命名为 `claude-mem-lite.db`
 
-确认一切正常后手动删除旧目录：
+确认里面的东西都不再需要后，手动删除旧目录。`~/claude-mem-lite/` 里还在的数据库没有被迁移（见上文），下面的命令会删掉它：
 ```bash
 rm -rf ~/.claude-mem/       # 原版 claude-mem
-rm -rf ~/claude-mem-lite/   # v0.5 前的非隐藏目录（如未自动迁移）
+rm -rf ~/claude-mem-lite/   # 首个发布版之前的非隐藏目录（不是本仓库的 git 克隆）
 ```
 
 ### 目录结构

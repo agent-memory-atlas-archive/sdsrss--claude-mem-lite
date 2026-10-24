@@ -1,9 +1,9 @@
-// D#561: the migration of the unhidden data dir (~/claude-mem-lite/, before v0.5) moves only a
-// store, and only into a data dir that holds none of a store's files. It used to remove a data dir
-// holding no `*.db` name and rename ~/claude-mem-lite into its place: after the set-aside command
-// that took the kept file and every snapshot, and a `git clone` of this repository run from ~ is
-// at that path. Each case opens the store in a child, since DB_DIR is
-// fixed from CLAUDE_MEM_DIR when lib/data-paths.mjs is first imported.
+// D#561: the migration of the unhidden data dir (~/claude-mem-lite/, before the first release)
+// moves only a store, and only into a data dir that holds none of a store's files. It used to
+// remove a data dir holding no `*.db` name and rename ~/claude-mem-lite into its place: after the
+// set-aside command that took the kept file, and a `git clone` of this repository run from ~ is at
+// that path. Each case opens the store in a child, since DB_DIR is fixed from CLAUDE_MEM_DIR when
+// lib/data-paths.mjs is first imported.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -129,7 +129,7 @@ function writeClone(dir) {
   write(join(dir, 'hook.mjs'), '// clone\n');
 }
 
-/** The data dir after the set-aside command: the kept file and its log, and a snapshot. */
+/** A data dir holding a kept copy of a broken store, its log and a snapshot. */
 function writeSetAside(dir) {
   write(join(dir, 'claude-mem-lite.db.corrupt-2026-10-01T00-00-00-000Z'), 'broken store bytes');
   write(join(dir, 'claude-mem-lite.db.corrupt-2026-10-01T00-00-00-000Z-wal'), 'broken log bytes');
@@ -207,7 +207,7 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
   });
 
   // FAILS IF the backup install makes of an original claude-mem store (~/.claude-mem) counts as one
-  // of this store's files: the pre-v0.5 store stays behind and the open creates an empty one.
+  // of this store's files: the unhidden dir's store stays behind and the open creates an empty one.
   it('a legacy store beside a data dir holding only the claude-mem backup: the store moves', () => {
     const { home, legacy, dataDir } = sandbox();
     writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-beside-backup');

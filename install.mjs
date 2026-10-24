@@ -531,7 +531,7 @@ export async function withSwapBarrier(fn) {
 }
 
 // Creates the data dirs the swap barrier then writes its marker into. A store left in the
-// unhidden dir of versions before v0.5 (~/claude-mem-lite/) is ensureDb's to move
+// unhidden dir of versions before the first release (~/claude-mem-lite/) is ensureDb's to move
 // (migrateUnhiddenStore). Install no longer renames that directory into the code dir (D#561): it
 // did so only under CLAUDE_MEM_DIR relocation, where the code dir does not exist yet, and that
 // directory can be a git clone of this repository made in ~.

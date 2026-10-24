@@ -121,10 +121,10 @@ log_warn() { echo -e "${YELLOW}⚠${NC} $*" >&2; }
 log_err()  { echo -e "${RED}✗${NC} $*" >&2; }
 
 # 1. Migrate unhidden dir (~/claude-mem-lite/ → ~/.claude-mem-lite/)
-#    CODE_DIR, not DB_DIR, and deliberately: the pre-v0.5 unhidden directory held the
-#    INSTALL — server.mjs, hook.mjs, package.json — and CODE_DIR is the one location that
-#    must never follow the relocation env var. Moving it into a relocated DB_DIR would
-#    strand every absolute path settings.json and the MCP registration baked.
+#    CODE_DIR, not DB_DIR, and deliberately: the unhidden directory of versions before the
+#    first release held the INSTALL — server.mjs, hook.mjs, package.json — and CODE_DIR is the
+#    one location that must never follow the relocation env var. Moving it into a relocated
+#    DB_DIR would strand every absolute path settings.json and the MCP registration baked.
 if [[ -d "$OLD_UNHIDDEN_DIR" && ! -d "$CODE_DIR" ]]; then
   mv "$OLD_UNHIDDEN_DIR" "$CODE_DIR"
   log_ok "Migrated ~/claude-mem-lite/ → ~/.claude-mem-lite/"

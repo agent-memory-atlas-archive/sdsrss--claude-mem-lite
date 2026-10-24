@@ -286,7 +286,7 @@ describe('plugin-cache-guard', () => {
         expect(hasInstallManagedHooks({ home })).toBe(true);
         // No C:\ here: a dead entry, which must not authorise clearing the plugin manifest.
         expect(hasLiveInstallManagedHooks({ home })).toBe(false);
-        writeSettings(home, 'node "C:\\Users\\u\\claude-mem-lite\\hook.mjs" stop'); // pre-v0.5 dir
+        writeSettings(home, 'node "C:\\Users\\u\\claude-mem-lite\\hook.mjs" stop'); // pre-2.0.0 unhidden dir
         expect(hasInstallManagedHooks({ home })).toBe(true);
       } finally {
         rmSync(home, { recursive: true, force: true });

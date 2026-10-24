@@ -5,7 +5,7 @@
 // here (see memFtsCheckSchema). No shared state beyond the `db` handle passed
 // in from the server-process module scope.
 
-import { checkFTSIntegrity, rebuildFTS } from '../schema.mjs';
+import { checkFTSIntegrity, rebuildIndexes } from '../schema.mjs';
 
 /**
  * Handle `mem_fts_check({ action })`. Returns an MCP content wrapper.
@@ -24,8 +24,9 @@ export function handleMemFtsCheck(db, args) {
         : `FTS5 issues found:\n${result.details.join('\n')}`;
     return { content: [{ type: 'text', text }] };
   }
-  // args.action === 'rebuild' (Zod enum enforces one of the two)
-  const result = rebuildFTS(db);
+  // args.action === 'rebuild' (Zod enum enforces one of the two). The FTS5 indexes, then every
+  // other index, as `fts-check rebuild` does (D#558).
+  const result = rebuildIndexes(db);
   const summary =
     result.errors.length > 0
       ? `Rebuilt: ${result.rebuilt.join(', ')}. Errors: ${result.errors.join(', ')}`

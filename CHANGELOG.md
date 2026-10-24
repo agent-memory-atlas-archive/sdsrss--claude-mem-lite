@@ -19,6 +19,8 @@ All notable changes to claude-mem-lite are documented in this file.
 - **body-parser 2.4.0 and fast-uri 3.1.9**, lockfile only. `npm audit --omit=dev` reported
   body-parser 2.0.0–2.3.0 (high, GHSA-27r3-jxmh-p828) and fast-uri 3.0.0–3.1.8 (moderate, four
   advisories); both come in through `@modelcontextprotocol/sdk`.
+- **Development dependencies** (#48): vitest and @vitest/coverage-v8 5.0.5, eslint 10.13.0, knip
+  6.42.1. The published package does not install them.
 - **Known issue** (D#573): with the plugin, `CLAUDE_MEM_DIR` on another filesystem than
   `~/claude-mem-lite`, a database left there while `~/.claude-mem-lite` exists, and an original
   claude-mem store in `~/.claude-mem`, each session start adds another copy of that claude-mem store

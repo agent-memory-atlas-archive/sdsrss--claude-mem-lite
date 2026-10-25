@@ -229,6 +229,64 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
     expect(readdirSync(dataDir).filter((f) => f.startsWith('.legacy-backup-copy-'))).toEqual([live]);
   });
 
+  // A session start killed partway (the hook's 30 s cap) must leave no backup, or the guard closes
+  // on a partial one for good: killed while copying the database, before placing its log, and
+  // between placing the log and placing the database. Copying straight to the backup name, or
+  // placing the database before its log, leaves a backup the next session start does not redo.
+  it.each([
+    ['while copying the database', 'cp', '"$1"', '/claude-mem\\.db$'],
+    ['before placing the log', 'mv', '"${@: -1}"', '-wal$'],
+    [
+      'between placing the log and the database',
+      'mv',
+      '"${@: -1}"',
+      '/claude-mem-lite\\.db\\.legacy-backup-[0-9]+$',
+    ],
+  ])('a session start killed %s leaves no backup, and the next one makes it whole', (_l, tool, arg, re) => {
+    const home = join(sandbox, 'home');
+    const dataDir = join(home, '.claude-mem-lite');
+    plantWalOnlyClaudeMem(home);
+    const bin = join(sandbox, 'bin');
+    mkdirSync(bin);
+    const real = spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
+    // The wrapper stands in for the hook runner's kill: it kills the script that called it, a copy
+    // after writing part of the file, a rename before renaming.
+    const partial = tool === 'cp' ? 'head -c 100 "$1" > "${@: -1}"; ' : '';
+    writeFileSync(
+      join(bin, tool),
+      `#!/bin/bash\nif [[ ${arg} =~ ${re} ]]; then ${partial}kill -9 $PPID; exit 1; fi\nexec ${real} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const killed = spawnSync('bash', [SETUP_SH], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        HOME: home,
+        CLAUDE_PLUGIN_ROOT: makeHealthyRoot(),
+        CLAUDE_MEM_DIR: '',
+        CLAUDE_MEM_RUNTIME_DIR: '',
+        MEM_NO_AUTO_ADOPT: '1',
+      },
+    });
+    expect(killed.signal, 'premise: the session start was killed').toBe('SIGKILL');
+    expect(mainBackups(dataDir)).toEqual([]);
+
+    const r = runSetup({ home, dataDir: undefined });
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+    const [main, ...more] = mainBackups(dataDir);
+    expect(more).toEqual([]);
+    const db = new Database(join(dataDir, main), { readonly: true });
+    try {
+      expect(db.prepare('SELECT count(*) FROM t').pluck().get()).toBe(40);
+    } finally {
+      db.close();
+    }
+    expect(readdirSync(dataDir).filter((f) => f.startsWith('.legacy-backup-copy-'))).toEqual([]);
+  });
+
   it('writes no legacy backup when the RELOCATED dir already holds a database', () => {
     // The unbounded-copy bug stated as one run: this user has a working relocated install,
     // so the legacy backup has nothing to offer and must not be written — anywhere. Before

@@ -274,6 +274,58 @@ syncBuiltinESMExports();
     }
   });
 
+  // Placed the other way round, a copy killed between the two renames left the store's backup
+  // without its log, and every later install skipped. The kill comes from an fs preload: the third
+  // renameSync of the run (the first is the rename that fails with EXDEV) exits the process.
+  it('a copy killed between placing the log and placing the store is made again with its log', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      writeFileSync(join(oldDir, 'claude-mem.db'), 'main');
+      writeFileSync(join(oldDir, 'claude-mem.db-wal'), 'wal');
+      const shim = join(a, 'kill-shim.mjs');
+      writeFileSync(
+        shim,
+        `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.renameSync;
+let n = 0;
+fs.renameSync = function (...args) {
+  if (++n === 3) process.kill(process.pid, 'SIGKILL');
+  return real.apply(this, args);
+};
+syncBuiltinESMExports();
+`,
+      );
+      const run = (preload, now) =>
+        spawnSync(
+          process.execPath,
+          [
+            ...(preload ? ['--import', pathToFileURL(shim).href] : []),
+            '--input-type=module',
+            '-e',
+            `const m = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, '..', 'install.mjs')).href)}); console.log(m.migrateLegacyClaudeMemData(${JSON.stringify(oldDir)}, ${JSON.stringify(newDir)}, { now: ${now} }).action);`,
+          ],
+          { encoding: 'utf8', env: { ...process.env, MEM_NO_AUTO_ADOPT: '1' } },
+        );
+      expect(run(true, 1700000000000).signal, 'premise: the copy was killed').toBe('SIGKILL');
+      const again = run(false, 1700000000001);
+      expect(again.status, again.stderr).toBe(0);
+      expect(again.stdout.trim()).toBe('copied');
+      expect(readFileSync(join(newDir, 'claude-mem-lite.db.legacy-backup-1700000000001'), 'utf8')).toBe(
+        'main',
+      );
+      expect(readFileSync(join(newDir, 'claude-mem-lite.db.legacy-backup-1700000000001-wal'), 'utf8')).toBe(
+        'wal',
+      );
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
   // D#584: a log placed under the paired name starts with the backup's own name, and a copy killed
   // between placing the log and placing the store left only that.
   it('a backup log without its store is not a backup: the copy is made', () => {

@@ -150,9 +150,12 @@ fi
 #
 #    The log goes under the name SQLite pairs with the backup (D#584: the database alone lacked the
 #    rows only in the log). Each file is copied under a private name and then moved into place, the
-#    database last, so a session start killed partway leaves no backup and the next one copies
-#    again; the private files of a copy whose process has exited are removed first (another session
-#    starting at the same time keeps its own).
+#    database last, so a session start killed partway leaves no backup; the next one copies again
+#    while no database has been created yet. Whether there is a log is decided before the copy, so
+#    a private copy that went away fails the backup rather than leaving the log out of it.
+#    Private files not written for ten minutes are removed first: a session start is killed at
+#    30 s, so none of them belongs to a running copy. install's own (`.legacy-backup-copy-`) are
+#    install's to remove, under its lock.
 OLD_DIR="$HOME/.claude-mem"
 has_legacy_backup() {
   local f
@@ -161,24 +164,17 @@ has_legacy_backup() {
   done
   return 1
 }
-sweep_legacy_copies() {
-  local f pid
-  for f in "$DB_DIR"/.legacy-backup-copy-*; do
-    [[ -e "$f" ]] || continue
-    pid="${f##*/.legacy-backup-copy-}"
-    pid="${pid%%-*}"
-    if [[ "$pid" =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2>/dev/null; then rm -f "$f"; fi
-  done
-}
-sweep_legacy_copies
+find "$DB_DIR" -maxdepth 1 -name '.legacy-backup-setup-*' -mmin +10 -exec rm -f {} + 2>/dev/null || true
 if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" && ! -f "$DB_DIR/claude-mem.db" ]] &&
   ! has_legacy_backup; then
   TS="$(date +%s)"
   BACKUP="$DB_DIR/claude-mem-lite.db.legacy-backup-$TS"
-  TMP="$DB_DIR/.legacy-backup-copy-$$-$TS"
-  if { [[ ! -f "$OLD_DIR/claude-mem.db-wal" ]] || cp "$OLD_DIR/claude-mem.db-wal" "$TMP-wal" 2>/dev/null; } &&
+  TMP="$DB_DIR/.legacy-backup-setup-$$-$TS"
+  WAL="$OLD_DIR/claude-mem.db-wal"
+  [[ -f "$WAL" ]] || WAL=""
+  if { [[ -z "$WAL" ]] || cp "$WAL" "$TMP-wal" 2>/dev/null; } &&
     cp "$OLD_DIR/claude-mem.db" "$TMP" 2>/dev/null &&
-    { [[ ! -f "$TMP-wal" ]] || mv "$TMP-wal" "$BACKUP-wal"; } &&
+    { [[ -z "$WAL" ]] || mv "$TMP-wal" "$BACKUP-wal"; } &&
     mv "$TMP" "$BACKUP"; then
     log_info "Legacy ~/.claude-mem/ DB is schema-incompatible; backed up to $(basename "$BACKUP") (a fresh DB will be created). Old ~/.claude-mem/ preserved."
   else

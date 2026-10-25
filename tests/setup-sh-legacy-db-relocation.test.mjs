@@ -26,6 +26,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { spawnSync } from 'child_process';
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -34,6 +35,7 @@ import {
   readFileSync,
   rmSync,
   copyFileSync,
+  utimesSync,
 } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -41,6 +43,7 @@ import { fileURLToPath } from 'url';
 import { resolveDataDir } from '../lib/resolve-data-dir.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 const SETUP_SH = join(REPO_ROOT, 'scripts', 'setup.sh');
 
 let sandbox;
@@ -66,6 +69,27 @@ function runSetup({ home, dataDir }) {
       HOME: home,
       CLAUDE_PLUGIN_ROOT: makeHealthyRoot(),
       CLAUDE_MEM_DIR: dataDir ?? '',
+      CLAUDE_MEM_RUNTIME_DIR: '',
+      MEM_NO_AUTO_ADOPT: '1',
+    },
+  });
+}
+
+/** setup.sh with `tool` on PATH replaced by a bash wrapper whose first lines are `body`. */
+function runSetupWithWrapper({ home, tool, body }) {
+  const bin = join(sandbox, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const real = spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
+  writeFileSync(join(bin, tool), `#!/bin/bash\n${body}\nexec ${real} "$@"\n`, { mode: 0o755 });
+  return spawnSync('bash', [SETUP_SH], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: home,
+      CLAUDE_PLUGIN_ROOT: makeHealthyRoot(),
+      CLAUDE_MEM_DIR: '',
       CLAUDE_MEM_RUNTIME_DIR: '',
       MEM_NO_AUTO_ADOPT: '1',
     },
@@ -212,27 +236,78 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
     expect(mainBackups(dataDir)).toHaveLength(1);
   });
 
-  // The copy is written under a private name first; a session start killed partway leaves that
-  // name, a partial copy of the store. One whose process still runs is another session's copy.
-  it('removes a private copy whose process has exited, and keeps one whose process runs', () => {
+  // A session start is killed at 30 s, so a private file not written for ten minutes belongs to no
+  // running copy. install's private files are install's to remove (it does, under its lock): an
+  // install copying the store can go longer than that between writes to one of them.
+  it("removes its own private files once ten minutes old, keeps fresh ones, and leaves install's", () => {
     const home = join(sandbox, 'home');
     const dataDir = join(home, '.claude-mem-lite');
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, 'claude-mem-lite.db'), 'CURRENT');
-    const dead = `.legacy-backup-copy-${spawnSync(process.execPath, ['-e', '']).pid}-1600000000`;
-    const live = `.legacy-backup-copy-${process.pid}-1600000000`;
-    for (const n of [dead, `${dead}-wal`, live]) writeFileSync(join(dataDir, n), 'part of a copy');
+    const old = '.legacy-backup-setup-1234-1600000000';
+    const fresh = '.legacy-backup-setup-5678-1600000001';
+    const installs = `.legacy-backup-copy-${spawnSync(process.execPath, ['-e', '']).pid}-1600000000000`;
+    for (const n of [old, `${old}-wal`, fresh, installs]) writeFileSync(join(dataDir, n), 'part of a copy');
+    const hourAgo = Date.now() / 1000 - 3600;
+    for (const n of [old, `${old}-wal`, installs]) utimesSync(join(dataDir, n), hourAgo, hourAgo);
 
     const r = runSetup({ home, dataDir: undefined });
 
     expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
-    expect(readdirSync(dataDir).filter((f) => f.startsWith('.legacy-backup-copy-'))).toEqual([live]);
+    expect(
+      readdirSync(dataDir)
+        .filter((f) => f.startsWith('.legacy-backup-'))
+        .sort(),
+    ).toEqual([fresh, installs].sort());
+  });
+
+  // v6.30.8 r1 defects F-3: under `set -e`, a private file the sweep could not remove ended the
+  // session-start script before its later steps.
+  it.skipIf(isRoot)('a private file it cannot remove does not stop the session start', () => {
+    const home = join(sandbox, 'home');
+    const dataDir = join(home, '.claude-mem-lite');
+    mkdirSync(join(dataDir, 'runtime'), { recursive: true });
+    writeFileSync(join(dataDir, 'claude-mem-lite.db'), 'CURRENT');
+    const hourAgo = Date.now() / 1000 - 3600;
+    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    for (const n of [`.legacy-backup-setup-${dead}-1600000000`, `.legacy-backup-copy-${dead}-1600000000`]) {
+      writeFileSync(join(dataDir, n), 'part of a copy');
+      utimesSync(join(dataDir, n), hourAgo, hourAgo);
+    }
+    chmodSync(dataDir, 0o555);
+    let r;
+    try {
+      r = runSetup({ home, dataDir: undefined });
+    } finally {
+      chmodSync(dataDir, 0o755);
+    }
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+  });
+
+  // v6.30.8 r1 defects F-1: whether to place the log was read from whether its private copy existed
+  // at that moment, so a private log copy that went away was not missed, and the database was placed
+  // without it, closing the guard.
+  it('a private log copy that goes away before it is placed: no backup database is placed', () => {
+    const home = join(sandbox, 'home');
+    const dataDir = join(home, '.claude-mem-lite');
+    plantWalOnlyClaudeMem(home);
+
+    const r = runSetupWithWrapper({
+      home,
+      tool: 'cp',
+      body: 'if [[ "$1" =~ /claude-mem\\.db$ ]]; then rm -f "${@: -1}-wal"; fi',
+    });
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+    expect(mainBackups(dataDir)).toEqual([]);
   });
 
   // A session start killed partway (the hook's 30 s cap) must leave no backup, or the guard closes
   // on a partial one for good: killed while copying the database, before placing its log, and
-  // between placing the log and placing the database. Copying straight to the backup name, or
-  // placing the database before its log, leaves a backup the next session start does not redo.
+  // between placing the log and placing the database. The next session start copies again while
+  // no database has been created yet (the guard's other condition). Copying straight to the
+  // backup name, or placing the database before its log, leaves a backup it does not redo.
   it.each([
     ['while copying the database', 'cp', '"$1"', '/claude-mem\\.db$'],
     ['before placing the log', 'mv', '"${@: -1}"', '-wal$'],
@@ -246,29 +321,13 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
     const home = join(sandbox, 'home');
     const dataDir = join(home, '.claude-mem-lite');
     plantWalOnlyClaudeMem(home);
-    const bin = join(sandbox, 'bin');
-    mkdirSync(bin);
-    const real = spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
     // The wrapper stands in for the hook runner's kill: it kills the script that called it, a copy
     // after writing part of the file, a rename before renaming.
     const partial = tool === 'cp' ? 'head -c 100 "$1" > "${@: -1}"; ' : '';
-    writeFileSync(
-      join(bin, tool),
-      `#!/bin/bash\nif [[ ${arg} =~ ${re} ]]; then ${partial}kill -9 $PPID; exit 1; fi\nexec ${real} "$@"\n`,
-      { mode: 0o755 },
-    );
-    const killed = spawnSync('bash', [SETUP_SH], {
-      encoding: 'utf8',
-      timeout: 60_000,
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH}`,
-        HOME: home,
-        CLAUDE_PLUGIN_ROOT: makeHealthyRoot(),
-        CLAUDE_MEM_DIR: '',
-        CLAUDE_MEM_RUNTIME_DIR: '',
-        MEM_NO_AUTO_ADOPT: '1',
-      },
+    const killed = runSetupWithWrapper({
+      home,
+      tool,
+      body: `if [[ ${arg} =~ ${re} ]]; then ${partial}kill -9 $PPID; exit 1; fi`,
     });
     expect(killed.signal, 'premise: the session start was killed').toBe('SIGKILL');
     expect(mainBackups(dataDir)).toEqual([]);
@@ -284,7 +343,6 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
     } finally {
       db.close();
     }
-    expect(readdirSync(dataDir).filter((f) => f.startsWith('.legacy-backup-copy-'))).toEqual([]);
   });
 
   it('writes no legacy backup when the RELOCATED dir already holds a database', () => {

@@ -180,7 +180,7 @@ export function copyHookScripts(srcDir, destDir) {
  * Returns: {action: 'noop'|'skip'|'backed-up'|'copied', backupPath?}
  *   - noop: no legacy DB found
  *   - skip: working `claude-mem-lite.db` already exists in newDir, or (across filesystems) a backup
- *     an earlier install copied there
+ *     database is already there (an earlier install's copy, or the plugin's)
  *   - backed-up: legacy files renamed to `<newDir>/claude-mem-lite.db.legacy-backup-<ts>` and,
  *     beside it, that name with `-wal` and `-shm` added, the names SQLite pairs with it (D#584: the
  *     log was named `claude-mem-lite.db-wal.legacy-backup-<ts>`, and the backup opened as found
@@ -188,8 +188,7 @@ export function copyHookScripts(srcDir, destDir) {
  *   - copied: newDir is on another filesystem, where a rename fails with EXDEV (D#579): the files
  *     are copied to those names and the source is left in place, as the plugin's setup.sh does.
  *     Every file is copied under a private name first and then renamed into place, the store's own
- *     file last, so a copy killed partway leaves no backup of the store, and the next install makes
- *     it whole.
+ *     file last, so a copy killed partway leaves no backup of the store.
  */
 export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
   const legacyDb = join(oldDir, 'claude-mem.db');
@@ -204,7 +203,8 @@ export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
     renameSync(legacyDb, backupPath);
   } catch (e) {
     if (e?.code !== 'EXDEV') throw e;
-    // A copy killed partway left its private file; install runs one at a time (install.lock).
+    // A copy killed partway left its private files. Only install names files so (the plugin's
+    // session start has its own prefix), and install runs one at a time (install.lock).
     const names = readdirSync(newDir);
     for (const n of names) if (n.startsWith('.legacy-backup-copy-')) rmSync(join(newDir, n), { force: true });
     // The source stays, so a backup of the store here is the copy an earlier install made. Its log

@@ -228,9 +228,10 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
     const claudeMem = join(home, '.claude-mem');
     write(join(claudeMem, 'claude-mem.db'), 'original claude-mem store');
     write(join(claudeMem, 'claude-mem.db-wal'), 'original claude-mem log');
+    write(join(claudeMem, 'claude-mem.db-shm'), 'original claude-mem shm');
     expect(migrateLegacyClaudeMemData(claudeMem, dataDir).action).toBe('backed-up'); // premise
     const data = listing(dataDir);
-    expect(Object.keys(data)).toHaveLength(2); // premise: the backup and its log
+    expect(Object.keys(data)).toHaveLength(3); // premise: the backup, its log and its -shm
     openStore(home);
     expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-beside-backup')).toBe(1);
     expectKept(dataDir, data);

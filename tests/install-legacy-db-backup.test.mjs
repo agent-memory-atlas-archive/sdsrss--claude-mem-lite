@@ -20,9 +20,9 @@ import {
   rmSync,
   statSync,
 } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { spawnSync } from 'child_process';
-import { pathToFileURL } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { homedir, tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { migrateLegacyClaudeMemData } from '../install.mjs';
@@ -356,6 +356,33 @@ syncBuiltinESMExports();
       const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
       expect(result.action).toBe('copied');
       expect(rowsAsFound(result.backupPath)).toBe(40);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  // v6.30.8 r1 defects F-1: the plugin's session start copies the same store under private names
+  // too, without install's lock, and install removed every private file it found, a copy the
+  // session start was making included. The prefix comes from setup.sh itself.
+  it("leaves the private files of the plugin's session start", () => {
+    const setupSh = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'setup.sh'),
+      'utf8',
+    );
+    const prefix = /TMP="\$DB_DIR\/(\.legacy-backup-[a-z]+-)/.exec(setupSh)?.[1];
+    expect(prefix, 'premise: setup.sh names its private files').toBeTruthy();
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      mkdirSync(newDir);
+      writeFileSync(join(oldDir, 'claude-mem.db'), 'main');
+      const theirs = `${prefix}${process.pid}-1700000000`;
+      writeFileSync(join(newDir, theirs), 'a copy being made');
+      expect(migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 }).action).toBe('copied');
+      expect(existsSync(join(newDir, theirs))).toBe(true);
     } finally {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });

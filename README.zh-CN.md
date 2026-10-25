@@ -169,8 +169,9 @@ node install.mjs install
 所有安装方式自动检测并从旧版本迁移：
 
 **从 claude-mem 原版（`~/.claude-mem/`）：**
-- `claude-mem.db` 连同 `-wal`/`-shm` 以 `.legacy-backup-<时间>` 的名字（`claude-mem-lite.db.legacy-backup-<时间>`、`claude-mem-lite.db-wal.legacy-backup-<时间>`）移入 `~/.claude-mem-lite/`，前提是 `~/.claude-mem-lite/claude-mem-lite.db` 还不存在
-- 插件安装只把 `claude-mem.db` 以上面第一个名字复制进数据目录，`~/.claude-mem/` 原样不动；数据目录里既没有数据库、也没有这样的备份时才复制
+- `claude-mem.db` 连同 `-wal`/`-shm` 以 `claude-mem-lite.db.legacy-backup-<时间>`、`claude-mem-lite.db.legacy-backup-<时间>-wal` 和 `-shm` 的名字移入 `~/.claude-mem-lite/`，前提是 `~/.claude-mem-lite/claude-mem-lite.db` 还不存在。数据目录在另一个文件系统上时改为复制，`~/.claude-mem/` 原样不动，数据目录里已有备份就不再复制
+- 插件安装把 `claude-mem.db` 连同 `-wal` 以上面的名字复制进数据目录，`~/.claude-mem/` 原样不动；数据目录里既没有数据库、也没有这样的备份时才复制
+- v6.30.8 之前 `install` 做的备份，日志名是 `claude-mem-lite.db-wal.legacy-backup-<时间>`，SQLite 打开备份时不会读这个日志；打开备份前先把它改名为 `claude-mem-lite.db.legacy-backup-<时间>-wal`
 - 新建一个数据库：原版 claude-mem 的 schema 没有升级路径
 
 **从首个发布版（2.0.0）之前的非隐藏目录（`~/claude-mem-lite/`）：**

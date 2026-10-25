@@ -236,6 +236,20 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
     expectKept(dataDir, data);
   });
 
+  // FAILS IF the names an earlier version gave the claude-mem backup's log and shared-memory file
+  // (`claude-mem-lite.db-wal.legacy-backup-<ms>`, before D#584) count as this store's files.
+  it('a legacy store beside a claude-mem backup named as earlier versions name it: the store moves', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-beside-old-backup');
+    write(join(dataDir, 'claude-mem-lite.db.legacy-backup-1700000000000'), 'original claude-mem store');
+    write(join(dataDir, 'claude-mem-lite.db-wal.legacy-backup-1700000000000'), 'original claude-mem log');
+    write(join(dataDir, 'claude-mem-lite.db-shm.legacy-backup-1700000000000'), 'original claude-mem shm');
+    const data = listing(dataDir);
+    openStore(home);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-beside-old-backup')).toBe(1);
+    expectKept(dataDir, data);
+  });
+
   // FAILS IF the relocated data dir gets the same removal as the default one.
   it('under CLAUDE_MEM_DIR: a clone beside a set-aside data dir both stay', () => {
     const { root, home, legacy } = sandbox();

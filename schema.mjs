@@ -1662,18 +1662,19 @@ function capBusyWaits(db) {
  * ~/claude-mem-lite/, into DB_DIR. Only the store's own files move (the database, then its -wal
  * and -shm, under the same name; ensureDb then renames claude-mem.db), and only into a DB_DIR
  * holding no file of a store's family: a database, a log, a snapshot or a kept copy. install's
- * backup of an original claude-mem store (migrateLegacyClaudeMemData, `.legacy-backup-<ms>`) is
- * not one. Nothing is removed. It used to rename the whole directory over a DB_DIR it first
- * removed when DB_DIR held no `*.db` name (D#561): after the set-aside command that took the kept
- * file, DB_DIR is also the code dir of a direct install, and a git clone of this repository made
- * in ~ is at that path.
+ * backup of an original claude-mem store (migrateLegacyClaudeMemData, `.legacy-backup-<ms>` and
+ * its `-wal` and `-shm`) is not one. Nothing is removed. It used to rename the whole directory over
+ * a DB_DIR it first removed when DB_DIR held no `*.db` name (D#561): after the set-aside command
+ * that took the kept file, DB_DIR is also the code dir of a direct install, and a git clone of
+ * this repository made in ~ is at that path.
  */
 function migrateUnhiddenStore() {
   const oldDir = join(homedir(), 'claude-mem-lite');
   const name = ['claude-mem-lite.db', 'claude-mem.db'].find((n) => existsSync(join(oldDir, n)));
   if (!name) return;
   const storeFile = (f) =>
-    (f.startsWith('claude-mem-lite.db') || f.startsWith('claude-mem.db')) && !/\.legacy-backup-\d+$/.test(f);
+    (f.startsWith('claude-mem-lite.db') || f.startsWith('claude-mem.db')) &&
+    !/\.legacy-backup-\d+(-wal|-shm)?$/.test(f);
   if (existsSync(DB_DIR) && readdirSync(DB_DIR).some(storeFile)) return;
   mkdirSync(DB_DIR, { recursive: true, mode: 0o700 });
   for (const ext of ['', '-wal', '-shm']) {

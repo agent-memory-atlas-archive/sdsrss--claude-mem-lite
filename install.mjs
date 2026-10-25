@@ -181,12 +181,15 @@ export function copyHookScripts(srcDir, destDir) {
  *   - noop: no legacy DB found
  *   - skip: working `claude-mem-lite.db` already exists in newDir, or (across filesystems) a backup
  *     an earlier install copied there
- *   - backed-up: legacy files renamed to `<newDir>/claude-mem-lite.db.legacy-backup-<ts>` etc.
+ *   - backed-up: legacy files renamed to `<newDir>/claude-mem-lite.db.legacy-backup-<ts>` and,
+ *     beside it, that name with `-wal` and `-shm` added, the names SQLite pairs with it (D#584: the
+ *     log was named `claude-mem-lite.db-wal.legacy-backup-<ts>`, and the backup opened as found
+ *     read none of the rows only in it)
  *   - copied: newDir is on another filesystem, where a rename fails with EXDEV (D#579): the files
  *     are copied to those names and the source is left in place, as the plugin's setup.sh does.
- *     Each file is written under a private name first, and the store's own file is placed last, so
- *     a copy killed partway leaves no backup of the store, and the next install makes it whole (a
- *     sidecar it placed stays beside the new one).
+ *     Every file is copied under a private name first and then renamed into place, the store's own
+ *     file last, so a copy killed partway leaves no backup of the store, and the next install makes
+ *     it whole.
  */
 export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
   const legacyDb = join(oldDir, 'claude-mem.db');
@@ -204,21 +207,17 @@ export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
     // A copy killed partway left its private file; install runs one at a time (install.lock).
     const names = readdirSync(newDir);
     for (const n of names) if (n.startsWith('.legacy-backup-copy-')) rmSync(join(newDir, n), { force: true });
-    // The source stays, so a backup of the store here is the copy an earlier install made. The
-    // store's own file is placed last, so a copy killed before it left none, and is made again.
-    if (names.some((n) => n.startsWith('claude-mem-lite.db.legacy-backup-'))) return { action: 'skip' };
-    for (const ext of ['-wal', '-shm', '']) {
-      const src = legacyDb + ext;
-      if (!existsSync(src)) continue;
-      const tmp = join(newDir, `.legacy-backup-copy-${process.pid}-${ts}`);
-      copyFileSync(src, tmp);
-      renameSync(tmp, join(newDir, `claude-mem-lite.db${ext}.legacy-backup-${ts}`));
-    }
+    // The source stays, so a backup of the store here is the copy an earlier install made. Its log
+    // alone is not: a copy killed between the renames below leaves that.
+    if (names.some((n) => /^claude-mem-lite\.db\.legacy-backup-\d+$/.test(n))) return { action: 'skip' };
+    const exts = ['-wal', '-shm', ''].filter((ext) => existsSync(legacyDb + ext));
+    const tmp = join(newDir, `.legacy-backup-copy-${process.pid}-${ts}`);
+    for (const ext of exts) copyFileSync(legacyDb + ext, tmp + ext);
+    for (const ext of exts) renameSync(tmp + ext, backupPath + ext);
     return { action: 'copied', backupPath };
   }
   for (const ext of ['-wal', '-shm']) {
-    const src = legacyDb + ext;
-    if (existsSync(src)) renameSync(src, join(newDir, `claude-mem-lite.db${ext}.legacy-backup-${ts}`));
+    if (existsSync(legacyDb + ext)) renameSync(legacyDb + ext, backupPath + ext);
   }
   return { action: 'backed-up', backupPath };
 }

@@ -8,7 +8,9 @@
 // and the user can recover the file later if they want.
 
 import { describe, it, expect } from 'vitest';
+import Database from 'better-sqlite3';
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   writeFileSync,
@@ -24,6 +26,35 @@ import { pathToFileURL } from 'url';
 import { homedir, tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { migrateLegacyClaudeMemData } from '../install.mjs';
+
+/** A WAL store at `path` whose `rows` rows are only in its -wal, copied while the writer holds them. */
+function plantWalOnlyStore(path, rows) {
+  const work = mkdtempSync(join(tmpdir(), 'mem-legacy-live-'));
+  try {
+    const db = new Database(join(work, 'live.db'));
+    db.pragma('journal_mode = WAL');
+    db.pragma('wal_autocheckpoint = 0');
+    db.exec('CREATE TABLE t (x)');
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    const insert = db.prepare('INSERT INTO t VALUES (?)');
+    for (let i = 0; i < rows; i++) insert.run(i);
+    copyFileSync(join(work, 'live.db'), path);
+    copyFileSync(join(work, 'live.db-wal'), `${path}-wal`);
+    db.close();
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/** The rows SQLite reads from the file at `path` opened as it is, beside whatever log it pairs. */
+function rowsAsFound(path) {
+  const db = new Database(path, { readonly: true });
+  try {
+    return db.prepare('SELECT count(*) FROM t').pluck().get();
+  } finally {
+    db.close();
+  }
+}
 
 function makeDirs() {
   const root = join(tmpdir(), `mem-legacy-${randomUUID().slice(0, 8)}`);
@@ -63,9 +94,26 @@ describe('Bug 2: migrateLegacyClaudeMemData', () => {
       const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
       expect(result.action).toBe('backed-up');
       const stamps = readdirSync(newDir).filter((f) => f.includes('legacy-backup'));
-      expect(stamps.some((f) => f.endsWith('.db.legacy-backup-1700000000000'))).toBe(true);
-      expect(stamps.some((f) => f.endsWith('.db-wal.legacy-backup-1700000000000'))).toBe(true);
-      expect(stamps.some((f) => f.endsWith('.db-shm.legacy-backup-1700000000000'))).toBe(true);
+      expect(stamps.sort()).toEqual([
+        'claude-mem-lite.db.legacy-backup-1700000000000',
+        'claude-mem-lite.db.legacy-backup-1700000000000-shm',
+        'claude-mem-lite.db.legacy-backup-1700000000000-wal',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // D#584 (v6.30.8 r2 R2-9): the log was named claude-mem-lite.db-wal.legacy-backup-<ms>, which
+  // SQLite does not pair with claude-mem-lite.db.legacy-backup-<ms>, so the backup opened as found
+  // read none of the rows only in its log.
+  it('the backup opened as found reads the rows only in its log', () => {
+    const { root, oldDir, newDir } = makeDirs();
+    try {
+      plantWalOnlyStore(join(oldDir, 'claude-mem.db'), 40);
+      const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
+      expect(result.action).toBe('backed-up');
+      expect(rowsAsFound(result.backupPath)).toBe(40);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -138,12 +186,10 @@ describe.skipIf(!probe)('migrateLegacyClaudeMemData across filesystems (D#579)',
       const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
       expect(result.action).toBe('copied');
       expect(readFileSync(result.backupPath, 'utf8')).toBe('main');
-      expect(readFileSync(join(newDir, 'claude-mem-lite.db-wal.legacy-backup-1700000000000'), 'utf8')).toBe(
-        'wal',
-      );
+      expect(readFileSync(`${result.backupPath}-wal`, 'utf8')).toBe('wal');
       expect(readdirSync(newDir).sort()).toEqual([
-        'claude-mem-lite.db-wal.legacy-backup-1700000000000',
         'claude-mem-lite.db.legacy-backup-1700000000000',
+        'claude-mem-lite.db.legacy-backup-1700000000000-wal',
       ]);
       expect(
         readFileSync(join(oldDir, 'claude-mem.db'), 'utf8'),
@@ -214,15 +260,50 @@ syncBuiltinESMExports();
       const again = run(false, 1700000000001);
       expect(again.status, again.stderr).toBe(0);
       const names = readdirSync(newDir).sort();
-      const main = names.filter((n) => n.startsWith('claude-mem-lite.db.legacy-backup-'));
+      const main = names.filter((n) => /^claude-mem-lite\.db\.legacy-backup-\d+$/.test(n));
       expect(main).toHaveLength(1);
-      const ts = main[0].slice('claude-mem-lite.db.legacy-backup-'.length);
       expect(readFileSync(join(newDir, main[0]), 'utf8')).toBe('main');
-      expect(
-        readFileSync(join(newDir, `claude-mem-lite.db-wal.legacy-backup-${ts}`), 'utf8'),
-        'its log beside it',
-      ).toBe('wal');
-      expect(names.filter((n) => n.startsWith('.legacy-backup-copy-'))).toEqual([]);
+      expect(readFileSync(join(newDir, `${main[0]}-wal`), 'utf8'), 'its log beside it').toBe('wal');
+      expect(names, 'nothing else: no private copy, and no log of the killed copy').toEqual([
+        main[0],
+        `${main[0]}-wal`,
+      ]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  // D#584: a log placed under the paired name starts with the backup's own name, and a copy killed
+  // between placing the log and placing the store left only that.
+  it('a backup log without its store is not a backup: the copy is made', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      mkdirSync(newDir);
+      writeFileSync(join(oldDir, 'claude-mem.db'), 'main');
+      writeFileSync(join(newDir, 'claude-mem-lite.db.legacy-backup-1600000000000-wal'), 'a log alone');
+      const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
+      expect(result.action).toBe('copied');
+      expect(readFileSync(result.backupPath, 'utf8')).toBe('main');
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  it('the copy opened as found reads the rows only in its log (D#584)', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      plantWalOnlyStore(join(oldDir, 'claude-mem.db'), 40);
+      const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
+      expect(result.action).toBe('copied');
+      expect(rowsAsFound(result.backupPath)).toBe(40);
     } finally {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });

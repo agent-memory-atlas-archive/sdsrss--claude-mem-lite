@@ -23,6 +23,7 @@
 // clock to tick between runs, and a guard that has to sleep to say NO is a slow guard.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import { spawnSync } from 'child_process';
 import {
   mkdtempSync,
@@ -74,6 +75,27 @@ function runSetup({ home, dataDir }) {
 function legacyBackups(dir) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((f) => f.startsWith('claude-mem-lite.db.legacy-backup-'));
+}
+
+/** The main file of each backup, without its log: `claude-mem-lite.db.legacy-backup-<s>`. */
+function mainBackups(dir) {
+  return legacyBackups(dir).filter((f) => /^claude-mem-lite\.db\.legacy-backup-\d+$/.test(f));
+}
+
+/** An original claude-mem store whose 40 rows are only in its -wal, copied while the writer holds them. */
+function plantWalOnlyClaudeMem(home) {
+  const dir = join(home, '.claude-mem');
+  mkdirSync(dir, { recursive: true });
+  const db = new Database(join(sandbox, 'live.db'));
+  db.pragma('journal_mode = WAL');
+  db.pragma('wal_autocheckpoint = 0');
+  db.exec('CREATE TABLE t (x)');
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  const insert = db.prepare('INSERT INTO t VALUES (?)');
+  for (let i = 0; i < 40; i++) insert.run(i);
+  copyFileSync(join(sandbox, 'live.db'), join(dir, 'claude-mem.db'));
+  copyFileSync(join(sandbox, 'live.db-wal'), join(dir, 'claude-mem.db-wal'));
+  db.close();
 }
 
 /** A legacy claude-mem install sitting in the home directory, as a real one would. */
@@ -147,6 +169,64 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
 
     expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
     expect(legacyBackups(relocated)).toEqual(['claude-mem-lite.db.legacy-backup-1700000000']);
+  });
+
+  // D#584: the copy took the database without its -wal, so the backup lacked the rows only in the
+  // log, and a later install across filesystems skipped its own copy because this one was there.
+  it('the backup takes the log under the name SQLite pairs with it, and reads the rows only in it', () => {
+    const home = join(sandbox, 'home');
+    const dataDir = join(home, '.claude-mem-lite');
+    plantWalOnlyClaudeMem(home);
+
+    const r = runSetup({ home, dataDir: undefined });
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+    const [main, ...more] = mainBackups(dataDir);
+    expect(more).toEqual([]);
+    expect(
+      readdirSync(dataDir)
+        .filter((f) => f.includes('legacy-backup'))
+        .sort(),
+    ).toEqual([main, `${main}-wal`]);
+    const db = new Database(join(dataDir, main), { readonly: true });
+    try {
+      expect(db.prepare('SELECT count(*) FROM t').pluck().get()).toBe(40);
+    } finally {
+      db.close();
+    }
+    expect(existsSync(join(home, '.claude-mem', 'claude-mem.db-wal')), 'the source stays').toBe(true);
+  });
+
+  // A copy killed between placing the log and placing the database leaves the log alone; it
+  // starts with the backup's own name.
+  it('a backup log without its database does not close the guard', () => {
+    const home = join(sandbox, 'home');
+    const dataDir = join(home, '.claude-mem-lite');
+    mkdirSync(dataDir, { recursive: true });
+    plantLegacyClaudeMem(home);
+    writeFileSync(join(dataDir, 'claude-mem-lite.db.legacy-backup-1700000000-wal'), 'a log alone');
+
+    const r = runSetup({ home, dataDir: undefined });
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+    expect(mainBackups(dataDir)).toHaveLength(1);
+  });
+
+  // The copy is written under a private name first; a session start killed partway leaves that
+  // name, a partial copy of the store. One whose process still runs is another session's copy.
+  it('removes a private copy whose process has exited, and keeps one whose process runs', () => {
+    const home = join(sandbox, 'home');
+    const dataDir = join(home, '.claude-mem-lite');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'claude-mem-lite.db'), 'CURRENT');
+    const dead = `.legacy-backup-copy-${spawnSync(process.execPath, ['-e', '']).pid}-1600000000`;
+    const live = `.legacy-backup-copy-${process.pid}-1600000000`;
+    for (const n of [dead, `${dead}-wal`, live]) writeFileSync(join(dataDir, n), 'part of a copy');
+
+    const r = runSetup({ home, dataDir: undefined });
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+    expect(readdirSync(dataDir).filter((f) => f.startsWith('.legacy-backup-copy-'))).toEqual([live]);
   });
 
   it('writes no legacy backup when the RELOCATED dir already holds a database', () => {

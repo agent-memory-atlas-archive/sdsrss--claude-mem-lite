@@ -3166,14 +3166,11 @@ async function doctor() {
           // three reasons applies" — a line that names the wrong reason ends the
           // reader's search just as a false green does.
           dwarn(`FTS5 integrity: not checked — ${dbWriteBlocked}`);
-          dwarn(`Database integrity: not checked — ${dbWriteBlocked}`);
         } else {
           try {
-            const { checkFTSIntegrity, rebuildFTS, checkStoreIntegrity } = await import('./schema.mjs');
+            const { checkFTSIntegrity, rebuildFTS } = await import('./schema.mjs');
             const rwDb = new Database(DB_PATH);
             rwDb.pragma('busy_timeout = 3000');
-            const inUse =
-              'the database is in use by another process (a hook or session writing). Run doctor again in a moment.';
             try {
               const { healthy, details, busy } = checkFTSIntegrity(rwDb);
               if (healthy) {
@@ -3181,7 +3178,9 @@ async function doctor() {
               } else if (busy) {
                 // In use is not damage: no rebuild, which would be a long write under the
                 // live hooks' feet (or fail on the same lock).
-                dwarn(`FTS5 integrity: not checked — ${inUse}`);
+                dwarn(
+                  'FTS5 integrity: not checked — the database is in use by another process (a hook or session writing). Run doctor again in a moment.',
+                );
               } else {
                 dwarn('FTS5 integrity issues detected:');
                 for (const d of details) log(`    ${d}`);
@@ -3191,52 +3190,6 @@ async function doctor() {
                 if (errors.length > 0) {
                   fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
                   issues++;
-                }
-              }
-              // The whole store (D#590, D#559): the check above sees neither an ordinary index that
-              // lost entries nor FTS5 shadow rows out of key order. As above, only indexes are
-              // rebuilt. Its own try, so a throw here does not read as the FTS5 check failing.
-              if (busy) {
-                dwarn(`Database integrity: not checked — ${inUse}`);
-              } else {
-                try {
-                  const r = checkStoreIntegrity(rwDb);
-                  if (r.state === 'ok') {
-                    ok('Database integrity: ok');
-                  } else if (r.state === 'unchecked') {
-                    dwarn(`Database integrity: not checked — ${r.error}`);
-                  } else {
-                    dwarn('Database integrity issues detected:');
-                    for (const row of r.rows) log(`    ${row}`);
-                    log('  Rebuilding the indexes...');
-                    // count(*) reads an index, so a count that fell is one an index gave for rows
-                    // its table does not hold.
-                    const logFell = () => {
-                      for (const c of r.fell) log(`    ${c.table}: ${c.before} before, ${c.after} after`);
-                    };
-                    if (r.state === 'rebuilt' && r.fell.length > 0) {
-                      dwarn(
-                        'Database integrity: ok after rebuilding the indexes, and these tables now count fewer rows:',
-                      );
-                      logFell();
-                    } else if (r.state === 'rebuilt') {
-                      ok('Database integrity: ok after rebuilding the indexes');
-                    } else if (r.state === 'unrebuilt') {
-                      dwarn(
-                        `Database integrity: indexes not rebuilt — ${r.busy ? inUse : r.rebuildErrors.join(', ')}`,
-                      );
-                    } else {
-                      fail('Database integrity: not repaired by rebuilding the indexes');
-                      for (const row of r.after) log(`    ${row}`);
-                      if (r.fell.length > 0) {
-                        log('  These tables now count fewer rows:');
-                        logFell();
-                      }
-                      issues++;
-                    }
-                  }
-                } catch (e) {
-                  dwarn(`Database integrity: not checked — ${e.message}`);
                 }
               }
             } finally {

@@ -733,8 +733,7 @@ npx claude-mem-lite doctor            # 诊断问题
 ### doctor
 
 检查 Node.js 版本、依赖、服务器/钩子文件、数据库完整性、FTS5 索引、残留进程、MCP 注册状态，
-以及 marketplace clone 是否还能被更新。对能打开的库，完整性检查不过时，doctor 从表重建所有索引
-（即 `fts-check rebuild` 做的事），再查一遍。
+以及 marketplace clone 是否还能被更新。
 
 它用 `claude mcp list` 回答注册状态那一问，而这会**对你配置的每个 MCP server 做健康检查**——
 也就是逐个短暂启动，包括远程 endpoint。`status` 刻意不这么做：插件形态下它从 manifest 回答。

@@ -133,6 +133,22 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
     expect(legacyBackups(dataDir)).toEqual(['claude-mem-lite.db.legacy-backup-1700000000']);
   });
 
+  // A data dir whose path holds glob characters: the guard matched its backups as a pattern, so a
+  // `[1]` in the path never matched its own backup and the copy repeated (v6.30.7 r1 defects P3-2).
+  it('a backup it already made closes the guard under a data dir named with brackets', () => {
+    const home = join(sandbox, 'home');
+    const relocated = join(sandbox, 'data[1]');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(relocated, { recursive: true });
+    plantLegacyClaudeMem(home);
+    writeFileSync(join(relocated, 'claude-mem-lite.db.legacy-backup-1700000000'), 'LEGACY-DB-BYTES');
+
+    const r = runSetup({ home, dataDir: relocated });
+
+    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+    expect(legacyBackups(relocated)).toEqual(['claude-mem-lite.db.legacy-backup-1700000000']);
+  });
+
   it('writes no legacy backup when the RELOCATED dir already holds a database', () => {
     // The unbounded-copy bug stated as one run: this user has a working relocated install,
     // so the legacy backup has nothing to offer and must not be written — anywhere. Before

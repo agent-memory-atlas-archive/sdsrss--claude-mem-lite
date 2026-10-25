@@ -144,10 +144,18 @@ fi
 #    copied the legacy database again on every single SessionStart, without bound. Measured
 #    2026-09-14: control arm stable at 1 backup across three runs, relocated arm 1 → 3.
 #    A backup already in DB_DIR closes it as well: while every open fails before creating the
-#    database (D#569's EXDEV did), the first condition never closes (D#573).
+#    database (D#569's EXDEV did), the first condition never closes (D#573). Only the suffix is a
+#    pattern, so a `[` or `*` in DB_DIR's own path is matched as itself.
 OLD_DIR="$HOME/.claude-mem"
+has_legacy_backup() {
+  local f
+  for f in "$DB_DIR"/claude-mem-lite.db.legacy-backup-*; do
+    [[ -e "$f" ]] && return 0
+  done
+  return 1
+}
 if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" && ! -f "$DB_DIR/claude-mem.db" ]] &&
-  ! compgen -G "$DB_DIR/claude-mem-lite.db.legacy-backup-*" >/dev/null; then
+  ! has_legacy_backup; then
   BACKUP="$DB_DIR/claude-mem-lite.db.legacy-backup-$(date +%s)"
   if cp "$OLD_DIR/claude-mem.db" "$BACKUP" 2>/dev/null; then
     log_info "Legacy ~/.claude-mem/ DB is schema-incompatible; backed up to $(basename "$BACKUP") (a fresh DB will be created). Old ~/.claude-mem/ preserved."

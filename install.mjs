@@ -184,7 +184,9 @@ export function copyHookScripts(srcDir, destDir) {
  *   - backed-up: legacy files renamed to `<newDir>/claude-mem-lite.db.legacy-backup-<ts>` etc.
  *   - copied: newDir is on another filesystem, where a rename fails with EXDEV (D#579): the files
  *     are copied to those names and the source is left in place, as the plugin's setup.sh does.
- *     Each copy is written under a private name first, so a killed copy leaves no partial backup.
+ *     Each file is written under a private name first, and the store's own file is placed last, so
+ *     a copy killed partway leaves no backup of the store, and the next install makes it whole (a
+ *     sidecar it placed stays beside the new one).
  */
 export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
   const legacyDb = join(oldDir, 'claude-mem.db');
@@ -199,12 +201,13 @@ export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
     renameSync(legacyDb, backupPath);
   } catch (e) {
     if (e?.code !== 'EXDEV') throw e;
-    // The source stays, so a backup already here is the copy an earlier install made.
-    const names = readdirSync(newDir);
-    if (names.some((n) => n.startsWith('claude-mem-lite.db.legacy-backup-'))) return { action: 'skip' };
     // A copy killed partway left its private file; install runs one at a time (install.lock).
+    const names = readdirSync(newDir);
     for (const n of names) if (n.startsWith('.legacy-backup-copy-')) rmSync(join(newDir, n), { force: true });
-    for (const ext of ['', '-wal', '-shm']) {
+    // The source stays, so a backup of the store here is the copy an earlier install made. The
+    // store's own file is placed last, so a copy killed before it left none, and is made again.
+    if (names.some((n) => n.startsWith('claude-mem-lite.db.legacy-backup-'))) return { action: 'skip' };
+    for (const ext of ['-wal', '-shm', '']) {
       const src = legacyDb + ext;
       if (!existsSync(src)) continue;
       const tmp = join(newDir, `.legacy-backup-copy-${process.pid}-${ts}`);

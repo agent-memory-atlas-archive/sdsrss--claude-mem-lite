@@ -19,6 +19,8 @@ import {
   statSync,
 } from 'fs';
 import { join } from 'path';
+import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 import { homedir, tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { migrateLegacyClaudeMemData } from '../install.mjs';
@@ -166,6 +168,61 @@ describe.skipIf(!probe)('migrateLegacyClaudeMemData across filesystems (D#579)',
       writeFileSync(join(newDir, '.legacy-backup-copy-999999-1600000000000'), 'half a copy');
       expect(migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 }).action).toBe('copied');
       expect(readdirSync(newDir)).toEqual(['claude-mem-lite.db.legacy-backup-1700000000000']);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  // v6.30.8 r1 (claims F4, defects F6): a copy killed after the store's file was placed and before
+  // its -wal was left a backup of the store without its log, and every later install skipped. The
+  // kill comes from an fs preload: the second copyFileSync of the run exits the process.
+  it('a copy killed partway is made again whole by the next install', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      writeFileSync(join(oldDir, 'claude-mem.db'), 'main');
+      writeFileSync(join(oldDir, 'claude-mem.db-wal'), 'wal');
+      const shim = join(a, 'kill-shim.mjs');
+      writeFileSync(
+        shim,
+        `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.copyFileSync;
+let n = 0;
+fs.copyFileSync = function (...args) {
+  if (++n === 2) process.kill(process.pid, 'SIGKILL');
+  return real.apply(this, args);
+};
+syncBuiltinESMExports();
+`,
+      );
+      const run = (preload, now) =>
+        spawnSync(
+          process.execPath,
+          [
+            ...(preload ? ['--import', pathToFileURL(shim).href] : []),
+            '--input-type=module',
+            '-e',
+            `const m = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, '..', 'install.mjs')).href)}); console.log(m.migrateLegacyClaudeMemData(${JSON.stringify(oldDir)}, ${JSON.stringify(newDir)}, { now: ${now} }).action);`,
+          ],
+          { encoding: 'utf8', env: { ...process.env, MEM_NO_AUTO_ADOPT: '1' } },
+        );
+      expect(run(true, 1700000000000).signal, 'premise: the first copy was killed').toBe('SIGKILL');
+      const again = run(false, 1700000000001);
+      expect(again.status, again.stderr).toBe(0);
+      const names = readdirSync(newDir).sort();
+      const main = names.filter((n) => n.startsWith('claude-mem-lite.db.legacy-backup-'));
+      expect(main).toHaveLength(1);
+      const ts = main[0].slice('claude-mem-lite.db.legacy-backup-'.length);
+      expect(readFileSync(join(newDir, main[0]), 'utf8')).toBe('main');
+      expect(
+        readFileSync(join(newDir, `claude-mem-lite.db-wal.legacy-backup-${ts}`), 'utf8'),
+        'its log beside it',
+      ).toBe('wal');
+      expect(names.filter((n) => n.startsWith('.legacy-backup-copy-'))).toEqual([]);
     } finally {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });

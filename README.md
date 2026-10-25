@@ -654,7 +654,7 @@ surface — reach them through the CLI column in the second table.
 | `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | dedup / decay / cleanup / vacuum (`scan` previews, `execute` applies). |
 | `mem_optimize` | `claude-mem-lite optimize` | LLM-powered re-enrich / normalize / cluster-merge (preview default; `--run` to apply). |
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL dump, filters by project, type, date. |
-| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity check; rebuild of the FTS5 indexes, then every other index (REINDEX). The rebuild checks the database's pages first and writes nothing when they are damaged, as `doctor`'s does. |
+| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity check; rebuild of the FTS5 indexes, then every other index (REINDEX). |
 | `mem_browse` | `claude-mem-lite browse` | Tier-grouped dashboard (working / active / archive). |
 
 **Headless runs (`claude -p`).** With no permission prompt to answer, Claude Code 2.1.292
@@ -958,10 +958,6 @@ Your data directory (`~/.claude-mem-lite/`) is untouched by install/rollback; sc
 
 Checks Node.js version, dependencies, server/hook files, database integrity, FTS5 indexes,
 stale processes, MCP registration, and whether the marketplace clone can still be updated.
-
-On a store that opens it checks the database's pages and runs SQLite's integrity check; when
-only indexes are damaged it rebuilds them the way `fts-check rebuild` does. On damaged pages it
-writes nothing and prints a command that copies the data directory first.
 
 It runs `claude mcp list` to answer the registration question, and that **health-checks every
 MCP server you have configured** — i.e. briefly launches each one, including remote endpoints.

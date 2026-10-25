@@ -3185,31 +3185,11 @@ async function doctor() {
                 dwarn('FTS5 integrity issues detected:');
                 for (const d of details) log(`    ${d}`);
                 log('  Attempting FTS5 rebuild...');
-                const { rebuilt, errors, pages } = rebuildFTS(rwDb);
-                if (pages && pages.state !== 'ok') {
-                  // Nothing was written: over damaged pages a rebuild overwrites rows (D#591).
-                  if (pages.state === 'damaged') {
-                    fail(
-                      "FTS5 rebuild: not run — the database's pages are damaged, so a rebuild could overwrite rows on them",
-                    );
-                    for (const line of pages.lines) log(`    ${line}`);
-                    if (pages.more > 0) log(`    … and ${pages.more} more`);
-                    issues++;
-                    const du = await import('./lib/db-unusable.mjs');
-                    log(`    ${du.PAGE_DAMAGE_COPY_ADVICE}`);
-                    log(`    ${du.dataDirCopyCommand(DB_PATH)}`);
-                  } else {
-                    fail(
-                      `FTS5 rebuild: not run — the database's pages could not be checked first (${pages.error})`,
-                    );
-                    issues++;
-                  }
-                } else {
-                  if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
-                  if (errors.length > 0) {
-                    fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
-                    issues++;
-                  }
+                const { rebuilt, errors } = rebuildFTS(rwDb);
+                if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
+                if (errors.length > 0) {
+                  fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
+                  issues++;
                 }
               }
             } finally {
@@ -3221,54 +3201,6 @@ async function doctor() {
         }
       } else {
         dwarn('FTS5 index: missing (will be created on server start)');
-      }
-      // The whole store (D#590, D#592): FTS5's check above sees neither an ordinary index that lost
-      // entries nor FTS5 shadow rows out of key order, nor damaged pages. Outside the branch above,
-      // so a store without observations_fts is checked too; gated on dbWriteBlocked as the FTS5
-      // check is, since a failed check goes on to rebuild.
-      if (dbWriteBlocked) {
-        dwarn(`Database integrity: not checked — ${dbWriteBlocked}`);
-      } else {
-        try {
-          const { checkStoreIntegrity } = await import('./schema.mjs');
-          const rwDb = new Database(DB_PATH);
-          rwDb.pragma('busy_timeout = 3000');
-          try {
-            const r = checkStoreIntegrity(rwDb);
-            if (r.rows) {
-              dwarn('Database integrity issues detected:');
-              for (const row of r.rows) log(`    ${row}`);
-            }
-            if (r.state === 'ok') {
-              ok('Database integrity: ok');
-            } else if (r.state === 'rebuilt') {
-              ok('Database integrity: ok after rebuilding the indexes');
-            } else if (r.state === 'damaged') {
-              fail("Database integrity: the database's pages are damaged, so nothing was rebuilt");
-              for (const line of r.pages.lines) log(`    ${line}`);
-              if (r.pages.more > 0) log(`    … and ${r.pages.more} more`);
-              issues++;
-              const du = await import('./lib/db-unusable.mjs');
-              log(`    ${du.PAGE_DAMAGE_COPY_ADVICE}`);
-              log(`    ${du.dataDirCopyCommand(DB_PATH)}`);
-            } else if (r.state === 'unrepaired' && r.busy) {
-              dwarn(
-                'Database integrity: indexes not rebuilt — the database is in use by another process (a hook or session writing). Run doctor again in a moment.',
-              );
-            } else if (r.state === 'unrepaired') {
-              fail('Database integrity: not repaired by rebuilding the indexes');
-              for (const line of r.errors ?? []) log(`    rebuild: ${line}`);
-              for (const row of r.after ?? []) log(`    after the rebuild: ${row}`);
-              issues++;
-            } else {
-              dwarn(`Database integrity: not checked — ${r.error}`);
-            }
-          } finally {
-            rwDb.close();
-          }
-        } catch (e) {
-          dwarn(`Database integrity: not checked — ${e.message}`);
-        }
       }
     } catch (e) {
       if (walBlocked(e.code)) {

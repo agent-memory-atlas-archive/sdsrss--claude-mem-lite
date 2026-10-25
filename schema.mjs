@@ -12,7 +12,7 @@ import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // class, and every consumer of the forward-incompat throw keys on this exact value.
 // schema-skew.mjs imports nothing local, so this closes no cycle.
 import { SCHEMA_SKEW_CODE } from './lib/schema-skew.mjs';
-import { isFtsCorruptionError, PAGE_DAMAGE_COPY_ADVICE } from './lib/db-unusable.mjs';
+import { isFtsCorruptionError } from './lib/db-unusable.mjs';
 
 // The three location constants now live in lib/data-paths.mjs — a leaf module with no
 // package imports — and are re-exported here so every existing importer is unchanged.
@@ -1949,154 +1949,15 @@ export function ensureDbWithWalRecovery({ warn, info } = {}) {
  * Create FTS5 virtual table + sync triggers for a content table.
  * Idempotent: skips if already exists. Exported for test helpers.
  */
-// The rows of an integrity check that come from SQLite's B-tree checker start with this; every
-// other row is about index entries or constraints, which a rebuild repairs (D#591).
-const PAGE_CHECK_ROW = '*** in database ';
-// A step of the page check that throws one of these has met the damage. VTAB and INDEX are an
-// index's own damage, which no step of this check reads.
-const PAGE_DAMAGE_CODE_RE = /^SQLITE_(CORRUPT(?!_VTAB|_INDEX)|NOTADB)/;
-// The page holding the lock bytes belongs to no tree and is never free (fileformat2 §1.3).
-const LOCK_BYTE_OFFSET = 0x40000000;
-// A rebuild statement that fails with one of these met another connection's lock.
-const LOCK_CODE_RE = /^SQLITE_(BUSY|LOCKED)/;
-
-/**
- * Whether the store's pages are sound enough for an index rebuild to write into (D#591). A rebuild
- * frees the old index pages and allocates new ones, so a page a table still uses that the freelist
- * also lists, or that another tree uses too, is handed to the new index and the rows on it are
- * overwritten: 6.30.8's doctor did that on the D#546 regression set (v6.30.9 r1).
- *
- * Two parts, in one read transaction so both see one state of the store:
- * 1. SQLite's B-tree check (`quick_check`) one table at a time, sqlite_schema first, whose check
- *    also walks the freelist. Only the checker's own row counts. One table at a time because in
- *    SQLite 3.53.4 the whole-store check skips the freelist and the unused pages whenever a
- *    virtual table comes first in its walk (VACUUMed stores, VACUUM INTO snapshots), and runs
- *    every FTS5 table's own check, which throws on some FTS5 damage.
- * 2. Every page counted once: the freelist read from the store's pages (serialize, so it reads
- *    what is still in the log too), each tree's pages from dbstat, the lock-byte page. A page
- *    counted twice, a page number past the end, a freelist the header disagrees with, or a page
- *    nothing uses is damage. This part sees what part 1 cannot: two trees on one page, and the
- *    freelist against the trees.
- *
- * serialize copies the whole store into memory: on a 577 MB store about that much more, and the
- * whole check took 945 ms (2026-10-25).
- * @param {Database} db Opened database instance
- * @param {{max?: number}} [opts] at most `max` lines are kept, and `more` counts the rest
- * @returns {{state: 'ok'|'damaged'|'unchecked', lines: string[], more: number, error?: string,
- *   code?: string|null}} `unchecked`: a step failed for another reason than damage (`error`, `code`)
- */
-export function checkStorePages(db, { max = 10 } = {}) {
-  const lines = [];
-  const own = !db.inTransaction;
-  try {
-    if (own) db.exec('BEGIN');
-    const tables = db
-      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND rootpage > 0 ORDER BY name")
-      .pluck()
-      .all();
-    for (const table of ['sqlite_schema', ...tables]) {
-      const rows = db
-        .prepare(`PRAGMA quick_check('${table.replace(/'/g, "''")}')`)
-        .pluck()
-        .all();
-      for (const row of rows.map(String)) {
-        if (row.startsWith(PAGE_CHECK_ROW)) lines.push(...row.split('\n').slice(1).filter(Boolean));
-      }
-    }
-    const image = db.serialize();
-    const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
-    const pages = image.length / pageSize;
-    const usable = pageSize - image[20];
-    const owner = new Array(pages + 1);
-    const count = (pageno, by) => {
-      if (!(pageno >= 1 && pageno <= pages)) {
-        lines.push(`${by}: invalid page number ${pageno}`);
-        return false;
-      }
-      if (owner[pageno] !== undefined) {
-        lines.push(`page ${pageno}: in ${owner[pageno]} and in ${by}`);
-        return false;
-      }
-      owner[pageno] = by;
-      return true;
-    };
-    const lockPage = Math.floor(LOCK_BYTE_OFFSET / pageSize) + 1;
-    if (lockPage <= pages) count(lockPage, 'the lock-byte page');
-    const header = image.readUInt32BE(36);
-    let listed = 0;
-    for (let trunk = image.readUInt32BE(32); trunk !== 0;) {
-      if (!count(trunk, 'the freelist')) break;
-      listed++;
-      const at = (trunk - 1) * pageSize;
-      const leaves = image.readUInt32BE(at + 4);
-      if (leaves > usable / 4 - 2) {
-        lines.push(`the freelist: trunk page ${trunk} lists ${leaves} pages`);
-        break;
-      }
-      for (let i = 0; i < leaves; i++) count(image.readUInt32BE(at + 8 + 4 * i), 'the freelist');
-      listed += leaves;
-      trunk = image.readUInt32BE(at);
-    }
-    if (listed !== header) lines.push(`the freelist: ${listed} pages listed, the header says ${header}`);
-    for (const [name, pageno] of db.prepare('SELECT name, pageno FROM dbstat').raw().iterate()) {
-      count(pageno, name);
-    }
-    for (let p = 1; p <= pages; p++) if (owner[p] === undefined) lines.push(`page ${p}: never used`);
-  } catch (e) {
-    if (!PAGE_DAMAGE_CODE_RE.test(e?.code ?? '')) {
-      return {
-        state: 'unchecked',
-        lines: [],
-        more: 0,
-        error: String(e?.message ?? e),
-        code: e?.code ?? null,
-      };
-    }
-    lines.push(e.message);
-  } finally {
-    if (own && db.inTransaction) db.exec('ROLLBACK');
-  }
-  if (lines.length === 0) return { state: 'ok', lines, more: 0 };
-  return { state: 'damaged', lines: lines.slice(0, max), more: Math.max(0, lines.length - max) };
-}
-
-/**
- * A rebuild checkStorePages stopped: nothing written, and the reason as its one error, which says
- * what to do before anything else writes to the store.
- */
-function refusedRebuild(pages) {
-  const first = pages.lines[0];
-  const others = pages.lines.length - 1 + pages.more;
-  const reason =
-    pages.state === 'damaged'
-      ? `not rebuilt: the database's pages are damaged, so a rebuild could overwrite rows on them (${first}${others > 0 ? `, and ${others} more` : ''}). ${PAGE_DAMAGE_COPY_ADVICE}`
-      : `not rebuilt: the database's pages could not be checked first (${pages.error})`;
-  return {
-    rebuilt: [],
-    errors: [reason],
-    codes: [pages.state === 'damaged' ? 'SQLITE_CORRUPT' : (pages.code ?? null)],
-    pages,
-  };
-}
-
 /**
  * Rebuild all FTS5 indexes. Use after suspected index corruption (e.g. crash mid-trigger).
- * Rebuilds are idempotent; each starts with checkStorePages and writes nothing when the store's
- * pages are damaged or could not be checked (D#591): `errors` then holds the reason alone, and
- * `pages` the check's result.
+ * Safe to call at any time — rebuilds are idempotent.
  * `codes[i]` is the SQLite code of `errors[i]` (null for a table that is missing), so a caller
  * can tell its own disk filling up from damage: the restore check does (D#558).
  * @param {Database} db Opened database instance
- * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[], pages: ReturnType<typeof checkStorePages>}}
- *   Results per FTS table
+ * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} Results per FTS table
  */
 export function rebuildFTS(db) {
-  const pages = checkStorePages(db);
-  if (pages.state !== 'ok') return refusedRebuild(pages);
-  return { ...rebuildFtsTables(db), pages };
-}
-
-function rebuildFtsTables(db) {
   const FTS_TABLES = ['observations_fts', 'session_summaries_fts', 'user_prompts_fts', 'events_fts'];
   const idRe = /^[a-z][a-z0-9_]*$/;
   const rebuilt = [];
@@ -2120,8 +1981,6 @@ function rebuildFtsTables(db) {
     } catch (e) {
       errors.push(`${fts}: ${e.message}`);
       codes.push(e.code ?? null);
-      // The rest would wait for the same lock, each for the whole busy timeout (D#592).
-      if (LOCK_CODE_RE.test(e.code ?? '')) break;
     }
   }
   return { rebuilt, errors, codes };
@@ -2132,15 +1991,12 @@ function rebuildFtsTables(db) {
  * every other index (REINDEX). What `fts-check rebuild` runs, and what the restore check runs on
  * its copy after the open, so the two cannot drift (D#558). REINDEX repairs an index whose entries
  * no longer match its table, which no FTS rebuild touches and doctor's checks never read (D#562).
- * Checks the pages first, as rebuildFTS does.
  * @param {Database} db Opened database instance
- * @returns {ReturnType<typeof rebuildFTS>} as rebuildFTS, with 'indexes' standing for the REINDEX
+ * @returns {{rebuilt: string[], errors: string[], codes: (string|null)[]}} as rebuildFTS, with
+ *   'indexes' standing for the REINDEX
  */
 export function rebuildIndexes(db) {
-  const pages = checkStorePages(db);
-  if (pages.state !== 'ok') return refusedRebuild(pages);
-  const result = { ...rebuildFtsTables(db), pages };
-  if (result.codes.some((c) => LOCK_CODE_RE.test(c ?? ''))) return result;
+  const result = rebuildFTS(db);
   try {
     db.exec('REINDEX');
     result.rebuilt.push('indexes');
@@ -2149,66 +2005,6 @@ export function rebuildIndexes(db) {
     result.codes.push(e.code ?? null);
   }
   return result;
-}
-
-/**
- * SQLite's integrity check, one entry per row it returns. A check that throws SQLITE_CORRUPT has
- * found damage, and its message is its row: an index entry it cannot decode stops it, where the
- * pages pass and REINDEX rebuilds the entry (two stores of the D#546 regression set).
- */
-function integrityRows(db, max) {
-  try {
-    return db.prepare(`PRAGMA integrity_check(${max})`).pluck().all().map(String);
-  } catch (e) {
-    if (/^SQLITE_(CORRUPT|NOTADB)/.test(e?.code ?? '')) return [e.message];
-    throw e;
-  }
-}
-
-/**
- * Doctor's check of a store that opens (D#590, D#592): the pages (checkStorePages), then SQLite's
- * integrity check, and when that fails, every index rebuilt as `fts-check rebuild` rebuilds them
- * (rebuildIndexes, statement by statement) and the integrity check run again. FTS5's own check,
- * which doctor runs first, sees neither an ordinary index that lost entries nor FTS5 shadow rows
- * out of key order. The pages come first because the integrity check skips the freelist on
- * VACUUMed stores (checkStorePages says why), and a rebuild over damaged pages overwrites rows.
- *
- * - `ok`: the pages and the integrity check pass;
- * - `rebuilt`: the integrity check failed (`rows`) and passes after the rebuild;
- * - `damaged`: the pages are damaged (`pages`), so nothing was rebuilt;
- * - `unrepaired`: the integrity check failed (`rows`), and the rebuild stopped (`errors`; `busy`
- *   when on the lock) or the check fails after it (`after`);
- * - `unchecked`: the page check could not run, or the integrity check threw something other than
- *   damage (`error`), as it does on an FTS5 table whose config row FTS5 refuses.
- * @param {Database} db Opened read-write database instance
- * @param {{max?: number}} [opts] at most `max` rows of each integrity check
- * @returns {{state: 'ok'|'rebuilt'|'damaged'|'unrepaired'|'unchecked', rows?: string[],
- *   after?: string[], pages?: ReturnType<typeof checkStorePages>, errors?: string[], busy?: boolean,
- *   error?: string}}
- */
-export function checkStoreIntegrity(db, { max = 5 } = {}) {
-  const pages = checkStorePages(db);
-  if (pages.state === 'damaged') return { state: 'damaged', pages };
-  if (pages.state === 'unchecked') return { state: 'unchecked', error: pages.error };
-  let rows;
-  try {
-    rows = integrityRows(db, max);
-  } catch (e) {
-    return { state: 'unchecked', error: e.message };
-  }
-  if (rows.length === 1 && rows[0] === 'ok') return { state: 'ok' };
-  const rebuilt = rebuildIndexes(db);
-  // The check after it decides: an FTS5 table that is missing is an error of the rebuild and no
-  // damage, and a rebuild that stopped leaves the check failing.
-  let after;
-  try {
-    after = integrityRows(db, max);
-  } catch (e) {
-    after = [e.message];
-  }
-  if (after.length === 1 && after[0] === 'ok') return { state: 'rebuilt', rows };
-  const busy = rebuilt.codes.some((c) => LOCK_CODE_RE.test(c ?? ''));
-  return { state: 'unrepaired', rows, after, errors: rebuilt.errors, busy };
 }
 
 /**

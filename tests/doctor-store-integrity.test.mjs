@@ -33,8 +33,8 @@ afterEach(() => {
 });
 
 /** A live store in production shape: writeStoreSnapshot writes rollback mode, a store is WAL. */
-function liveStore(damage) {
-  writeStoreSnapshot(dbPath, { observations: 12, damage });
+function liveStore(damage, observations = 12) {
+  writeStoreSnapshot(dbPath, { observations, damage });
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.close();
@@ -201,6 +201,24 @@ describe('checkStoreIntegrity', () => {
     } finally {
       db.close();
     }
+  });
+
+  it('rolls the rebuild back when the disk fills, and does not call the store damaged', () => {
+    // 300 rows: the index the rebuild writes needs more pages than the one it replaces (at 12 it does not).
+    liveStore('index', 300);
+    const db = new Database(dbPath);
+    try {
+      // No page past the ones the file has: the rebuild's first new page meets SQLITE_FULL.
+      db.pragma(`max_page_count = ${db.pragma('page_count', { simple: true })}`);
+      const r = checkStoreIntegrity(db);
+      expect(r.state).toBe('unrebuilt');
+      expect(r.busy).toBe(false);
+      expect(r.rebuildErrors.join('\n')).toMatch(/database or disk is full/);
+      expect(db.inTransaction).toBe(false);
+    } finally {
+      db.close();
+    }
+    expect(integrity(), 'the rebuild was rolled back').toMatch(/missing from index/);
   });
 
   it('does not call the store damaged when another connection holds the lock the rebuild needs', () => {

@@ -757,9 +757,7 @@ describe('the remedy names the data directory and never stops silently', () => {
     const r = du.dbUnusableRemedy(db, new Error('file is not a database'));
     expect(r.kind).toBe('unknown');
     expect(r.command).toBe('');
-    expect(r.note).toContain(
-      `\`${doctor(dir)}\` checks which one restores cleanly before it gives a command.`,
-    );
+    expect(r.note).toContain(`\`${doctor(dir)}\` checks which ones restore before it gives a command.`);
   });
 
   // r1 defects P3-4: doctor gives the schema family no command.
@@ -805,7 +803,7 @@ describe('the remedy names the data directory and never stops silently', () => {
     expect(short.found).toContain('holds 3 observation(s), 9 fewer than its own index lists.');
     // Two causes, and the file cannot tell them apart (v6.30.7 r1 claims P2-1).
     expect(short.found).toContain(
-      'Short of its own index means its table lost those rows or its index still lists rows a delete removed; nothing in the snapshot tells which.',
+      'Short of its own index means its table lost those rows or its index still lists rows a delete removed.',
     );
     expect(short.found).not.toMatch(/rows its table lost/);
     const whole = du.dbUnusableRemedy(db, undefined, {
@@ -881,7 +879,7 @@ describe('the command restores the newest snapshot that passes; every older one 
   };
   const restores = (db, path) => `cp ${shellWord(path)} ${shellWord(db)}`;
   const TWO_CAUSES =
-    'Short of its own index means its table lost those rows or its index still lists rows a delete removed; nothing in the snapshot tells which.';
+    'Short of its own index means its table lost those rows or its index still lists rows a delete removed.';
 
   it('names the newest that passes though it is short of its own index, and lists an older complete one', () => {
     const { db, paths } = brokenWith(['pre-maintain-a', 'pre-delete-b']);

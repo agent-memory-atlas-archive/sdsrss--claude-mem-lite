@@ -28,9 +28,11 @@ export function createTestDb() {
  *   integrity_check fails on that index alone and REINDEX repairs it;
  * - 'fts-config': observations_fts_config's version set to 0, which FTS5 refuses to open and no
  *   rebuild repairs;
- * - 'lost-rows': all but 3 observations gone from the table while every index on it still lists
- *   all of them, the shape 73 of the D#558 corpus snapshots have ("wrong # of entries in index
- *   idx_obs_epoch_project"); REINDEX makes it consistent and short;
+ * - 'lost-rows': all but 3 observations gone from the table while every ordinary index on it still
+ *   lists all of them ("wrong # of entries in index idx_obs_epoch_project"); REINDEX makes it
+ *   consistent and short. The rows go by a DELETE, so the FTS5 docsize table loses them too: the
+ *   shape of an index that kept a delete's rows. The 73 short snapshots of the D#558 corpus lost
+ *   theirs from the table, and their docsize still lists them (v6.30.8 r1 claims F11);
  * - 'page': the cell pointers of the observations table's first leaf page garbled;
  * - 'header': the 16-byte file header overwritten.
  * @param {string} path

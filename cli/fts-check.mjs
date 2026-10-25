@@ -1,7 +1,7 @@
 // cli/fts-check.mjs — `claude-mem-lite fts-check <check|rebuild>`.
 // Extracted from mem-cli.mjs (v2.41, god-module split).
 
-import { checkFTSIntegrity, rebuildIndexes } from '../schema.mjs';
+import { checkFTSIntegrity, rebuildFTS } from '../schema.mjs';
 import { parseArgs, out, fail } from './common.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
@@ -48,9 +48,7 @@ export function cmdFtsCheck(db, args) {
   }
 
   if (action === 'rebuild') {
-    // The FTS5 indexes, then every other index (REINDEX): the last step of doctor's restore
-    // command, which the restore check ran on its copy (D#558).
-    const result = rebuildIndexes(db);
+    const result = rebuildFTS(db);
     if (result.errors.length > 0) {
       // Partial success is a failure of the requested operation: the caller asked
       // for a rebuild and at least one index still is not rebuilt.

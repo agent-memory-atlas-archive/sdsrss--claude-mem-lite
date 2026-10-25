@@ -283,9 +283,6 @@ export const SOURCE_FILES = [
   'lib/db-backup.mjs',
   'lib/db-unusable.mjs',
   'schema.mjs',
-  // Imports schema.mjs, copied before it. lib/db-unusable.mjs runs it as a child by path (not an
-  // import), and only install.mjs's doctor asks it to; install.mjs is copied after both.
-  'lib/snapshot-probe.mjs',
   'cli/doctor.mjs',
   'hook-memory.mjs',
   'haiku-client.mjs',

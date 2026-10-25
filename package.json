@@ -120,7 +120,6 @@
     "lib/install-shape.mjs",
     "lib/schema-skew.mjs",
     "lib/db-unusable.mjs",
-    "lib/snapshot-probe.mjs",
     "lib/db-busy.mjs",
     "lib/record-once.mjs",
     "lib/hook-stdin.mjs",

@@ -5,6 +5,7 @@ import { OUR_MCP_SERVER_RE, isOurMcpRegistration } from './lib/mcp-ownership.mjs
 import { execSync, execFileSync } from 'child_process';
 import {
   readFileSync,
+  copyFileSync,
   writeFileSync,
   existsSync,
   rmSync,
@@ -176,10 +177,14 @@ export function copyHookScripts(srcDir, destDir) {
  * first launch. Backing up rather than copying-as-current lets the new
  * install create a fresh v28 DB while preserving legacy bytes for recovery.
  *
- * Returns: {action: 'noop'|'skip'|'backed-up', backupPath?}
+ * Returns: {action: 'noop'|'skip'|'backed-up'|'copied', backupPath?}
  *   - noop: no legacy DB found
- *   - skip: working `claude-mem-lite.db` already exists in newDir
+ *   - skip: working `claude-mem-lite.db` already exists in newDir, or (across filesystems) a backup
+ *     an earlier install copied there
  *   - backed-up: legacy files renamed to `<newDir>/claude-mem-lite.db.legacy-backup-<ts>` etc.
+ *   - copied: newDir is on another filesystem, where a rename fails with EXDEV (D#579): the files
+ *     are copied to those names and the source is left in place, as the plugin's setup.sh does.
+ *     Each copy is written under a private name first, so a killed copy leaves no partial backup.
  */
 export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
   const legacyDb = join(oldDir, 'claude-mem.db');
@@ -190,7 +195,24 @@ export function migrateLegacyClaudeMemData(oldDir, newDir, opts = {}) {
   if (!existsSync(newDir)) mkdirSync(newDir, { recursive: true });
   const ts = opts.now ?? Date.now();
   const backupPath = join(newDir, `claude-mem-lite.db.legacy-backup-${ts}`);
-  renameSync(legacyDb, backupPath);
+  try {
+    renameSync(legacyDb, backupPath);
+  } catch (e) {
+    if (e?.code !== 'EXDEV') throw e;
+    // The source stays, so a backup already here is the copy an earlier install made.
+    const names = readdirSync(newDir);
+    if (names.some((n) => n.startsWith('claude-mem-lite.db.legacy-backup-'))) return { action: 'skip' };
+    // A copy killed partway left its private file; install runs one at a time (install.lock).
+    for (const n of names) if (n.startsWith('.legacy-backup-copy-')) rmSync(join(newDir, n), { force: true });
+    for (const ext of ['', '-wal', '-shm']) {
+      const src = legacyDb + ext;
+      if (!existsSync(src)) continue;
+      const tmp = join(newDir, `.legacy-backup-copy-${process.pid}-${ts}`);
+      copyFileSync(src, tmp);
+      renameSync(tmp, join(newDir, `claude-mem-lite.db${ext}.legacy-backup-${ts}`));
+    }
+    return { action: 'copied', backupPath };
+  }
   for (const ext of ['-wal', '-shm']) {
     const src = legacyDb + ext;
     if (existsSync(src)) renameSync(src, join(newDir, `claude-mem-lite.db${ext}.legacy-backup-${ts}`));
@@ -1381,8 +1403,9 @@ function backupLegacyClaudeMemData() {
   // so the new install creates a fresh v28 DB.
   try {
     const r = migrateLegacyClaudeMemData(OLD_DATA_DIR, MEM_DATA_DIR);
-    if (r.action === 'backed-up') {
-      ok(`Legacy ~/.claude-mem/ DB backed up to ${r.backupPath}`);
+    if (r.action === 'backed-up' || r.action === 'copied') {
+      ok(`Legacy ~/.claude-mem/ DB ${r.action === 'copied' ? 'copied' : 'backed up'} to ${r.backupPath}`);
+      if (r.action === 'copied') log('~/.claude-mem/ is on another filesystem and is left as it is.');
       log('New v28 DB will be created on first launch (legacy schema is incompatible).');
     }
   } catch (e) {

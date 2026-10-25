@@ -8,9 +8,18 @@
 // and the user can recover the file later if they want.
 
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { migrateLegacyClaudeMemData } from '../install.mjs';
 
@@ -84,6 +93,99 @@ describe('Bug 2: migrateLegacyClaudeMemData', () => {
       expect(existsSync(join(oldDir, 'claude-mem.db'))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// D#579: with CLAUDE_MEM_DIR on another filesystem than ~/.claude-mem, the rename threw EXDEV and
+// install printed "Legacy DB backup failed". Two writable directories on different devices stand in
+// for that (here /tmp is a tmpfs and the home directory is not; a CI runner has /dev/shm).
+function dirsOnTwoFilesystems() {
+  const roots = [tmpdir(), '/dev/shm', join(homedir(), '.cache')];
+  const made = [];
+  for (const r of roots) {
+    try {
+      made.push(mkdtempSync(join(r, 'mem-legacy-xdev-')));
+    } catch {
+      /* not there, or not writable */
+    }
+  }
+  for (const a of made) {
+    for (const b of made) {
+      if (statSync(a).dev !== statSync(b).dev) {
+        for (const m of made) if (m !== a && m !== b) rmSync(m, { recursive: true, force: true });
+        return [a, b];
+      }
+    }
+  }
+  for (const m of made) rmSync(m, { recursive: true, force: true });
+  return null;
+}
+const probe = dirsOnTwoFilesystems();
+for (const d of probe ?? []) rmSync(d, { recursive: true, force: true });
+
+describe.skipIf(!probe)('migrateLegacyClaudeMemData across filesystems (D#579)', () => {
+  it('copies the legacy store and its sidecars to the backup names and leaves the source', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      writeFileSync(join(oldDir, 'claude-mem.db'), 'main');
+      writeFileSync(join(oldDir, 'claude-mem.db-wal'), 'wal');
+      const result = migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 });
+      expect(result.action).toBe('copied');
+      expect(readFileSync(result.backupPath, 'utf8')).toBe('main');
+      expect(readFileSync(join(newDir, 'claude-mem-lite.db-wal.legacy-backup-1700000000000'), 'utf8')).toBe(
+        'wal',
+      );
+      expect(readdirSync(newDir).sort()).toEqual([
+        'claude-mem-lite.db-wal.legacy-backup-1700000000000',
+        'claude-mem-lite.db.legacy-backup-1700000000000',
+      ]);
+      expect(
+        readFileSync(join(oldDir, 'claude-mem.db'), 'utf8'),
+        'the source stays, as setup.sh leaves it',
+      ).toBe('main');
+      expect(existsSync(join(newDir, 'claude-mem-lite.db'))).toBe(false);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  // A copy killed partway leaves its private file, a whole copy of the store, which nothing else removes.
+  it('removes a private copy an earlier, killed copy left', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      mkdirSync(newDir);
+      writeFileSync(join(oldDir, 'claude-mem.db'), 'main');
+      writeFileSync(join(newDir, '.legacy-backup-copy-999999-1600000000000'), 'half a copy');
+      expect(migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 }).action).toBe('copied');
+      expect(readdirSync(newDir)).toEqual(['claude-mem-lite.db.legacy-backup-1700000000000']);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  // The source stays, so without this every install would add another copy (the D#573 shape).
+  it('copies once: a backup already in the data dir is enough', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    try {
+      const oldDir = join(a, '.claude-mem');
+      const newDir = join(b, '.claude-mem-lite');
+      mkdirSync(oldDir);
+      writeFileSync(join(oldDir, 'claude-mem.db'), 'main');
+      expect(migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000000 }).action).toBe('copied');
+      expect(migrateLegacyClaudeMemData(oldDir, newDir, { now: 1700000000001 }).action).toBe('skip');
+      expect(readdirSync(newDir)).toEqual(['claude-mem-lite.db.legacy-backup-1700000000000']);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
     }
   });
 });

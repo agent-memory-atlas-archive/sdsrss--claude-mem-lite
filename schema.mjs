@@ -5,22 +5,7 @@
 import Database from 'better-sqlite3';
 import { homedir } from 'os';
 import { join } from 'path';
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  chmodSync,
-  closeSync,
-  copyFileSync,
-  constants as fsConstants,
-  fsyncSync,
-  openSync,
-  readSync,
-  unlinkSync,
-} from 'fs';
-import { randomBytes } from 'crypto';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
 import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
@@ -1674,102 +1659,25 @@ function capBusyWaits(db) {
 
 /**
  * Move a store left in the unhidden data dir of versions before the first release (2.0.0),
- * ~/claude-mem-lite/, into DB_DIR. Only the store's own files move (an SQLite database, then its
- * -wal and -shm, under the same name; ensureDb then renames claude-mem.db), and only into a DB_DIR
+ * ~/claude-mem-lite/, into DB_DIR. Only the store's own files move (the database, then its -wal
+ * and -shm, under the same name; ensureDb then renames claude-mem.db), and only into a DB_DIR
  * holding no file of a store's family: a database, a log, a snapshot or a kept copy. install's
  * backup of an original claude-mem store (migrateLegacyClaudeMemData, `.legacy-backup-<ms>`) is
- * not one. Nothing else is removed. It used to rename the whole directory over a DB_DIR it first
+ * not one. Nothing is removed. It used to rename the whole directory over a DB_DIR it first
  * removed when DB_DIR held no `*.db` name (D#561): after the set-aside command that took the kept
  * file, DB_DIR is also the code dir of a direct install, and a git clone of this repository made
  * in ~ is at that path.
- *
- * Each file goes in only where none is yet, and one already there is left alone with its source:
- * the hook and the MCP server open the store at the same session start, and one can open the moved
- * database and write its own -wal before the other moves the old one. ENOENT on a source means
- * another opener moved it first. Across filesystems rename(2) fails with EXDEV, which failed every
- * open (D#569); the files are then copied in and their sources removed (copyAcross).
  */
 function migrateUnhiddenStore() {
   const oldDir = join(homedir(), 'claude-mem-lite');
-  const name = ['claude-mem-lite.db', 'claude-mem.db'].find((n) => isSqliteFile(join(oldDir, n)));
+  const name = ['claude-mem-lite.db', 'claude-mem.db'].find((n) => existsSync(join(oldDir, n)));
   if (!name) return;
   const storeFile = (f) =>
     (f.startsWith('claude-mem-lite.db') || f.startsWith('claude-mem.db')) && !/\.legacy-backup-\d+$/.test(f);
   if (existsSync(DB_DIR) && readdirSync(DB_DIR).some(storeFile)) return;
   mkdirSync(DB_DIR, { recursive: true, mode: 0o700 });
-  const moves = ['', '-wal', '-shm']
-    .map((ext) => [join(oldDir, name + ext), join(DB_DIR, name + ext)])
-    .filter(([src]) => existsSync(src));
-  try {
-    try {
-      for (const [src, dest] of moves) placeUnlessPresent(src, dest);
-    } catch (e) {
-      if (e.code !== 'EXDEV') throw e;
-      copyAcross(moves);
-    }
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
-  }
-}
-
-/** Rename `from` to `dest` unless a file is already at `dest`; false when one was. */
-function placeUnlessPresent(from, dest) {
-  if (existsSync(dest)) return false;
-  renameSync(from, dest);
-  return true;
-}
-
-/**
- * The cross-filesystem move: every file is copied to a private name in DB_DIR and flushed before
- * the first one is put in place, so the database and its log arrive back to back. The placing stops
- * at the first file another opener got to first: a log put beside a store this opener did not place
- * would replay its old frames over pages the other one has written since and checkpointed (v6.30.7
- * r1 defects P2-1). Sources are removed once every file is placed, and one that cannot be (a
- * read-only ~/claude-mem-lite) stays, so the move is a copy there: failing the open at that point
- * left the store in place without its log (r1 P2-2). The private names do not start with the
- * store's name, so one left by a killed copy does not stop the next open from moving the store.
- */
-function copyAcross(moves) {
-  const staged = [];
-  try {
-    for (const [src] of moves) {
-      const tmp = join(DB_DIR, `.unhidden-move-${process.pid}-${randomBytes(4).toString('hex')}`);
-      staged.push(tmp);
-      copyFileSync(src, tmp, fsConstants.COPYFILE_EXCL);
-      // The copy takes its source's mode, and a read-only one could not be opened to flush it (r1 P2-3).
-      chmodSync(tmp, 0o600);
-      const fd = openSync(tmp, 'r+');
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-    }
-    let placed = 0;
-    while (placed < moves.length && placeUnlessPresent(staged[placed], moves[placed][1])) placed++;
-    for (const [src] of moves.slice(0, placed)) {
-      try {
-        unlinkSync(src);
-      } catch {
-        /* left where it was: its copy is in place */
-      }
-    }
-  } finally {
-    for (const tmp of staged) rmSync(tmp, { force: true });
-  }
-}
-
-/** The first 16 bytes of an SQLite database file (SQLite file format, "The Database Header"). */
-function isSqliteFile(path) {
-  let fd;
-  try {
-    fd = openSync(path, 'r');
-    const head = Buffer.alloc(16);
-    return readSync(fd, head, 0, 16, 0) === 16 && head.toString('latin1') === 'SQLite format 3\0';
-  } catch {
-    return false;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+  for (const ext of ['', '-wal', '-shm']) {
+    if (existsSync(join(oldDir, name + ext))) renameSync(join(oldDir, name + ext), join(DB_DIR, name + ext));
   }
 }
 

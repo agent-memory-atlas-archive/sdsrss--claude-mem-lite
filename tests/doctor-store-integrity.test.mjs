@@ -40,8 +40,12 @@ function liveStore(damage, observations = 12) {
   db.close();
 }
 
-/** The page-type byte of `table`'s first leaf page zeroed, so SQLite cannot read that page. */
-function zeroLeafType(table) {
+/**
+ * One byte of the header of `table`'s first leaf page set to `value`: offset 0 (the page type) to 0
+ * makes the page unreadable; offset 7 (the fragmented-bytes count) to a wrong count is damage that
+ * integrity_check reports and every read gets past.
+ */
+function pokeLeaf(table, offset, value) {
   const ro = new Database(dbPath, { readonly: true });
   const pageno = ro
     .prepare("SELECT pageno FROM dbstat WHERE name = ? AND pagetype = 'leaf' ORDER BY pageno LIMIT 1")
@@ -50,7 +54,9 @@ function zeroLeafType(table) {
   ro.close();
   if (!pageno || pageno === 1) throw new Error(`fixture found no leaf page of ${table} past page 1`);
   const image = readFileSync(dbPath);
-  image[(pageno - 1) * image.readUInt16BE(16)] = 0;
+  const at = (pageno - 1) * image.readUInt16BE(16) + offset;
+  if (image[at] === value) throw new Error('fixture changed nothing');
+  image[at] = value;
   writeFileSync(dbPath, image);
 }
 
@@ -179,7 +185,7 @@ describe('checkStoreIntegrity', () => {
 
   it('takes a check that throws on damage as a failed check, not as one that did not run', () => {
     liveStore(null);
-    zeroLeafType('observations');
+    pokeLeaf('observations', 0, 0);
     const db = new Database(dbPath);
     try {
       const r = checkStoreIntegrity(db);
@@ -192,7 +198,7 @@ describe('checkStoreIntegrity', () => {
 
   it('returns with no transaction left open when the rebuild meets damage it cannot get past', () => {
     liveStore(null);
-    zeroLeafType('sdk_sessions');
+    pokeLeaf('sdk_sessions', 0, 0);
     const db = new Database(dbPath);
     try {
       const r = checkStoreIntegrity(db);
@@ -283,6 +289,20 @@ describe('doctor on a store that opens', () => {
     // Every ✗ adds one issue, so doctor exits 1 on it: the same environment with a sound store as the base.
     const fails = (r) => r.checks.filter((c) => c.level === 'fail').length;
     expect(damaged.issues - sound.issues).toBe(fails(damaged) - fails(sound));
+  });
+
+  it('names the tables that count fewer rows after a rebuild that leaves damage', () => {
+    liveStore('lost-rows');
+    pokeLeaf('observations', 7, 5);
+    const lines = integrityChecks(doctorChecks());
+    expect(lines.map((c) => c.level)).toEqual(['warn', 'fail']);
+    const details = lines[1].details;
+    expect(details.join('\n')).toMatch(/Fragmentation of \d+ bytes reported as 5/);
+    expect(details.slice(-2)).toEqual([
+      'These tables now count fewer rows:',
+      'observations: 12 before, 3 after',
+    ]);
+    expect(tableRows()).toBe(3);
   });
 
   it('says it did not check when integrity_check itself throws', () => {

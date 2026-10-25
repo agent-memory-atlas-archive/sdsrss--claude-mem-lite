@@ -2024,7 +2024,7 @@ const CHECK_DAMAGE_CODE_RE = /^SQLITE_(CORRUPT|NOTADB)/;
  *
  * - `ok`: the check passes;
  * - `rebuilt`: it failed (`rows`) and passes after the rebuild;
- * - `damaged`: it still fails after the rebuild (`after`);
+ * - `damaged`: it still fails after the rebuild (`after`; `fell` as for `rebuilt`);
  * - `unrebuilt`: it failed and the rebuild stopped on the lock (`busy`), the disk or the memory
  *   (`rebuildErrors`), so nothing was rebuilt;
  * - `unchecked`: the check threw something other than damage (`error`), as it does on an FTS5
@@ -2134,7 +2134,7 @@ export function checkStoreIntegrity(db, { max = 5 } = {}) {
     after = [e.message];
   }
   if (passes(after)) return { state: 'rebuilt', rows, fell };
-  return { state: 'damaged', rows, after, rebuildErrors: errors };
+  return { state: 'damaged', rows, after, fell, rebuildErrors: errors };
 }
 
 /**

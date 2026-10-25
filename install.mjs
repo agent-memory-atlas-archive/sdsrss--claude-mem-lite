@@ -3209,13 +3209,16 @@ async function doctor() {
                     dwarn('Database integrity issues detected:');
                     for (const row of r.rows) log(`    ${row}`);
                     log('  Rebuilding the indexes...');
+                    // count(*) reads an index, so a count that fell is one an index gave for rows
+                    // its table does not hold.
+                    const logFell = () => {
+                      for (const c of r.fell) log(`    ${c.table}: ${c.before} before, ${c.after} after`);
+                    };
                     if (r.state === 'rebuilt' && r.fell.length > 0) {
-                      // count(*) reads an index, so a count that fell is one an index gave for rows
-                      // its table does not hold.
                       dwarn(
                         'Database integrity: ok after rebuilding the indexes, and these tables now count fewer rows:',
                       );
-                      for (const c of r.fell) log(`    ${c.table}: ${c.before} before, ${c.after} after`);
+                      logFell();
                     } else if (r.state === 'rebuilt') {
                       ok('Database integrity: ok after rebuilding the indexes');
                     } else if (r.state === 'unrebuilt') {
@@ -3225,6 +3228,10 @@ async function doctor() {
                     } else {
                       fail('Database integrity: not repaired by rebuilding the indexes');
                       for (const row of r.after) log(`    ${row}`);
+                      if (r.fell.length > 0) {
+                        log('  These tables now count fewer rows:');
+                        logFell();
+                      }
                       issues++;
                     }
                   }

@@ -2,6 +2,51 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.8 — doctor checks the backup snapshots before its restore command names one, and the claude-mem backup keeps its log
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.7`.
+
+- **doctor's restore command names a backup snapshot only after checking it** (D#558, D#577). doctor
+  restores each snapshot into a private copy in the data directory, opens the copy with this
+  version's opener in a child process, rebuilds its indexes the way the command does, and runs
+  SQLite's integrity check. The command restores the newest snapshot that passes and holds rows.
+  Every older snapshot is checked as well: each one that passes is listed before the command with
+  its observation count (and the count its own index lists, when that is higher) and gets its own
+  command after it; one the check could not run on is named with the reason. When the check could
+  not run on a snapshot newer than every one that passes, doctor gives no command and says what to
+  resolve first. doctor prints a line on stderr for each snapshot it checks, and removes the private
+  copies an interrupted check left.
+- **The restore and set-aside commands keep the broken file and its `-wal`** (D#539), as
+  `claude-mem-lite.db.corrupt-<time>` and `claude-mem-lite.db.corrupt-<time>-wal`; they used to
+  delete the `-wal` first. The restore command ends with `fts-check rebuild`.
+- **The session-start notice no longer gives a restore command**: when snapshots holding data exist,
+  it says how many and points at `doctor`, which checks which ones restore.
+- **`fts-check rebuild` and `mem_fts_check` rebuild every other index too** (REINDEX), after the FTS5
+  indexes (D#562): an ordinary index whose entries no longer match its table failed SQLite's
+  integrity check, and no command rebuilt it.
+- **install backs up an original claude-mem store across filesystems** (D#579). With the data
+  directory on another filesystem than `~/.claude-mem`, the move failed with EXDEV and install
+  printed "Legacy DB backup failed"; it now copies the files, leaves `~/.claude-mem` as it is, and
+  does not copy again once a backup is there.
+- **The claude-mem backup's log is named so SQLite reads it with the backup** (D#584):
+  `claude-mem-lite.db.legacy-backup-<time>-wal`. install named it
+  `claude-mem-lite.db-wal.legacy-backup-<time>`, and the backup opened as found read none of the rows
+  only in its log. The plugin's session start copied the database alone; it now copies the log too.
+  For a backup install made before this version, rename `claude-mem-lite.db-wal.legacy-backup-<time>`
+  to `claude-mem-lite.db.legacy-backup-<time>-wal` before opening it. A backup the session start made
+  before this version has no log; the session start left `~/.claude-mem` in place.
+- **Known limitation** (D#582): doctor's command chooses by age. When an older snapshot that passes
+  holds more observations than the newest one that passes, the command still restores the newest,
+  and the list before it says the older one holds more.
+- **Still as in 6.30.7:**
+  - With `CLAUDE_MEM_DIR` on another filesystem than `~/claude-mem-lite`, the move of a database left
+    there fails, and so does every open until the database and its `-wal` and `-shm` are moved by
+    hand (D#569, D#581).
+  - When opening the store fails twice on damage, the open deletes the `-wal` and retries, so rows
+    committed only in that log are lost (D#557). When that happened before doctor runs, the log the
+    commands above keep is an empty one.
+
 ## v6.30.7 — the plugin's session start leaves a git clone at `~/claude-mem-lite` alone, and copies the claude-mem store once
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

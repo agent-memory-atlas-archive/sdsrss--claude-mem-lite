@@ -154,8 +154,8 @@ fi
 #    while no database has been created yet. Whether there is a log is decided before the copy, so
 #    a private copy that went away fails the backup rather than leaving the log out of it.
 #    Private files not written for ten minutes are removed first: a session start is killed at
-#    30 s, so none of them belongs to a running copy. install's own (`.legacy-backup-copy-`) are
-#    install's to remove, under its lock.
+#    30 s. install's own (`.legacy-backup-copy-`) are left to install, which removes them before a
+#    copy of its own, under its lock.
 OLD_DIR="$HOME/.claude-mem"
 has_legacy_backup() {
   local f
@@ -164,7 +164,7 @@ has_legacy_backup() {
   done
   return 1
 }
-find "$DB_DIR" -maxdepth 1 -name '.legacy-backup-setup-*' -mmin +10 -exec rm -f {} + 2>/dev/null || true
+find "$DB_DIR/" -maxdepth 1 -name '.legacy-backup-setup-*' -mmin +10 -exec rm -f {} + 2>/dev/null || true
 if [[ -f "$OLD_DIR/claude-mem.db" && ! -f "$DB_DIR/claude-mem-lite.db" && ! -f "$DB_DIR/claude-mem.db" ]] &&
   ! has_legacy_backup; then
   TS="$(date +%s)"

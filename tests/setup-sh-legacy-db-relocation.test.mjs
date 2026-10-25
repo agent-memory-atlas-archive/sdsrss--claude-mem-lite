@@ -35,6 +35,7 @@ import {
   readFileSync,
   rmSync,
   copyFileSync,
+  symlinkSync,
   utimesSync,
 } from 'fs';
 import { join } from 'path';
@@ -236,30 +237,46 @@ describe('setup.sh database migrations under CLAUDE_MEM_DIR', () => {
     expect(mainBackups(dataDir)).toHaveLength(1);
   });
 
-  // A session start is killed at 30 s, so a private file not written for ten minutes belongs to no
-  // running copy. install's private files are install's to remove (it does, under its lock): an
-  // install copying the store can go longer than that between writes to one of them.
-  it("removes its own private files once ten minutes old, keeps fresh ones, and leaves install's", () => {
-    const home = join(sandbox, 'home');
-    const dataDir = join(home, '.claude-mem-lite');
-    mkdirSync(dataDir, { recursive: true });
-    writeFileSync(join(dataDir, 'claude-mem-lite.db'), 'CURRENT');
-    const old = '.legacy-backup-setup-1234-1600000000';
-    const fresh = '.legacy-backup-setup-5678-1600000001';
-    const installs = `.legacy-backup-copy-${spawnSync(process.execPath, ['-e', '']).pid}-1600000000000`;
-    for (const n of [old, `${old}-wal`, fresh, installs]) writeFileSync(join(dataDir, n), 'part of a copy');
-    const hourAgo = Date.now() / 1000 - 3600;
-    for (const n of [old, `${old}-wal`, installs]) utimesSync(join(dataDir, n), hourAgo, hourAgo);
+  // A session start is killed at 30 s, so a private file not written for ten minutes is left by a
+  // copy that is no longer running. install's private files are install's to remove (before a copy
+  // of its own, under its lock). Nine and eleven minutes pin the threshold; a data dir that is a
+  // symlink is swept too (v6.30.8 r2 F-1: find does not follow a starting point that is a link).
+  it.each([['a directory'], ['a symlink to a directory']])(
+    "removes its own private files once ten minutes old, keeps younger ones, and leaves install's, in %s",
+    (kind) => {
+      const home = join(sandbox, 'home');
+      const dataDir = join(home, '.claude-mem-lite');
+      mkdirSync(home, { recursive: true });
+      if (kind === 'a directory') mkdirSync(dataDir);
+      else {
+        mkdirSync(join(sandbox, 'real-data'));
+        symlinkSync(join(sandbox, 'real-data'), dataDir);
+      }
+      writeFileSync(join(dataDir, 'claude-mem-lite.db'), 'CURRENT');
+      const old = '.legacy-backup-setup-1234-1600000000';
+      const young = '.legacy-backup-setup-5678-1600000001';
+      const installs = `.legacy-backup-copy-${spawnSync(process.execPath, ['-e', '']).pid}-1600000000000`;
+      const ago = (min) => Date.now() / 1000 - min * 60;
+      for (const [n, min] of [
+        [old, 11],
+        [`${old}-wal`, 11],
+        [young, 9],
+        [installs, 60],
+      ]) {
+        writeFileSync(join(dataDir, n), 'part of a copy');
+        utimesSync(join(dataDir, n), ago(min), ago(min));
+      }
 
-    const r = runSetup({ home, dataDir: undefined });
+      const r = runSetup({ home, dataDir: undefined });
 
-    expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
-    expect(
-      readdirSync(dataDir)
-        .filter((f) => f.startsWith('.legacy-backup-'))
-        .sort(),
-    ).toEqual([fresh, installs].sort());
-  });
+      expect(r.status, `setup.sh stderr: ${r.stderr}`).toBe(0);
+      expect(
+        readdirSync(dataDir)
+          .filter((f) => f.startsWith('.legacy-backup-'))
+          .sort(),
+      ).toEqual([young, installs].sort());
+    },
+  );
 
   // v6.30.8 r1 defects F-3: under `set -e`, a private file the sweep could not remove ended the
   // session-start script before its later steps.

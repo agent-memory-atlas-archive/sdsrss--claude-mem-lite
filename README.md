@@ -213,7 +213,7 @@ All installation methods auto-detect and migrate from previous versions:
 
 **From the unhidden directory of versions before the first release, 2.0.0 (`~/claude-mem-lite/`):**
 - Its database (`claude-mem-lite.db` or `claude-mem.db`, with its `-wal` and `-shm`) is moved into the data directory at the first open, when the data directory holds no database, log, snapshot or kept copy of a claude-mem-lite store yet. Nothing else is moved, and nothing else in either directory is removed. A file by that name that is not an SQLite database stays where it is
-- With `CLAUDE_MEM_DIR` on another filesystem the files are copied into the data directory, then removed from `~/claude-mem-lite/`
+- With `CLAUDE_MEM_DIR` on another filesystem the files are copied into the data directory, then removed from `~/claude-mem-lite/` (they stay there when that directory is read-only)
 
 **In-place rename:**
 - Existing `claude-mem.db` in `~/.claude-mem-lite/` is automatically renamed to `claude-mem-lite.db`

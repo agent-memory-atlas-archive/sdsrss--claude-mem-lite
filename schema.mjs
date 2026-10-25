@@ -1687,7 +1687,7 @@ function capBusyWaits(db) {
  * the hook and the MCP server open the store at the same session start, and one can open the moved
  * database and write its own -wal before the other moves the old one. ENOENT on a source means
  * another opener moved it first. Across filesystems rename(2) fails with EXDEV, which failed every
- * open (D#569); the files are then copied as mv(1) does (copyAcross).
+ * open (D#569); the files are then copied in and their sources removed (copyAcross).
  */
 function migrateUnhiddenStore() {
   const oldDir = join(homedir(), 'claude-mem-lite');
@@ -1721,9 +1721,13 @@ function placeUnlessPresent(from, dest) {
 
 /**
  * The cross-filesystem move: every file is copied to a private name in DB_DIR and flushed before
- * the first one is put in place, so the database and its log arrive back to back, and a source is
- * removed only once its copy is in place. The private names do not start with the store's name, so
- * one left by a killed copy does not stop the next open from moving the store.
+ * the first one is put in place, so the database and its log arrive back to back. The placing stops
+ * at the first file another opener got to first: a log put beside a store this opener did not place
+ * would replay its old frames over pages the other one has written since and checkpointed (v6.30.7
+ * r1 defects P2-1). Sources are removed once every file is placed, and one that cannot be (a
+ * read-only ~/claude-mem-lite) stays, so the move is a copy there: failing the open at that point
+ * left the store in place without its log (r1 P2-2). The private names do not start with the
+ * store's name, so one left by a killed copy does not stop the next open from moving the store.
  */
 function copyAcross(moves) {
   const staged = [];
@@ -1732,6 +1736,8 @@ function copyAcross(moves) {
       const tmp = join(DB_DIR, `.unhidden-move-${process.pid}-${randomBytes(4).toString('hex')}`);
       staged.push(tmp);
       copyFileSync(src, tmp, fsConstants.COPYFILE_EXCL);
+      // The copy takes its source's mode, and a read-only one could not be opened to flush it (r1 P2-3).
+      chmodSync(tmp, 0o600);
       const fd = openSync(tmp, 'r+');
       try {
         fsyncSync(fd);
@@ -1739,7 +1745,15 @@ function copyAcross(moves) {
         closeSync(fd);
       }
     }
-    for (const [i, [src, dest]] of moves.entries()) if (placeUnlessPresent(staged[i], dest)) unlinkSync(src);
+    let placed = 0;
+    while (placed < moves.length && placeUnlessPresent(staged[placed], moves[placed][1])) placed++;
+    for (const [src] of moves.slice(0, placed)) {
+      try {
+        unlinkSync(src);
+      } catch {
+        /* left where it was: its copy is in place */
+      }
+    }
   } finally {
     for (const tmp of staged) rmSync(tmp, { force: true });
   }

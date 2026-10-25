@@ -8,6 +8,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -27,6 +28,7 @@ import { migrateLegacyClaudeMemData } from '../install.mjs';
 import { pathWithClaudeStub } from './claude-stub.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 const SCHEMA_URL = pathToFileURL(join(REPO, 'schema.mjs')).href;
 const roots = [];
 
@@ -74,7 +76,9 @@ function openStore(home, dataDir, shim) {
  * Preloaded into the child. exdev: renaming a file out of ~/claude-mem-lite fails as it does when
  * the data dir is on another filesystem. log-after-store: right after a store reaches the data dir,
  * another opener's log appears beside it. enoent-store: the store's rename reports ENOENT, as when
- * another opener moved it first (this one moves it, then says so).
+ * another opener moved it first (this one moves it, then says so). store-placed-by-other: while
+ * this opener copies the log across, another one puts the store in place and its log is gone (that
+ * opener checkpointed it away on close).
  */
 const FS_SHIM = `
 import fs from 'node:fs';
@@ -92,6 +96,15 @@ fs.renameSync = function (src, dest) {
   if (modes.includes('log-after-store') && d.endsWith('.db')) fs.writeFileSync(d + '-wal', 'another opener log');
   if (modes.includes('enoent-store') && s.startsWith(legacy) && s.endsWith('.db')) {
     throw Object.assign(new Error('ENOENT: no such file or directory, rename ' + s), { code: 'ENOENT' });
+  }
+};
+const copy = fs.copyFileSync;
+fs.copyFileSync = function (src, dest, mode) {
+  copy(src, dest, mode);
+  const s = String(src);
+  if (modes.includes('store-placed-by-other') && s.startsWith(legacy) && s.endsWith('.db-wal')) {
+    const store = s.slice(0, -'-wal'.length);
+    copy(store, String(dest).replace(/[^/]+$/, store.slice(legacy.length)));
   }
 };
 syncBuiltinESMExports();
@@ -352,6 +365,50 @@ describe('the unhidden-dir move across filesystems and beside another opener (D#
     openStore(home, undefined, 'exdev,log-after-store');
     expect(listing(legacy)['claude-mem-lite.db-wal']).toBe(oldLog);
     expect(privateCopies(dataDir)).toEqual([]);
+  });
+
+  // FAILS IF this opener puts its copy of the old log beside a store it did not put in place: the
+  // other opener has written that store and checkpointed its own log away, and the old frames would
+  // be replayed over its pages (v6.30.7 r1 defects P2-1).
+  it('across filesystems, a store another opener put in place first gets no log from this one', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-other-placed', { walOnly: true });
+    const oldLog = listing(legacy)['claude-mem-lite.db-wal'];
+    openStore(home, undefined, 'exdev,store-placed-by-other');
+    expect(listing(legacy)['claude-mem-lite.db-wal']).toBe(oldLog);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-other-placed')).toBe(0);
+    expect(privateCopies(dataDir)).toEqual([]);
+  });
+
+  // FAILS IF a source that cannot be removed (a read-only ~/claude-mem-lite) fails the open after the
+  // store is in place but before its log is: every later open then finds a store without its rows
+  // (v6.30.7 r1 defects P2-2). The move becomes a copy and the old files stay.
+  it.skipIf(isRoot)(
+    'across filesystems, a read-only old dir: the store and its log are copied, and stay',
+    () => {
+      const { home, legacy, dataDir } = sandbox();
+      writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-ro-dir', { walOnly: true });
+      const old = listing(legacy);
+      chmodSync(legacy, 0o555);
+      try {
+        openStore(home, undefined, 'exdev');
+      } finally {
+        chmodSync(legacy, 0o755);
+      }
+      expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-ro-dir')).toBe(1);
+      expectKept(legacy, old);
+      expect(privateCopies(dataDir)).toEqual([]);
+    },
+  );
+
+  // FAILS IF a copy takes the read-only mode of its source and cannot then be opened to flush it, so
+  // every open fails (v6.30.7 r1 defects P2-3).
+  it.skipIf(isRoot)('across filesystems, read-only store files: they are copied in', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-ro-files', { walOnly: true });
+    for (const f of ['claude-mem-lite.db', 'claude-mem-lite.db-wal']) chmodSync(join(legacy, f), 0o444);
+    openStore(home, undefined, 'exdev');
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-ro-files')).toBe(1);
   });
 
   // FAILS IF the open fails when another opener moved the store first (its rename reports ENOENT).

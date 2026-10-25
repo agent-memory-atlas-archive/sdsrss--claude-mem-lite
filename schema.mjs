@@ -1957,6 +1957,8 @@ const PAGE_CHECK_ROW = '*** in database ';
 const PAGE_DAMAGE_CODE_RE = /^SQLITE_(CORRUPT(?!_VTAB|_INDEX)|NOTADB)/;
 // The page holding the lock bytes belongs to no tree and is never free (fileformat2 §1.3).
 const LOCK_BYTE_OFFSET = 0x40000000;
+// A rebuild statement that fails with one of these met another connection's lock.
+const LOCK_CODE_RE = /^SQLITE_(BUSY|LOCKED)/;
 
 /**
  * Whether the store's pages are sound enough for an index rebuild to write into (D#591). A rebuild
@@ -2118,6 +2120,8 @@ function rebuildFtsTables(db) {
     } catch (e) {
       errors.push(`${fts}: ${e.message}`);
       codes.push(e.code ?? null);
+      // The rest would wait for the same lock, each for the whole busy timeout (D#592).
+      if (LOCK_CODE_RE.test(e.code ?? '')) break;
     }
   }
   return { rebuilt, errors, codes };
@@ -2136,6 +2140,7 @@ export function rebuildIndexes(db) {
   const pages = checkStorePages(db);
   if (pages.state !== 'ok') return refusedRebuild(pages);
   const result = { ...rebuildFtsTables(db), pages };
+  if (result.codes.some((c) => LOCK_CODE_RE.test(c ?? ''))) return result;
   try {
     db.exec('REINDEX');
     result.rebuilt.push('indexes');
@@ -2144,6 +2149,57 @@ export function rebuildIndexes(db) {
     result.codes.push(e.code ?? null);
   }
   return result;
+}
+
+/** SQLite's integrity check, one entry per row it returns. */
+function integrityRows(db, max) {
+  return db.prepare(`PRAGMA integrity_check(${max})`).pluck().all().map(String);
+}
+
+/**
+ * Doctor's check of a store that opens (D#590, D#592): the pages (checkStorePages), then SQLite's
+ * integrity check, and when that fails, every index rebuilt as `fts-check rebuild` rebuilds them
+ * (rebuildIndexes, statement by statement) and the integrity check run again. FTS5's own check,
+ * which doctor runs first, sees neither an ordinary index that lost entries nor FTS5 shadow rows
+ * out of key order. The pages come first because the integrity check skips the freelist on
+ * VACUUMed stores (checkStorePages says why), and a rebuild over damaged pages overwrites rows.
+ *
+ * - `ok`: the pages and the integrity check pass;
+ * - `rebuilt`: the integrity check failed (`rows`) and passes after the rebuild;
+ * - `damaged`: the pages are damaged (`pages`), so nothing was rebuilt;
+ * - `unrepaired`: the integrity check failed (`rows`), and the rebuild stopped (`errors`; `busy`
+ *   when on the lock) or the check fails after it (`after`);
+ * - `unchecked`: the page check could not run, or the integrity check threw (`error`), as it does
+ *   on an FTS5 table whose config row FTS5 refuses.
+ * @param {Database} db Opened read-write database instance
+ * @param {{max?: number}} [opts] at most `max` rows of each integrity check
+ * @returns {{state: 'ok'|'rebuilt'|'damaged'|'unrepaired'|'unchecked', rows?: string[],
+ *   after?: string[], pages?: ReturnType<typeof checkStorePages>, errors?: string[], busy?: boolean,
+ *   error?: string}}
+ */
+export function checkStoreIntegrity(db, { max = 5 } = {}) {
+  const pages = checkStorePages(db);
+  if (pages.state === 'damaged') return { state: 'damaged', pages };
+  if (pages.state === 'unchecked') return { state: 'unchecked', error: pages.error };
+  let rows;
+  try {
+    rows = integrityRows(db, max);
+  } catch (e) {
+    return { state: 'unchecked', error: e.message };
+  }
+  if (rows.length === 1 && rows[0] === 'ok') return { state: 'ok' };
+  const rebuilt = rebuildIndexes(db);
+  // The check after it decides: an FTS5 table that is missing is an error of the rebuild and no
+  // damage, and a rebuild that stopped leaves the check failing.
+  let after;
+  try {
+    after = integrityRows(db, max);
+  } catch (e) {
+    after = [e.message];
+  }
+  if (after.length === 1 && after[0] === 'ok') return { state: 'rebuilt', rows };
+  const busy = rebuilt.codes.some((c) => LOCK_CODE_RE.test(c ?? ''));
+  return { state: 'unrepaired', rows, after, errors: rebuilt.errors, busy };
 }
 
 /**

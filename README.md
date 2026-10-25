@@ -959,6 +959,10 @@ Your data directory (`~/.claude-mem-lite/`) is untouched by install/rollback; sc
 Checks Node.js version, dependencies, server/hook files, database integrity, FTS5 indexes,
 stale processes, MCP registration, and whether the marketplace clone can still be updated.
 
+On a store that opens it checks the database's pages and runs SQLite's integrity check; when
+only indexes are damaged it rebuilds them the way `fts-check rebuild` does. On damaged pages it
+writes nothing and prints a command that copies the data directory first.
+
 It runs `claude mcp list` to answer the registration question, and that **health-checks every
 MCP server you have configured** — i.e. briefly launches each one, including remote endpoints.
 `status` deliberately does not: on a plugin install it answers from the manifest instead.

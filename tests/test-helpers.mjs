@@ -34,9 +34,12 @@ export function createTestDb() {
  *   shape of an index that kept a delete's rows. The 73 short snapshots of the D#558 corpus lost
  *   theirs from the table, and their docsize still lists them (v6.30.8 r1 claims F11);
  * - 'page': the cell pointers of the observations table's first leaf page garbled;
+ * - 'fts-order': the first two cell pointers of observations_fts_idx's root page swapped, so
+ *   integrity_check reports its rows out of key order while FTS5's own integrity-check passes, and
+ *   an FTS rebuild repairs it (the D#559 shape);
  * - 'header': the 16-byte file header overwritten.
  * @param {string} path
- * @param {{observations?: number, damage?: 'fts'|'index'|'fts-config'|'lost-rows'|'page'|'header'|null}} [opts]
+ * @param {{observations?: number, damage?: 'fts'|'index'|'fts-config'|'lost-rows'|'page'|'fts-order'|'header'|null}} [opts]
  * @returns {string} `path`
  */
 export function writeStoreSnapshot(path, { observations = 12, damage = null } = {}) {
@@ -125,10 +128,26 @@ export function writeStoreSnapshot(path, { observations = 12, damage = null } = 
     for (const r of idx) put.run(r.type, r.name, r.tbl_name, r.rootpage, r.sql);
     h.close();
   }
-  if (damage === 'page' || damage === 'header') {
+  if (damage === 'page' || damage === 'header' || damage === 'fts-order') {
     const image = readFileSync(path);
     if (damage === 'header') {
       image.write('not a database!!', 0, 'latin1');
+    } else if (damage === 'fts-order') {
+      // Each observation above went in by its own transaction, so the index holds one row per segment.
+      const mem = new Database(Buffer.from(image));
+      const root = mem
+        .prepare("SELECT rootpage FROM sqlite_master WHERE name = 'observations_fts_idx'")
+        .pluck()
+        .get();
+      mem.close();
+      const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
+      const at = (root - 1) * pageSize;
+      if (image[at] !== 0x0a || image.readUInt16BE(at + 3) < 2) {
+        throw new Error('fixture needs observations_fts_idx on one leaf page with two rows or more');
+      }
+      const first = image.readUInt16BE(at + 8);
+      image.writeUInt16BE(image.readUInt16BE(at + 10), at + 8);
+      image.writeUInt16BE(first, at + 10);
     } else {
       // The page number from dbstat on an in-memory copy of the image (a Buffer opens as a memdb),
       // so the snapshot file itself is never opened.

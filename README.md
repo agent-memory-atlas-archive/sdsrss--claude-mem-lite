@@ -653,7 +653,7 @@ surface — reach them through the CLI column in the second table.
 | `mem_maintain` | `claude-mem-lite maintain scan --ops dedup,decay` | dedup / decay / cleanup / vacuum (`scan` previews, `execute` applies). |
 | `mem_optimize` | `claude-mem-lite optimize` | LLM-powered re-enrich / normalize / cluster-merge (preview default; `--run` to apply). |
 | `mem_export` | `claude-mem-lite export` | JSON / JSONL dump, filters by project, type, date. |
-| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity + rebuild. |
+| `mem_fts_check` | `claude-mem-lite fts-check <check\|rebuild>` | FTS5 integrity check; rebuild of the FTS5 indexes, then every other index (REINDEX). |
 | `mem_browse` | `claude-mem-lite browse` | Tier-grouped dashboard (working / active / archive). |
 
 **Headless runs (`claude -p`).** With no permission prompt to answer, Claude Code 2.1.292

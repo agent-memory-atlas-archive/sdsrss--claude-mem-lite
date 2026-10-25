@@ -473,24 +473,34 @@ export async function dbCheckRemedy(dbPath, err) {
   // only inside the Database check's catch, so the cost of loading it lazily is paid by
   // the rare failure rather than by every invocation. Same shape as the six dynamic
   // imports doctor already uses.
-  const { isDbUnusableError, dbUnusableRemedy } = await import('./lib/db-unusable.mjs');
+  const { isDbUnusableError, dbUnusableRemedy, checkSnapshot } = await import('./lib/db-unusable.mjs');
   if (!isDbUnusableError(err)) return null;
-  const remedy = dbUnusableRemedy(dbPath, err);
+  // doctor checks the snapshots (D#558): each is restored into a private copy and opened by the
+  // product's opener in a child process; the command names the newest that passes, and the older
+  // ones that pass are listed with their own commands (D#577). One line per check on stderr: a large
+  // snapshot takes seconds, and stdout may be the --json face.
+  const remedy = dbUnusableRemedy(dbPath, err, {
+    check: (path, { nth, of }) => {
+      process.stderr.write(`  Checking backup snapshot ${nth} of ${of}: ${basename(path)}\n`);
+      return checkSnapshot(path);
+    },
+  });
   if (remedy.kind === 'unknown') return remedy.note;
   if (remedy.kind === 'schema') return `SQLite cannot read the database's schema. ${remedy.note}`;
-  // Both commands start by deleting the -wal and -shm and then replace or move the database file,
-  // under any session still holding the store (D#534). The SessionStart notice says the same before
-  // its copy of the command.
+  // Both commands move the database file and its -wal aside and delete the -shm, under any session
+  // still holding the store (D#534). The SessionStart notice says the same before its copy of the
+  // command.
+  const kept = `The broken file and its log are kept as ${remedy.keptAs} and ${remedy.keptAs}-wal.`;
   if (remedy.kind === 'set-aside') {
     return (
-      `No non-empty backup snapshot exists beside the database. Once every Claude Code session is closed, ` +
-      `set the broken file aside so a fresh store is created on the next session: ${remedy.command}`
+      `${remedy.found} Once every Claude Code session is closed, set the broken file aside so a fresh ` +
+      `store is created on the next session: ${remedy.command} — ${kept}`
     );
   }
-  return (
-    `Restore the newest of ${remedy.snapshotCount} backup snapshot(s) once every Claude Code session ` +
-    `is closed: ${remedy.command} — move the broken file aside first if you want to keep it for inspection.`
-  );
+  // The older snapshots to choose from (D#577) follow the command they are the alternatives to; the
+  // list with their counts is in `found`, before it.
+  const also = (remedy.alternatives ?? []).map((a) => ` To restore ${a.path} instead: ${a.command}`).join('');
+  return `${remedy.found} Once every Claude Code session is closed, restore it: ${remedy.command} — ${kept}${also}`;
 }
 
 // ─── Install ────────────────────────────────────────────────────────────────
@@ -3093,6 +3103,16 @@ async function doctor() {
   }
 
   // Database
+  // A check of a backup snapshot that was interrupted (Ctrl-C, SIGTERM) leaves its private copy in
+  // the data directory; sweep it before the check below, healthy store or not (D#558).
+  if (!dataDirUnreadable) {
+    try {
+      const { sweepSnapshotChecks } = await import('./lib/db-unusable.mjs');
+      sweepSnapshotChecks(dirname(DB_PATH));
+    } catch {
+      /* a sweep is housekeeping: it never takes the run */
+    }
+  }
   if (dataDirUnreadable) {
     notCheckedDenied('Database');
   } else if (existsSync(DB_PATH) && bindingBrokenHere) {

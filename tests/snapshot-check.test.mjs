@@ -766,6 +766,7 @@ describe('the remedy names the data directory and never stops silently', () => {
     const r = du.dbUnusableRemedy(db, new Error('malformed database schema (x)'));
     expect(r.kind).toBe('schema');
     expect(r.note).not.toMatch(/command/);
+    expect(r.note).toMatch(/ checks which ones restore\.$/);
   });
 
   it('names what could not be checked, and how to re-run doctor', () => {

@@ -32,7 +32,7 @@ function withDb(snapshotNames = []) {
   let t = 1_700_000_000;
   for (const n of snapshotNames) {
     const p = join(dir, n);
-    // A real snapshot: since D#558 the restore command names only one that restores cleanly.
+    // A real snapshot: since D#558 the restore command names only one that passes doctor's check.
     writeStoreSnapshot(p);
     // Deterministic ordering: the newest snapshot is the one the remedy must name, and
     // two files written in the same millisecond would make "newest" arbitrary (D#9).

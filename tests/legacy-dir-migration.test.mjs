@@ -479,6 +479,25 @@ describe('the unhidden-dir move puts the store in place in one step (D#580)', ()
     },
   );
 
+  // FAILS IF an old store whose file this user cannot read is taken as moved by another opener:
+  // the open would create an empty store and leave it behind without a word. As before, it is moved
+  // into the data dir, where opening it fails.
+  it.skipIf(isRoot)('an old store this user cannot read: moved as before, not left behind', () => {
+    const { home, legacy, dataDir } = sandbox();
+    const old = join(legacy, 'claude-mem-lite.db');
+    writeStore(old, 'legacy-unreadable');
+    chmodSync(old, 0o000);
+    try {
+      const r = openStore(home, undefined, { expectOk: false });
+      expect(r.status).not.toBe(0);
+      expect(existsSync(old)).toBe(false);
+      expect(existsSync(join(dataDir, 'claude-mem-lite.db'))).toBe(true);
+    } finally {
+      for (const p of [old, join(dataDir, 'claude-mem-lite.db')]) if (existsSync(p)) chmodSync(p, 0o600);
+    }
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-unreadable')).toBe(1);
+  });
+
   // FAILS IF the fallback for a store SQLite cannot read changed: it is moved into the data dir as
   // before, where doctor finds it.
   it('a file SQLite cannot read is moved as before', () => {

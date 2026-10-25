@@ -2030,7 +2030,8 @@ const CHECK_DAMAGE_CODE_RE = /^SQLITE_(CORRUPT|NOTADB)/;
  * - `unchecked`: the check threw something other than damage (`error`), as it does on an FTS5
  *   table whose config row FTS5 refuses. A check that throws SQLITE_CORRUPT has found damage: its
  *   message is the check's line.
- * A row SQLite returns with line breaks in it is split into its lines; at most `max` lines.
+ * A row SQLite returns with line breaks in it is split into its lines; at most `max` lines. The
+ * second check throwing something other than damage throws, after the transaction has ended.
  * @param {Database} db Opened read-write database instance
  * @param {{max?: number}} [opts]
  * @returns {{state: 'ok'|'rebuilt'|'damaged'|'unrebuilt'|'unchecked', rows: string[], after?: string[],
@@ -2127,12 +2128,7 @@ export function checkStoreIntegrity(db, { max = 5 } = {}) {
     if (stopped) return stopped;
     errors = [...errors, e.message];
   }
-  let after;
-  try {
-    after = check();
-  } catch (e) {
-    after = [e.message];
-  }
+  const after = check();
   if (passes(after)) return { state: 'rebuilt', rows, fell };
   return { state: 'damaged', rows, after, fell, rebuildErrors: errors };
 }

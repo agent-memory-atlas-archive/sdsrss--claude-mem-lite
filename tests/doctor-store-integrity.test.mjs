@@ -209,23 +209,28 @@ describe('checkStoreIntegrity', () => {
     }
   });
 
-  it('rolls the rebuild back when the disk fills, and does not call the store damaged', () => {
-    // 300 rows: the index the rebuild writes needs more pages than the one it replaces (at 12 it does not).
-    liveStore('index', 300);
-    const db = new Database(dbPath);
-    try {
-      // No page past the ones the file has: the rebuild's first new page meets SQLITE_FULL.
-      db.pragma(`max_page_count = ${db.pragma('page_count', { simple: true })}`);
-      const r = checkStoreIntegrity(db);
-      expect(r.state).toBe('unrebuilt');
-      expect(r.busy).toBe(false);
-      expect(r.rebuildErrors.join('\n')).toMatch(/database or disk is full/);
-      expect(db.inTransaction).toBe(false);
-    } finally {
-      db.close();
-    }
-    expect(integrity(), 'the rebuild was rolled back').toMatch(/missing from index/);
-  });
+  // 300 rows: the index the rebuild writes needs more pages than the one it replaces (at 12 it does
+  // not), so with no page past the file's (+0) or one or two more, REINDEX meets SQLITE_FULL. At +0
+  // SQLite ends the transaction itself; at +1 it undoes only the REINDEX and keeps the transaction
+  // open (sqlite.org/lang_transaction.html, "Response To Errors Within A Transaction").
+  it.each([0, 1])(
+    'rolls the rebuild back when the disk fills (+%i pages), and does not call the store damaged',
+    (spare) => {
+      liveStore('index', 300);
+      const db = new Database(dbPath);
+      try {
+        db.pragma(`max_page_count = ${db.pragma('page_count', { simple: true }) + spare}`);
+        const r = checkStoreIntegrity(db);
+        expect(r.state).toBe('unrebuilt');
+        expect(r.busy).toBe(false);
+        expect(r.rebuildErrors.join('\n')).toMatch(/database or disk is full/);
+        expect(db.inTransaction).toBe(false);
+      } finally {
+        db.close();
+      }
+      expect(integrity(), 'the rebuild was rolled back').toMatch(/missing from index/);
+    },
+  );
 
   it('does not call the store damaged when another connection holds the lock the rebuild needs', () => {
     liveStore('index');

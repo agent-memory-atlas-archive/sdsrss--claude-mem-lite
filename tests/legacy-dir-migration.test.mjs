@@ -5,9 +5,10 @@
 // that path. Each case opens the store in a child, since DB_DIR is fixed from CLAUDE_MEM_DIR when
 // lib/data-paths.mjs is first imported.
 import { describe, it, expect, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -18,7 +19,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
@@ -51,16 +52,65 @@ function childEnv(home, dataDir) {
   return env;
 }
 
-/** The product's ensureDb, once, in a child whose HOME (and CLAUDE_MEM_DIR, when given) is the sandbox's. */
-function openStore(home, dataDir) {
+/**
+ * The product's ensureDb, once, in a child whose HOME (and CLAUDE_MEM_DIR, when given) is the
+ * sandbox's. shim: a mode for the fs preload below. Returns the child's result; `expectOk: false`
+ * leaves its exit status to the caller.
+ */
+function openStore(home, dataDir, { shim, expectOk = true, env: extra = {} } = {}) {
   const code = `const s = await import(${JSON.stringify(SCHEMA_URL)}); s.ensureDb().close();`;
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
-    env: childEnv(home, dataDir),
-    encoding: 'utf8',
-    timeout: 60000,
-  });
-  expect(r.status, r.stderr).toBe(0);
+  const env = { ...childEnv(home, dataDir), ...extra };
+  const args = ['--input-type=module', '-e', code];
+  if (shim) {
+    const preload = join(dirname(home), 'fs-shim.mjs');
+    writeFileSync(preload, FS_SHIM);
+    Object.assign(env, {
+      SHIM_MODE: shim,
+      SHIM_DATA_DIR: dataDir ?? join(home, '.claude-mem-lite'),
+      SHIM_OPENER: `const s = await import(${JSON.stringify(SCHEMA_URL)}); const db = s.ensureDb(); db.prepare("INSERT INTO observations (memory_session_id, project, type, title, narrative, created_at, created_at_epoch) VALUES ('s1','p','discovery','between','n',datetime('now'),2)").run(); db.close();`,
+    });
+    args.unshift('--import', pathToFileURL(preload).href);
+  }
+  const r = spawnSync(process.execPath, args, { env, encoding: 'utf8', timeout: 60000 });
+  if (expectOk) expect(r.status, r.stderr).toBe(0);
+  return r;
 }
+
+/**
+ * Preloaded into the child: another opener acts at the moment the first store file reaches the data
+ * dir (by link or rename), before the call that puts it there.
+ * - before-place: it has already put a store of its own there (one holding the observation 'other').
+ * - after-place: right after that file lands, it opens the store, writes the observation 'between'
+ *   and closes; then the move goes on.
+ * - no-link: link(2) fails as on a filesystem without hard links.
+ */
+const FS_SHIM = `
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const dataDir = process.env.SHIM_DATA_DIR + '/';
+const mode = process.env.SHIM_MODE;
+let fired = false;
+const intoDataDir = (dest) => String(dest).startsWith(dataDir) && /\\/claude-mem(-lite)?\\.db$/.test(String(dest));
+for (const name of ['linkSync', 'renameSync']) {
+  const real = fs[name];
+  fs[name] = function (src, dest) {
+    if (mode === 'no-link' && name === 'linkSync') throw Object.assign(new Error('EPERM: operation not permitted, link'), { code: 'EPERM' });
+    if (!fired && intoDataDir(dest)) {
+      fired = true;
+      if (mode === 'before-place') fs.copyFileSync(process.env.SHIM_OTHER_STORE, dataDir + 'claude-mem-lite.db');
+      const out = real(src, dest);
+      if (mode === 'after-place') {
+        const r = spawnSync(process.execPath, ['--input-type=module', '-e', process.env.SHIM_OPENER], { env: process.env, encoding: 'utf8' });
+        if (r.status !== 0) throw new Error('the other opener failed: ' + r.stderr);
+      }
+      return out;
+    }
+    return real(src, dest);
+  };
+}
+syncBuiltinESMExports();
+`;
 
 function write(path, text) {
   mkdirSync(dirname(path), { recursive: true });
@@ -268,6 +318,175 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
     expectKept(legacy, clone);
   }, 130000);
+});
+
+/** Two writable directories on different devices (here /tmp is a tmpfs; a CI runner has /dev/shm). */
+function dirsOnTwoFilesystems() {
+  const made = [];
+  for (const r of [tmpdir(), '/dev/shm', join(homedir(), '.cache')]) {
+    try {
+      made.push(mkdtempSync(join(r, 'cml-legacy-xdev-')));
+    } catch {
+      /* not there, or not writable */
+    }
+  }
+  roots.push(...made);
+  for (const a of made) for (const b of made) if (statSync(a).dev !== statSync(b).dev) return [a, b];
+  return null;
+}
+const twoFilesystems = (() => {
+  const pair = dirsOnTwoFilesystems();
+  for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
+  return pair !== null;
+})();
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+const STORE_FILES = ['claude-mem-lite.db', 'claude-mem-lite.db-wal', 'claude-mem-lite.db-shm'];
+const leftInOldDir = (legacy) => STORE_FILES.filter((n) => existsSync(join(legacy, n)));
+const privateCopies = (dataDir) => readdirSync(dataDir).filter((n) => n.startsWith('.unhidden-move-'));
+const integrity = (dbPath) => {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return db.prepare('PRAGMA integrity_check(1)').pluck().get();
+  } finally {
+    db.close();
+  }
+};
+
+// D#580 (D#569's second attempt). The store and its -wal used to reach the data dir in two renames
+// (three with the -shm), and across filesystems the first threw EXDEV and every open failed. The
+// first attempt copied them across and still put the store and its log in place in two steps, so an
+// opener in between had the old log replayed over its writes (v6.30.7 r2 P2-1), and a slower opener
+// could put its copy over a store another one had placed (P2-2). Now SQLite copies the store into
+// one file in the data dir (VACUUM INTO, which carries the -wal's rows) and link(2) puts it in
+// place, failing if a store is already there; only then do the old files go.
+describe('the unhidden-dir move puts the store in place in one step (D#580)', () => {
+  // FAILS IF the move across filesystems fails the open (EXDEV), leaves the -wal's rows behind, or
+  // leaves the old files or a private copy.
+  it.skipIf(!twoFilesystems)('across filesystems: the rows arrive, and the old store files go', () => {
+    const [a, b] = dirsOnTwoFilesystems();
+    const home = join(a, 'home');
+    const legacy = join(home, 'claude-mem-lite');
+    const dataDir = join(b, 'data');
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-xdev', { walOnly: true });
+    write(join(legacy, 'runtime', 'keep.txt'), 'runtime file');
+    openStore(home, dataDir);
+    openStore(home, dataDir);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-xdev')).toBe(1);
+    expect(leftInOldDir(legacy)).toEqual([]);
+    expect(privateCopies(dataDir)).toEqual([]);
+    expect(readFileSync(join(legacy, 'runtime', 'keep.txt'), 'utf8')).toBe('runtime file');
+  });
+
+  // FAILS IF the store and its log arrive in two steps: an opener between them writes to the store,
+  // and the old log placed after it is replayed over those writes (v6.30.7 r2 P2-1).
+  it('another opener writing as soon as the store arrives keeps its row and the old ones', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-wal-row', { walOnly: true });
+    openStore(home, undefined, { shim: 'after-place' });
+    openStore(home);
+    const db = join(dataDir, 'claude-mem-lite.db');
+    expect(integrity(db)).toBe('ok');
+    expect(markers(db, 'legacy-wal-row')).toBe(1);
+    expect(markers(db, 'between')).toBe(1);
+  });
+
+  // FAILS IF the move puts its copy over a store another opener placed first (v6.30.7 r2 P2-2:
+  // existsSync, then a rename that replaces), or removes the old files when it placed nothing.
+  it('a store another opener placed first stays, and the old files stay for it', () => {
+    const { root, home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-second', { walOnly: true });
+    const other = join(root, 'other.db');
+    writeStore(other, 'other');
+    const old = listing(legacy);
+    openStore(home, undefined, { shim: 'before-place', env: { SHIM_OTHER_STORE: other } });
+    const db = join(dataDir, 'claude-mem-lite.db');
+    expect(markers(db, 'other')).toBe(1);
+    expect(markers(db, 'legacy-second')).toBe(0);
+    expect(privateCopies(dataDir)).toEqual([]);
+    for (const n of Object.keys(old).filter(
+      (k) => k === 'claude-mem-lite.db' || k === 'claude-mem-lite.db-wal',
+    )) {
+      expect(listing(legacy)[n], n).toBe(old[n]);
+    }
+  });
+
+  // FAILS IF a filesystem without hard links fails every open.
+  it('without hard links: the copy is renamed into place', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-no-link', { walOnly: true });
+    openStore(home, undefined, { shim: 'no-link' });
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-no-link')).toBe(1);
+    expect(leftInOldDir(legacy)).toEqual([]);
+    expect(privateCopies(dataDir)).toEqual([]);
+  });
+
+  // FAILS IF a read-only ~/claude-mem-lite fails every open (the rename's EACCES) once SQLite can
+  // read the store there: the rows are copied and the old files, which cannot go, stay.
+  it.skipIf(isRoot)('a read-only old dir: the rows arrive and the old files stay', () => {
+    const { home, legacy, dataDir } = sandbox();
+    const old = join(legacy, 'claude-mem-lite.db');
+    writeStore(old, 'legacy-read-only', { walOnly: true });
+    const ro = new Database(old, { readonly: true });
+    ro.prepare('SELECT count(*) FROM observations').get();
+    ro.close();
+    expect(existsSync(`${old}-shm`), 'premise: a reader left its -shm').toBe(true);
+    chmodSync(legacy, 0o555);
+    try {
+      openStore(home);
+      openStore(home);
+    } finally {
+      chmodSync(legacy, 0o755);
+    }
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-read-only')).toBe(1);
+    expect(existsSync(old)).toBe(true);
+  });
+
+  // FAILS IF the fallback for a store SQLite cannot read changed: it is moved into the data dir as
+  // before, where doctor finds it.
+  it('a file SQLite cannot read is moved as before', () => {
+    const { home, legacy, dataDir } = sandbox();
+    write(join(legacy, 'claude-mem-lite.db'), 'not a database at all '.repeat(50));
+    const r = openStore(home, undefined, { expectOk: false });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/not a database/);
+    expect(readFileSync(join(dataDir, 'claude-mem-lite.db'), 'utf8')).toMatch(/^not a database at all/);
+    expect(privateCopies(dataDir)).toEqual([]);
+  });
+
+  // FAILS IF a private copy a killed move left is never removed (each is a whole copy of the store),
+  // or one a running opener is still writing is removed.
+  it('removes a private copy a killed move left, and keeps a running one', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-after-kill');
+    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    write(join(dataDir, `.unhidden-move-${dead}-0a1b2c3d`), 'half a copy');
+    write(join(dataDir, `.unhidden-move-${process.pid}-0a1b2c3d`), 'a copy being written');
+    openStore(home);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-after-kill')).toBe(1);
+    expect(privateCopies(dataDir)).toEqual([`.unhidden-move-${process.pid}-0a1b2c3d`]);
+  });
+
+  it('four first opens at once: one store, every row, nothing left behind', async () => {
+    for (let trial = 0; trial < 3; trial++) {
+      const { home, legacy, dataDir } = sandbox();
+      writeStore(join(legacy, 'claude-mem-lite.db'), `legacy-race-${trial}`, { walOnly: true });
+      const code = `const s = await import(${JSON.stringify(SCHEMA_URL)}); s.ensureDb().close();`;
+      const runs = await Promise.all(
+        Array.from({ length: 4 }, () => {
+          const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: childEnv(home) });
+          let err = '';
+          child.stderr.on('data', (d) => (err += d));
+          return new Promise((done) => child.on('close', (status) => done({ status, err })));
+        }),
+      );
+      for (const r of runs) expect(r.status, r.err).toBe(0);
+      const db = join(dataDir, 'claude-mem-lite.db');
+      expect(integrity(db)).toBe('ok');
+      expect(markers(db, `legacy-race-${trial}`)).toBe(1);
+      expect(leftInOldDir(legacy)).toEqual([]);
+      expect(privateCopies(dataDir)).toEqual([]);
+    }
+  }, 60000);
 });
 
 /**

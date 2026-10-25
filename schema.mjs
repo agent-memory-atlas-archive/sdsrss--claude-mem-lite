@@ -5,7 +5,20 @@
 import Database from 'better-sqlite3';
 import { homedir } from 'os';
 import { join } from 'path';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
+import { randomBytes } from 'crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  openSync,
+} from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
 import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
@@ -1659,14 +1672,16 @@ function capBusyWaits(db) {
 
 /**
  * Move a store left in the unhidden data dir of versions before the first release (2.0.0),
- * ~/claude-mem-lite/, into DB_DIR. Only the store's own files move (the database, then its -wal
- * and -shm, under the same name; ensureDb then renames claude-mem.db), and only into a DB_DIR
- * holding no file of a store's family: a database, a log, a snapshot or a kept copy. install's
- * backup of an original claude-mem store (migrateLegacyClaudeMemData, `.legacy-backup-<ms>`) is
- * not one. Nothing is removed. It used to rename the whole directory over a DB_DIR it first
- * removed when DB_DIR held no `*.db` name (D#561): after the set-aside command that took the kept
- * file, DB_DIR is also the code dir of a direct install, and a git clone of this repository made
- * in ~ is at that path.
+ * ~/claude-mem-lite/, into DB_DIR, and only into a DB_DIR holding no file of a store's family: a
+ * database, a log, a snapshot or a kept copy. install's backup of an original claude-mem store
+ * (migrateLegacyClaudeMemData, `.legacy-backup-<ms>`) is not one. Only the store's own files go:
+ * it used to rename the whole directory over a DB_DIR it first removed when DB_DIR held no `*.db`
+ * name (D#561): after the set-aside command that took the kept file, DB_DIR is also the code dir of
+ * a direct install, and a git clone of this repository made in ~ is at that path.
+ *
+ * The store reaches DB_PATH as one file in one step (placeUnhiddenStore, D#580). A store SQLite
+ * cannot read there is moved as it always was: the database, then its -wal and -shm, under the same
+ * name (ensureDb then renames claude-mem.db).
  */
 function migrateUnhiddenStore() {
   const oldDir = join(homedir(), 'claude-mem-lite');
@@ -1676,8 +1691,110 @@ function migrateUnhiddenStore() {
     (f.startsWith('claude-mem-lite.db') || f.startsWith('claude-mem.db')) && !/\.legacy-backup-\d+$/.test(f);
   if (existsSync(DB_DIR) && readdirSync(DB_DIR).some(storeFile)) return;
   mkdirSync(DB_DIR, { recursive: true, mode: 0o700 });
+  if (placeUnhiddenStore(join(oldDir, name))) return;
   for (const ext of ['', '-wal', '-shm']) {
     if (existsSync(join(oldDir, name + ext))) renameSync(join(oldDir, name + ext), join(DB_DIR, name + ext));
+  }
+}
+
+/** placeUnhiddenStore's private copies in DB_DIR: `.unhidden-move-<pid>-<hex>`. */
+const MOVE_COPY_RE = /^\.unhidden-move-(\d+)-[0-9a-f]+$/;
+/** No copy takes this long, so one this old was left by a killed move even if its pid is reused. */
+const STALE_MOVE_COPY_MS = 60 * 60 * 1000;
+
+/**
+ * Put the store at `src` in place at DB_PATH in one step (D#580). SQLite copies it into one file in
+ * DB_DIR (VACUUM INTO, which carries the rows only its -wal holds, from a read-only connection that
+ * never checkpoints into the old file), the copy is flushed, and link(2) gives it the store's name,
+ * failing if a store is already there. Only the opener whose link succeeded removes the old files,
+ * so every copy that is placed was taken while they were whole. The store and its log used to arrive
+ * in two renames, and an opener in between had the old log replayed over what it wrote (v6.30.7 r2
+ * P2-1); a rename also replaces a store another opener has placed (r2 P2-2), and across filesystems
+ * it fails with EXDEV.
+ *
+ * On a filesystem without hard links the copy is renamed into place instead.
+ *
+ * Returns false when SQLite cannot read the old store (not a database, damaged, or a read-only
+ * directory with no -shm beside it): the caller moves its files as before. An old file that cannot
+ * be removed (a read-only directory) stays; DB_PATH exists from then on, so nothing moves again.
+ * @param {string} src
+ * @returns {boolean}
+ */
+function placeUnhiddenStore(src) {
+  sweepMoveCopies();
+  const copy = join(DB_DIR, `.unhidden-move-${process.pid}-${randomBytes(4).toString('hex')}`);
+  try {
+    let old;
+    try {
+      old = new Database(src, { readonly: true, fileMustExist: true });
+    } catch {
+      // Gone: another opener placed it (its link comes before its removal), or it was removed.
+      return !existsSync(src);
+    }
+    try {
+      old.exec(`VACUUM INTO '${copy.replace(/'/g, "''")}'`);
+    } catch {
+      return false;
+    } finally {
+      old.close();
+    }
+    for (const path of [copy, DB_DIR]) {
+      let fd = null;
+      try {
+        fd = openSync(path, 'r');
+        fsyncSync(fd);
+      } catch (e) {
+        if (path === copy) throw e; // a directory cannot be opened on every platform (Windows)
+      } finally {
+        if (fd !== null) closeSync(fd);
+      }
+    }
+    try {
+      linkSync(copy, DB_PATH);
+    } catch (e) {
+      if (e?.code === 'EEXIST') return true; // another opener's store is in place; it opens
+      // A filesystem without hard links (FAT, exFAT): still one file in one step, though a rename
+      // replaces a store placed in between.
+      if (existsSync(DB_PATH)) return true;
+      renameSync(copy, DB_PATH);
+    }
+    for (const ext of ['', '-wal', '-shm']) {
+      try {
+        rmSync(src + ext, { force: true });
+      } catch {
+        /* a read-only old dir keeps it */
+      }
+    }
+    return true;
+  } finally {
+    rmSync(copy, { force: true });
+  }
+}
+
+/** Remove the private copies a killed move left: its process gone, or older than any move takes. */
+function sweepMoveCopies() {
+  let names;
+  try {
+    names = readdirSync(DB_DIR);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    const m = MOVE_COPY_RE.exec(n);
+    if (!m) continue;
+    const path = join(DB_DIR, n);
+    try {
+      let alive = true;
+      try {
+        process.kill(Number(m[1]), 0);
+      } catch (e) {
+        alive = e?.code === 'EPERM';
+      }
+      if (alive && Date.now() - lstatSync(path).mtimeMs < STALE_MOVE_COPY_MS) continue;
+      rmSync(path, { force: true });
+    } catch {
+      /* raced away */
+    }
   }
 }
 

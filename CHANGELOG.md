@@ -2,6 +2,27 @@
 
 All notable changes to claude-mem-lite are documented in this file.
 
+## v6.30.7 — the plugin's session start leaves a git clone at `~/claude-mem-lite` alone, and copies the claude-mem store once
+
+**Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning
+`claude-mem-lite@6.30.6`.
+
+- **The plugin's session start no longer moves `~/claude-mem-lite` into a missing
+  `~/.claude-mem-lite`** (D#568). A git clone of this repository made in the home directory moved
+  whole, uncommitted files included. A database a version before 2.0.0 left there is still moved by
+  the first open, store files only.
+- **The plugin copies an original claude-mem store into the data directory once** (D#573), not at
+  every session start while opens keep failing: a backup it already made stops the next copy, also
+  under a data directory whose path holds glob characters such as `[`.
+- **Still as in 6.30.6:**
+  - With `CLAUDE_MEM_DIR` on another filesystem than `~/claude-mem-lite`, the move of a database left
+    there fails, and so does every open until the database and its `-wal` and `-shm` are moved by
+    hand (D#569).
+  - doctor's restore command names the newest non-empty backup snapshot without checking it
+    (D#558), and both of its commands delete the `-wal` first (D#539).
+  - When opening the store fails twice on damage, the open deletes the `-wal` and retries, so rows
+    committed only in that log are lost (D#557).
+
 ## v6.30.6 — the first open no longer deletes a data directory when `~/claude-mem-lite` exists, and body-parser 2.4.0
 
 **Upgrade note: nothing to run; the schema version stays 49.** Going back is pinning

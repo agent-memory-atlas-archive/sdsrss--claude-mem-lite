@@ -5,20 +5,7 @@
 import Database from 'better-sqlite3';
 import { homedir } from 'os';
 import { join } from 'path';
-import { randomBytes } from 'crypto';
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  chmodSync,
-  closeSync,
-  fsyncSync,
-  linkSync,
-  lstatSync,
-  openSync,
-} from 'fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, chmodSync } from 'fs';
 import { OBS_FTS_COLUMNS, debugCatch } from './utils.mjs';
 import { eventSearchTerms, missingCjkIndexTerms } from './nlp.mjs';
 // Imported, never re-declared: a hand-copied marker string is this repo's twin-drift
@@ -1672,16 +1659,14 @@ function capBusyWaits(db) {
 
 /**
  * Move a store left in the unhidden data dir of versions before the first release (2.0.0),
- * ~/claude-mem-lite/, into DB_DIR, and only into a DB_DIR holding no file of a store's family: a
- * database, a log, a snapshot or a kept copy. install's backup of an original claude-mem store
- * (migrateLegacyClaudeMemData, `.legacy-backup-<ms>`) is not one. Only the store's own files go:
- * it used to rename the whole directory over a DB_DIR it first removed when DB_DIR held no `*.db`
- * name (D#561): after the set-aside command that took the kept file, DB_DIR is also the code dir of
- * a direct install, and a git clone of this repository made in ~ is at that path.
- *
- * The store reaches DB_PATH as one file in one step (placeUnhiddenStore, D#580). A store SQLite
- * cannot read there is moved as it always was: the database, then its -wal and -shm, under the same
- * name (ensureDb then renames claude-mem.db).
+ * ~/claude-mem-lite/, into DB_DIR. Only the store's own files move (the database, then its -wal
+ * and -shm, under the same name; ensureDb then renames claude-mem.db), and only into a DB_DIR
+ * holding no file of a store's family: a database, a log, a snapshot or a kept copy. install's
+ * backup of an original claude-mem store (migrateLegacyClaudeMemData, `.legacy-backup-<ms>`) is
+ * not one. Nothing is removed. It used to rename the whole directory over a DB_DIR it first
+ * removed when DB_DIR held no `*.db` name (D#561): after the set-aside command that took the kept
+ * file, DB_DIR is also the code dir of a direct install, and a git clone of this repository made
+ * in ~ is at that path.
  */
 function migrateUnhiddenStore() {
   const oldDir = join(homedir(), 'claude-mem-lite');
@@ -1691,139 +1676,8 @@ function migrateUnhiddenStore() {
     (f.startsWith('claude-mem-lite.db') || f.startsWith('claude-mem.db')) && !/\.legacy-backup-\d+$/.test(f);
   if (existsSync(DB_DIR) && readdirSync(DB_DIR).some(storeFile)) return;
   mkdirSync(DB_DIR, { recursive: true, mode: 0o700 });
-  if (placeUnhiddenStore(join(oldDir, name))) return;
   for (const ext of ['', '-wal', '-shm']) {
     if (existsSync(join(oldDir, name + ext))) renameSync(join(oldDir, name + ext), join(DB_DIR, name + ext));
-  }
-}
-
-/** placeUnhiddenStore's private copies in DB_DIR: `.unhidden-move-<pid>-<hex>`. */
-const MOVE_COPY_RE = /^\.unhidden-move-(\d+)-[0-9a-f]+$/;
-/** No copy takes this long, so one this old was left by a killed move even if its pid is reused. */
-const STALE_MOVE_COPY_MS = 60 * 60 * 1000;
-
-/**
- * Put the store at `src` in place at DB_PATH in one step (D#580). SQLite copies it into one file in
- * DB_DIR (VACUUM INTO, which carries the rows only its -wal holds, from a read-only connection that
- * never checkpoints into the old file), the copy is switched to WAL and flushed, and link(2) gives it
- * the store's name, failing if a store is already there. Only the opener whose link succeeded
- * removes the old files, so every copy that is placed was taken while they were whole. The store and
- * its log used to arrive in two renames, and an opener in between had the old log replayed over what
- * it wrote (v6.30.7 r2 P2-1); a rename also replaces a store another opener has placed (r2 P2-2), and
- * across filesystems it fails with EXDEV.
- *
- * The copy starts as an empty file this opener creates with mode 0600, and is reopened only if it is
- * still there, so a copy another opener's sweep removed while VACUUM INTO wrote it fails this open,
- * with nothing placed or removed, rather than linking an empty store into place (v6.30.8 r1 defects
- * F1). On a filesystem without hard links the copy is renamed into place instead.
- *
- * Returns true when a store is in place (this one or another opener's), false when the caller should
- * move the old files as before: SQLite cannot read the old store (not a database, damaged, a
- * read-only directory with no -shm beside it), or the data dir has no room for a copy. That move keeps
- * the renames' window. An old file that cannot be removed (a read-only directory) stays; DB_PATH
- * exists from then on, so nothing moves again. A kill between the link and the removals leaves the
- * old files, and the copy's name as a second link to the store, for good.
- * @param {string} src
- * @returns {boolean}
- */
-function placeUnhiddenStore(src) {
-  sweepMoveCopies();
-  const copy = join(DB_DIR, `.unhidden-move-${process.pid}-${randomBytes(4).toString('hex')}`);
-  // Placed by another opener (its link comes before its removals), or removed.
-  const movedElsewhere = () => !existsSync(src) || existsSync(DB_PATH);
-  try {
-    closeSync(openSync(copy, 'wx', 0o600));
-    let old;
-    try {
-      old = new Database(src, { readonly: true, fileMustExist: true });
-    } catch {
-      return !existsSync(src);
-    }
-    try {
-      old.exec(`VACUUM INTO '${copy.replace(/'/g, "''")}'`);
-    } catch {
-      // A copy that failed because another opener moved the store has nothing to fall back to: the
-      // old -wal renamed beside its store was replayed over it (r1 defects F2).
-      return movedElsewhere();
-    } finally {
-      old.close();
-    }
-    // VACUUM INTO writes rollback mode, and openers racing to switch the placed store to WAL got
-    // SQLITE_BUSY from `journal_mode = WAL`; the store it replaces was in WAL mode. The switch reads
-    // nothing, so it leaves no -wal or -shm beside the copy.
-    const wal = new Database(copy, { fileMustExist: true });
-    try {
-      wal.pragma('journal_mode = WAL');
-    } finally {
-      wal.close();
-    }
-    const fd = openSync(copy, 'r');
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    try {
-      linkSync(copy, DB_PATH);
-    } catch (e) {
-      if (e?.code === 'EEXIST') return true; // another opener's store is in place; it opens
-      // A filesystem without hard links (FAT, exFAT): still one file in one step, though a rename
-      // replaces a store placed in between.
-      if (existsSync(DB_PATH)) return true;
-      renameSync(copy, DB_PATH);
-    }
-    rmSync(copy, { force: true });
-    // The new name must outlast a power loss before the old files go (r1 defects F5). A directory
-    // cannot be opened on every platform (Windows).
-    let dirFd = null;
-    try {
-      dirFd = openSync(DB_DIR, 'r');
-      fsyncSync(dirFd);
-    } catch {
-      /* not supported here */
-    } finally {
-      if (dirFd !== null) closeSync(dirFd);
-    }
-    for (const ext of ['', '-wal', '-shm']) {
-      try {
-        rmSync(src + ext, { force: true });
-      } catch {
-        /* a read-only old dir keeps it */
-      }
-    }
-    // A mover killed during its copy may have left one after the sweep above, and none runs once the
-    // store is in place (r1 defects F4).
-    sweepMoveCopies();
-    return true;
-  } finally {
-    rmSync(copy, { force: true });
-  }
-}
-
-/** Remove the private copies a killed move left: its process gone, or older than any move takes. */
-function sweepMoveCopies() {
-  let names;
-  try {
-    names = readdirSync(DB_DIR);
-  } catch {
-    return;
-  }
-  for (const n of names) {
-    const m = MOVE_COPY_RE.exec(n);
-    if (!m) continue;
-    const path = join(DB_DIR, n);
-    try {
-      let alive = true;
-      try {
-        process.kill(Number(m[1]), 0);
-      } catch (e) {
-        alive = e?.code === 'EPERM';
-      }
-      if (alive && Date.now() - lstatSync(path).mtimeMs < STALE_MOVE_COPY_MS) continue;
-      rmSync(path, { force: true });
-    } catch {
-      /* raced away */
-    }
   }
 }
 

@@ -143,6 +143,9 @@ describe('doctor does not rebuild the indexes of a database that is merely busy'
       expect(out).not.toMatch(/CORRUPT/);
       expect(out).not.toMatch(/Attempting FTS5 rebuild/);
       expect(out).toMatch(/FTS5 integrity: not checked/);
+      // The whole-store check rebuilds indexes too, so it is skipped the same way (D#590).
+      expect(out).toMatch(/Database integrity: not checked — the database is in use/);
+      expect(out).not.toMatch(/Rebuilding the indexes/);
     } finally {
       holder.kill();
     }

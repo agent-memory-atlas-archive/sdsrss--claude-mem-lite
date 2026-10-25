@@ -383,6 +383,36 @@ describe('checkSnapshot restores a private copy and opens it with the product op
     expect(listing(tmp)).toEqual([]);
   });
 
+  // v6.30.8 r1 defects F7 (D#583): the child kept the user's HOME, so an opener that found no copy
+  // moved the store of a version before 2.0.0 out of ~/claude-mem-lite into the private directory,
+  // which checkSnapshot then removes. The wrapper takes the copy away after the probe's own
+  // existence check would have passed, and opens with the product opener.
+  it('an opener that finds no copy leaves a store in the home directory where it is', () => {
+    const snap = writeStoreSnapshot(join(dataDir(), 'claude-mem-lite.db.pre-delete-x.bak'));
+    const home = dataDir();
+    mkdirSync(join(home, 'claude-mem-lite'));
+    const legacy = writeStoreSnapshot(join(home, 'claude-mem-lite', 'claude-mem-lite.db'));
+    const probe = join(dataDir(), 'vanish-then-open.mjs');
+    writeFileSync(
+      probe,
+      [
+        "import { rmSync } from 'node:fs';",
+        "rmSync(process.env.CLAUDE_MEM_DIR + '/claude-mem-lite.db');",
+        `const { ensureDbWithWalRecovery } = await import(${JSON.stringify(pathToFileURL(join(REPO, 'schema.mjs')).href)});`,
+        'ensureDbWithWalRecovery().close();',
+        "process.stdout.write(JSON.stringify({ opened: true, rebuildErrors: [], integrity: 'ok', observations: 0 }) + '\\n');",
+      ].join('\n'),
+    );
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      du.checkSnapshot(snap, { probe });
+    } finally {
+      process.env.HOME = saved;
+    }
+    expect(existsSync(legacy), 'the store in ~/claude-mem-lite stays').toBe(true);
+  });
+
   it('cannot check when the probe exits non-zero, even after a result line', () => {
     const dir = dataDir();
     const snap = writeStoreSnapshot(join(dir, 'claude-mem-lite.db.pre-delete-x.bak'));

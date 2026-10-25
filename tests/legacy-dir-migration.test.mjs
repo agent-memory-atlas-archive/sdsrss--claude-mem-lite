@@ -83,6 +83,7 @@ function openStore(home, dataDir, { shim, expectOk = true, env: extra = {} } = {
  * - after-place: right after that file lands, it opens the store, writes the observation 'between'
  *   and closes; then the move goes on.
  * - no-link: link(2) fails as on a filesystem without hard links.
+ * - header: bytes 18 and 19 of the file as it landed go to SHIM_HEADER_OUT (2,2 is WAL mode).
  */
 const FS_SHIM = `
 import fs from 'node:fs';
@@ -100,6 +101,7 @@ for (const name of ['linkSync', 'renameSync']) {
       fired = true;
       if (mode === 'before-place') fs.copyFileSync(process.env.SHIM_OTHER_STORE, dataDir + 'claude-mem-lite.db');
       const out = real(src, dest);
+      if (mode === 'header') fs.writeFileSync(process.env.SHIM_HEADER_OUT, fs.readFileSync(dest).subarray(18, 20).join(','));
       if (mode === 'after-place') {
         const r = spawnSync(process.execPath, ['--input-type=module', '-e', process.env.SHIM_OPENER], { env: process.env, encoding: 'utf8' });
         if (r.status !== 0) throw new Error('the other opener failed: ' + r.stderr);
@@ -377,6 +379,19 @@ describe('the unhidden-dir move puts the store in place in one step (D#580)', ()
     expect(readFileSync(join(legacy, 'runtime', 'keep.txt'), 'utf8')).toBe('runtime file');
   });
 
+  // FAILS IF the store arrives in rollback mode, which VACUUM INTO writes: openers racing to switch
+  // it to WAL got SQLITE_BUSY from `journal_mode = WAL` (1 run in 11 of the four-opener case below).
+  // The store it replaces was in WAL mode, so that pragma changed nothing.
+  it('the store arrives in WAL mode, with no file of the private copy beside it', () => {
+    const { root, home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-wal-mode', { walOnly: true });
+    const header = join(root, 'header.txt');
+    openStore(home, undefined, { shim: 'header', env: { SHIM_HEADER_OUT: header } });
+    expect(readFileSync(header, 'utf8'), 'bytes 18 and 19 of the file as it landed').toBe('2,2');
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-wal-mode')).toBe(1);
+    expect(readdirSync(dataDir).filter((n) => n.startsWith('.'))).toEqual([]);
+  });
+
   // FAILS IF the store and its log arrive in two steps: an opener between them writes to the store,
   // and the old log placed after it is replayed over those writes (v6.30.7 r2 P2-1).
   it('another opener writing as soon as the store arrives keeps its row and the old ones', () => {
@@ -440,6 +455,29 @@ describe('the unhidden-dir move puts the store in place in one step (D#580)', ()
     expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-read-only')).toBe(1);
     expect(existsSync(old)).toBe(true);
   });
+
+  // FAILS IF a store SQLite cannot open in place is taken as moved by another opener: the open would
+  // create an empty store in the data dir and leave the rows behind without a word. As before, the
+  // move fails the open, and the old store stays whole.
+  it.skipIf(isRoot)(
+    'a read-only old dir with no -shm: as before, the open fails and the old store stays',
+    () => {
+      const { home, legacy, dataDir } = sandbox();
+      writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-cannot-open', { walOnly: true });
+      const old = listing(legacy);
+      chmodSync(legacy, 0o555);
+      let r;
+      try {
+        r = openStore(home, undefined, { expectOk: false });
+      } finally {
+        chmodSync(legacy, 0o755);
+      }
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/EACCES/);
+      expect(listing(legacy)).toEqual(old);
+      expect(existsSync(join(dataDir, 'claude-mem-lite.db'))).toBe(false);
+    },
+  );
 
   // FAILS IF the fallback for a store SQLite cannot read changed: it is moved into the data dir as
   // before, where doctor finds it.

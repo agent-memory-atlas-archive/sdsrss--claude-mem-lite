@@ -1738,6 +1738,15 @@ function placeUnhiddenStore(src) {
     } finally {
       old.close();
     }
+    // VACUUM INTO writes rollback mode, and openers racing to switch the placed store to WAL got
+    // SQLITE_BUSY from `journal_mode = WAL`; the store it replaces was in WAL mode. Closing this
+    // handle checkpoints and removes the copy's -wal and -shm.
+    const wal = new Database(copy);
+    try {
+      wal.pragma('journal_mode = WAL');
+    } finally {
+      wal.close();
+    }
     for (const path of [copy, DB_DIR]) {
       let fd = null;
       try {
@@ -1767,7 +1776,7 @@ function placeUnhiddenStore(src) {
     }
     return true;
   } finally {
-    rmSync(copy, { force: true });
+    for (const ext of ['', '-wal', '-shm']) rmSync(copy + ext, { force: true });
   }
 }
 

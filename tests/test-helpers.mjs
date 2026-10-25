@@ -151,6 +151,118 @@ export function writeStoreSnapshot(path, { observations = 12, damage = null } = 
   return path;
 }
 
+/**
+ * A live store (WAL, initSchema) whose freelist lists `links` leaf pages the observations table
+ * still uses: the page-level damage on which an index rebuild overwrites rows, because the rebuild
+ * frees and allocates pages and the freelist hands it those leaves (D#591). `ftsDamage` deletes the
+ * leaf rows of observations_fts_data first, so FTS5's own check fails and doctor goes on to rebuild.
+ * `vacuum` VACUUMs the store before the freelist is made; SQLite 3.53.4's integrity check then
+ * starts at a virtual table, skips the freelist and reads 'ok' on this store. `prepare(path)` runs
+ * on the closed store before the damage is planted: the product's opener writes on its first open
+ * of a store initSchema built, and on these pages any write can overwrite rows.
+ * @param {string} path
+ * @param {{observations?: number, links?: number, vacuum?: boolean, ftsDamage?: boolean, prepare?: (path: string) => void}} [opts]
+ * @returns {{path: string, truth: {id: number, title: string, narrative: string}[], linked: number[]}}
+ */
+export function writeCrossLinkedStore(
+  path,
+  { observations = 300, links = 1, vacuum = false, ftsDamage = true, prepare } = {},
+) {
+  let db = new Database(path);
+  let truth;
+  let leaves;
+  try {
+    db.pragma('journal_mode = WAL');
+    initSchema(db);
+    db.prepare(
+      `INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch)
+       VALUES ('c-s1', 's1', 'p', datetime('now'), 1)`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, title, narrative, created_at, created_at_epoch)
+       VALUES ('s1', 'p', 'discovery', ?, ?, datetime('now'), ?)`,
+    );
+    db.transaction(() => {
+      for (let i = 0; i < observations; i++) {
+        insert.run(`title ${i} alpha`, `narrative ${i} ${'x'.repeat(200)} w${i}`, 1_700_000_000_000 + i);
+      }
+    })();
+    if (ftsDamage) {
+      db.unsafeMode(true);
+      if (db.prepare('DELETE FROM observations_fts_data WHERE id > 10').run().changes === 0) {
+        throw new Error('fixture did not damage anything: observations_fts_data had no leaf rows');
+      }
+      db.unsafeMode(false);
+    }
+    if (vacuum) db.exec('VACUUM');
+    // A dropped table's pages are the freelist.
+    db.exec('CREATE TABLE junk (x)');
+    const junk = db.prepare('INSERT INTO junk VALUES (?)');
+    db.transaction(() => {
+      for (let i = 0; i < 60; i++) junk.run('j'.repeat(1000));
+    })();
+    db.exec('DROP TABLE junk');
+    if (prepare) {
+      db.close();
+      prepare(path);
+      db = new Database(path);
+    }
+    truth = db.prepare('SELECT id, title, narrative FROM observations ORDER BY id').all();
+    leaves = db
+      .prepare("SELECT pageno FROM dbstat WHERE name = 'observations' AND pagetype = 'leaf' ORDER BY pageno")
+      .pluck()
+      .all();
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } finally {
+    db.close();
+  }
+  if (leaves.length < links + 2)
+    throw new Error(`fixture needs ${links + 2} observations leaves, has ${leaves.length}`);
+  const image = readFileSync(path);
+  const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
+  const trunk = image.readUInt32BE(32);
+  if (trunk === 0) throw new Error('fixture made no freelist');
+  const at = (trunk - 1) * pageSize;
+  if (image.readUInt32BE(at + 4) < links) throw new Error('fixture freelist trunk lists too few pages');
+  const linked = leaves.slice(2, 2 + links);
+  linked.forEach((pageno, k) => image.writeUInt32BE(pageno, at + 8 + 4 * k));
+  writeFileSync(path, image);
+  return { path, truth, linked };
+}
+
+/**
+ * How many of `truth` read back from the store at `path` (its table, not an index) with the title
+ * and narrative they were written with. Opens a copy, so the store and its log are not touched.
+ * @param {string} path
+ * @param {{id: number, title: string, narrative: string}[]} truth
+ */
+export function intactObservations(path, truth) {
+  const dir = mkdtempSync(join(tmpdir(), 'cml-intact-'));
+  try {
+    const copy = join(dir, 'copy.db');
+    writeFileSync(copy, readFileSync(path));
+    if (existsSync(`${path}-wal`)) writeFileSync(`${copy}-wal`, readFileSync(`${path}-wal`));
+    const db = new Database(copy, { readonly: true });
+    try {
+      const get = db.prepare('SELECT title, narrative FROM observations NOT INDEXED WHERE id = ?');
+      let intact = 0;
+      for (const t of truth) {
+        try {
+          const r = get.get(t.id);
+          if (r && r.title === t.title && r.narrative === t.narrative) intact++;
+        } catch {
+          /* a row that does not read is not intact */
+        }
+      }
+      return intact;
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export function insertSession(db, { id, project = 'test', memoryId = null }) {
   const now = new Date();
   db.prepare(

@@ -2,6 +2,7 @@
 // Extracted from mem-cli.mjs (v2.41, god-module split).
 
 import { checkFTSIntegrity, rebuildIndexes } from '../schema.mjs';
+import { dataDirCopyCommand, PAGE_DAMAGE_COPY_ADVICE } from '../lib/db-unusable.mjs';
 import { parseArgs, out, fail } from './common.mjs';
 import { CLI_INVOKE } from '../cli-path.mjs';
 
@@ -51,6 +52,22 @@ export function cmdFtsCheck(db, args) {
     // The FTS5 indexes, then every other index (REINDEX): the last step of doctor's restore
     // command, which the restore check ran on its copy (D#558).
     const result = rebuildIndexes(db);
+    // Nothing was written: over damaged pages a rebuild overwrites rows (D#591).
+    if (result.pages && result.pages.state !== 'ok') {
+      if (result.pages.state === 'damaged') {
+        out(
+          `[mem] Not rebuilt: the database's pages are damaged, so a rebuild could overwrite rows on them:`,
+        );
+        for (const line of result.pages.lines) out(`  ${line}`);
+        if (result.pages.more > 0) out(`  … and ${result.pages.more} more`);
+        out(`  ${PAGE_DAMAGE_COPY_ADVICE}`);
+        out(`  ${dataDirCopyCommand(db.name)}`);
+      } else {
+        out(`[mem] Not rebuilt: the database's pages could not be checked first (${result.pages.error}).`);
+      }
+      process.exitCode = 1;
+      return;
+    }
     if (result.errors.length > 0) {
       // Partial success is a failure of the requested operation: the caller asked
       // for a rebuild and at least one index still is not rebuilt.

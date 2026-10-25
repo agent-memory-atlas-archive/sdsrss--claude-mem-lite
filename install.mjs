@@ -3185,11 +3185,31 @@ async function doctor() {
                 dwarn('FTS5 integrity issues detected:');
                 for (const d of details) log(`    ${d}`);
                 log('  Attempting FTS5 rebuild...');
-                const { rebuilt, errors } = rebuildFTS(rwDb);
-                if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
-                if (errors.length > 0) {
-                  fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
-                  issues++;
+                const { rebuilt, errors, pages } = rebuildFTS(rwDb);
+                if (pages && pages.state !== 'ok') {
+                  // Nothing was written: over damaged pages a rebuild overwrites rows (D#591).
+                  if (pages.state === 'damaged') {
+                    fail(
+                      "FTS5 rebuild: not run — the database's pages are damaged, so a rebuild could overwrite rows on them",
+                    );
+                    for (const line of pages.lines) log(`    ${line}`);
+                    if (pages.more > 0) log(`    … and ${pages.more} more`);
+                    issues++;
+                    const du = await import('./lib/db-unusable.mjs');
+                    log(`    ${du.PAGE_DAMAGE_COPY_ADVICE}`);
+                    log(`    ${du.dataDirCopyCommand(DB_PATH)}`);
+                  } else {
+                    fail(
+                      `FTS5 rebuild: not run — the database's pages could not be checked first (${pages.error})`,
+                    );
+                    issues++;
+                  }
+                } else {
+                  if (rebuilt.length > 0) ok(`FTS5 rebuilt: ${rebuilt.join(', ')}`);
+                  if (errors.length > 0) {
+                    fail(`FTS5 rebuild errors: ${errors.join(', ')}`);
+                    issues++;
+                  }
                 }
               }
             } finally {

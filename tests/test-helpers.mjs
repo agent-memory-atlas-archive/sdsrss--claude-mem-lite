@@ -34,12 +34,15 @@ export function createTestDb() {
  *   shape of an index that kept a delete's rows. The 73 short snapshots of the D#558 corpus lost
  *   theirs from the table, and their docsize still lists them (v6.30.8 r1 claims F11);
  * - 'page': the cell pointers of the observations table's first leaf page garbled;
+ * - 'index-key': the record header of the first entry on idx_obs_epoch_project's leaf page garbled,
+ *   so SQLite's integrity check throws SQLITE_CORRUPT while the page check and every read of the
+ *   table get past it, and REINDEX repairs it (the shape of two D#546 regression-set stores);
  * - 'fts-order': the first two cell pointers of observations_fts_idx's root page swapped, so
  *   integrity_check reports its rows out of key order while FTS5's own integrity-check passes, and
  *   an FTS rebuild repairs it (the D#559 shape);
  * - 'header': the 16-byte file header overwritten.
  * @param {string} path
- * @param {{observations?: number, damage?: 'fts'|'index'|'fts-config'|'lost-rows'|'page'|'fts-order'|'header'|null}} [opts]
+ * @param {{observations?: number, damage?: 'fts'|'index'|'fts-config'|'lost-rows'|'page'|'index-key'|'fts-order'|'header'|null}} [opts]
  * @returns {string} `path`
  */
 export function writeStoreSnapshot(path, { observations = 12, damage = null } = {}) {
@@ -128,7 +131,7 @@ export function writeStoreSnapshot(path, { observations = 12, damage = null } = 
     for (const r of idx) put.run(r.type, r.name, r.tbl_name, r.rootpage, r.sql);
     h.close();
   }
-  if (damage === 'page' || damage === 'header' || damage === 'fts-order') {
+  if (damage === 'page' || damage === 'header' || damage === 'fts-order' || damage === 'index-key') {
     const image = readFileSync(path);
     if (damage === 'header') {
       image.write('not a database!!', 0, 'latin1');
@@ -148,6 +151,18 @@ export function writeStoreSnapshot(path, { observations = 12, damage = null } = 
       const first = image.readUInt16BE(at + 8);
       image.writeUInt16BE(image.readUInt16BE(at + 10), at + 8);
       image.writeUInt16BE(first, at + 10);
+    } else if (damage === 'index-key') {
+      const mem = new Database(Buffer.from(image));
+      const pageno = mem
+        .prepare("SELECT pageno FROM dbstat WHERE name = 'idx_obs_epoch_project' ORDER BY pageno LIMIT 1")
+        .pluck()
+        .get();
+      mem.close();
+      const pageSize = image.readUInt16BE(16) === 1 ? 65536 : image.readUInt16BE(16);
+      const at = (pageno - 1) * pageSize;
+      if (image[at] !== 0x0a) throw new Error('fixture needs idx_obs_epoch_project on one leaf page');
+      // The cell starts with its payload size, then the record: its header size, then a column's serial type.
+      image[at + image.readUInt16BE(at + 8) + 3] = 0xff;
     } else {
       // The page number from dbstat on an in-memory copy of the image (a Buffer opens as a memdb),
       // so the snapshot file itself is never opened.

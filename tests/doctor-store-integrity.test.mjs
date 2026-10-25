@@ -183,6 +183,17 @@ describe('checkStoreIntegrity', () => {
     expect(intactObservations(dbPath, truth)).toBe(truth.length);
   });
 
+  // Two stores of the D#546 regression set: SQLite's check throws on an index entry it cannot
+  // decode, where the pages are sound and REINDEX rebuilds the entry from the table.
+  it('takes an integrity check that throws on a garbled index entry as a failed check, and rebuilds', () => {
+    const { dbPath } = newRoot();
+    liveStore(dbPath, 'index-key');
+    expect(() => tableRows(dbPath), 'premise: the integrity check throws').toThrow(/malformed/);
+    const r = check(dbPath);
+    expect(r).toEqual({ state: 'rebuilt', rows: ['database disk image is malformed'] });
+    expect(tableRows(dbPath)).toEqual({ table: 12, integrity: 'ok' });
+  });
+
   it('calls garbled cell pointers damage, and rebuilds nothing', () => {
     const { dbPath } = newRoot();
     liveStore(dbPath, 'page');

@@ -2151,9 +2151,18 @@ export function rebuildIndexes(db) {
   return result;
 }
 
-/** SQLite's integrity check, one entry per row it returns. */
+/**
+ * SQLite's integrity check, one entry per row it returns. A check that throws SQLITE_CORRUPT has
+ * found damage, and its message is its row: an index entry it cannot decode stops it, where the
+ * pages pass and REINDEX rebuilds the entry (two stores of the D#546 regression set).
+ */
 function integrityRows(db, max) {
-  return db.prepare(`PRAGMA integrity_check(${max})`).pluck().all().map(String);
+  try {
+    return db.prepare(`PRAGMA integrity_check(${max})`).pluck().all().map(String);
+  } catch (e) {
+    if (/^SQLITE_(CORRUPT|NOTADB)/.test(e?.code ?? '')) return [e.message];
+    throw e;
+  }
 }
 
 /**
@@ -2169,8 +2178,8 @@ function integrityRows(db, max) {
  * - `damaged`: the pages are damaged (`pages`), so nothing was rebuilt;
  * - `unrepaired`: the integrity check failed (`rows`), and the rebuild stopped (`errors`; `busy`
  *   when on the lock) or the check fails after it (`after`);
- * - `unchecked`: the page check could not run, or the integrity check threw (`error`), as it does
- *   on an FTS5 table whose config row FTS5 refuses.
+ * - `unchecked`: the page check could not run, or the integrity check threw something other than
+ *   damage (`error`), as it does on an FTS5 table whose config row FTS5 refuses.
  * @param {Database} db Opened read-write database instance
  * @param {{max?: number}} [opts] at most `max` rows of each integrity check
  * @returns {{state: 'ok'|'rebuilt'|'damaged'|'unrepaired'|'unchecked', rows?: string[],

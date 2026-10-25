@@ -206,6 +206,20 @@ describe('the unhidden-dir migration moves only a store, and deletes nothing (D#
     expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-stays')).toBe(0);
   });
 
+  // FAILS IF a data dir holding a current store under the old name (claude-mem.db, which the same
+  // open renames) counts as holding none: the legacy store moves in under the new name and the
+  // current one is never opened (v6.30.6 r2 P3-3: dropping that prefix from the check passed every
+  // case of this file).
+  it('a legacy store beside a data dir holding claude-mem.db: nothing moves, that store opens', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-not-this-one');
+    writeStore(join(dataDir, 'claude-mem.db'), 'current-old-name');
+    const old = listing(legacy);
+    openStore(home);
+    expectKept(legacy, old);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'current-old-name')).toBe(1);
+  });
+
   // FAILS IF the backup install makes of an original claude-mem store (~/.claude-mem) counts as one
   // of this store's files: the unhidden dir's store stays behind and the open creates an empty one.
   it('a legacy store beside a data dir holding only the claude-mem backup: the store moves', () => {

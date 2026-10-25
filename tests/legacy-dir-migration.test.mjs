@@ -84,13 +84,32 @@ function openStore(home, dataDir, { shim, expectOk = true, env: extra = {} } = {
  *   and closes; then the move goes on.
  * - no-link: link(2) fails as on a filesystem without hard links.
  * - header: bytes 18 and 19 of the file as it landed go to SHIM_HEADER_OUT (2,2 is WAL mode).
+ * - copy-mode: the mode of the file put in place, as it was before the link, goes to SHIM_HEADER_OUT.
+ * - dead-copy-at-place: a private copy of a killed mover (pid SHIM_DEAD_PID) appears just before.
+ * The two below act at VACUUM INTO instead (SQLite's copy of the old store):
+ * - rm-copy-after-vacuum: right after it, the copy is removed (another opener's sweep).
+ * - moved-during-copy: before it, another opener has placed its store (SHIM_OTHER_STORE) and removed
+ *   the old database, leaving its -wal; the copy then fails as SQLite fails on a vanished file.
  */
 const FS_SHIM = `
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
+import Database from ${JSON.stringify(join(REPO, 'node_modules', 'better-sqlite3', 'lib', 'index.js'))};
 const dataDir = process.env.SHIM_DATA_DIR + '/';
 const mode = process.env.SHIM_MODE;
+const exec = Database.prototype.exec;
+Database.prototype.exec = function (sql) {
+  const into = /^VACUUM INTO '(.*)'$/s.exec(sql);
+  if (into && mode === 'moved-during-copy') {
+    fs.copyFileSync(process.env.SHIM_OTHER_STORE, dataDir + 'claude-mem-lite.db');
+    fs.rmSync(process.env.SHIM_OLD_DB);
+    throw Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR_FSTAT' });
+  }
+  const out = exec.call(this, sql);
+  if (into && mode === 'rm-copy-after-vacuum') fs.rmSync(into[1].replace(/''/g, "'"));
+  return out;
+};
 let fired = false;
 const intoDataDir = (dest) => String(dest).startsWith(dataDir) && /\\/claude-mem(-lite)?\\.db$/.test(String(dest));
 for (const name of ['linkSync', 'renameSync']) {
@@ -100,6 +119,8 @@ for (const name of ['linkSync', 'renameSync']) {
     if (!fired && intoDataDir(dest)) {
       fired = true;
       if (mode === 'before-place') fs.copyFileSync(process.env.SHIM_OTHER_STORE, dataDir + 'claude-mem-lite.db');
+      if (mode === 'copy-mode') fs.writeFileSync(process.env.SHIM_HEADER_OUT, (fs.statSync(src).mode & 0o777).toString(8));
+      if (mode === 'dead-copy-at-place') fs.writeFileSync(dataDir + '.unhidden-move-' + process.env.SHIM_DEAD_PID + '-0f0f0f0f', 'a killed mover copy');
       const out = real(src, dest);
       if (mode === 'header') fs.writeFileSync(process.env.SHIM_HEADER_OUT, fs.readFileSync(dest).subarray(18, 20).join(','));
       if (mode === 'after-place') {
@@ -432,6 +453,59 @@ describe('the unhidden-dir move puts the store in place in one step (D#580)', ()
     openStore(home, undefined, { shim: 'no-link' });
     expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-no-link')).toBe(1);
     expect(leftInOldDir(legacy)).toEqual([]);
+    expect(privateCopies(dataDir)).toEqual([]);
+  });
+
+  // v6.30.8 r1 defects F1: another opener's sweep removed this one's copy while VACUUM INTO wrote it
+  // (its pid not visible, or the copy's mtime skewed); reopening the path created an EMPTY store,
+  // which was linked into place before the old store was removed: every row lost.
+  it('a copy removed while it is written: nothing is placed or removed, and the next open moves the store', () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-copy-removed', { walOnly: true });
+    const old = listing(legacy);
+    const r = openStore(home, undefined, { shim: 'rm-copy-after-vacuum', expectOk: false });
+    expect(r.status, 'this open fails').not.toBe(0);
+    expect(existsSync(join(dataDir, 'claude-mem-lite.db'))).toBe(false);
+    expectKept(legacy, old);
+    openStore(home);
+    expect(markers(join(dataDir, 'claude-mem-lite.db'), 'legacy-copy-removed')).toBe(1);
+  });
+
+  // v6.30.8 r1 defects F2(b): another opener placed its store and removed the old database while this
+  // one copied it; the copy failed, and the fallback renamed the old -wal beside the placed store.
+  it('the old store moved by another opener while this one copied: its store opens, and no old log joins it', () => {
+    const { root, home, legacy, dataDir } = sandbox();
+    const oldDb = join(legacy, 'claude-mem-lite.db');
+    writeStore(oldDb, 'legacy-moved-meanwhile', { walOnly: true });
+    const other = join(root, 'other.db');
+    writeStore(other, 'other');
+    openStore(home, undefined, {
+      shim: 'moved-during-copy',
+      env: { SHIM_OTHER_STORE: other, SHIM_OLD_DB: oldDb },
+    });
+    const db = join(dataDir, 'claude-mem-lite.db');
+    expect(integrity(db)).toBe('ok');
+    expect(markers(db, 'other')).toBe(1);
+    expect(existsSync(join(legacy, 'claude-mem-lite.db-wal')), 'the old log was not moved').toBe(true);
+  });
+
+  // v6.30.8 r1 defects F4: the copy took the umask's mode (0644 in a 0755 data dir made by setup.sh),
+  // so a leftover one could be read by other users.
+  it('the private copy is readable by its owner only', () => {
+    const { root, home, legacy } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-mode');
+    const out = join(root, 'mode.txt');
+    openStore(home, undefined, { shim: 'copy-mode', env: { SHIM_HEADER_OUT: out } });
+    expect(readFileSync(out, 'utf8')).toBe('600');
+  });
+
+  // v6.30.8 r1 defects F4: a mover killed during its copy while another finished the move left that
+  // copy for good: the sweep ran only before a move, and none comes once the store is in place.
+  it("a killed mover's copy that appears during the move is removed once the store is in place", () => {
+    const { home, legacy, dataDir } = sandbox();
+    writeStore(join(legacy, 'claude-mem-lite.db'), 'legacy-late-copy');
+    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    openStore(home, undefined, { shim: 'dead-copy-at-place', env: { SHIM_DEAD_PID: String(dead) } });
     expect(privateCopies(dataDir)).toEqual([]);
   });
 

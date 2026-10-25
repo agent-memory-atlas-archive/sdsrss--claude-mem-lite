@@ -401,7 +401,7 @@ describe('the unhidden-dir move puts the store in place in one step (D#580)', ()
   });
 
   // FAILS IF the store arrives in rollback mode, which VACUUM INTO writes: openers racing to switch
-  // it to WAL got SQLITE_BUSY from `journal_mode = WAL` (1 run in 11 of the four-opener case below).
+  // it to WAL got SQLITE_BUSY from `journal_mode = WAL` (the four-opener case below failed 2 of 19 runs).
   // The store it replaces was in WAL mode, so that pragma changed nothing.
   it('the store arrives in WAL mode, with no file of the private copy beside it', () => {
     const { root, home, legacy, dataDir } = sandbox();
@@ -530,9 +530,10 @@ describe('the unhidden-dir move puts the store in place in one step (D#580)', ()
     expect(existsSync(old)).toBe(true);
   });
 
-  // FAILS IF a store SQLite cannot open in place is taken as moved by another opener: the open would
-  // create an empty store in the data dir and leave the rows behind without a word. As before, the
-  // move fails the open, and the old store stays whole.
+  // FAILS IF a copy SQLite cannot make there is taken as one another opener placed: the open would
+  // create an empty store in the data dir and leave the rows behind without a word. SQLite opens the
+  // file but cannot read it with no -shm, so VACUUM INTO fails; as before, the move fails the open
+  // (EACCES), and the old store stays whole.
   it.skipIf(isRoot)(
     'a read-only old dir with no -shm: as before, the open fails and the old store stays',
     () => {
